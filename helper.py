@@ -180,7 +180,7 @@ def gs_update(sim_vars, i, mygs, calc_vloop=True):
 
     # Update scalars
     sim_vars['R'][i] = np.abs(mygs.o_point[0])
-    sim_vars['a'][i] = np.abs(mygs.o_point[1])
+    sim_vars['Z'][i] = np.abs(mygs.o_point[1])
     sim_vars['kappa'][i] = np.abs(eq_stats['kappa'])
     sim_vars['delta'][i] = np.abs(eq_stats['delta'])
     sim_vars['deltaU'][i] = np.abs(eq_stats['deltaU'])
@@ -189,6 +189,7 @@ def gs_update(sim_vars, i, mygs, calc_vloop=True):
     sim_vars['ztop'][i] = mygs.x_points[1,1]
     sim_vars['rbot'][i] = mygs.x_points[0,0]
     sim_vars['rtop'][i] = mygs.x_points[1,0]
+    sim_vars['a'][i] = np.abs((sim_vars['rtop'][i] - sim_vars['rbot'][i]) / 2.0)
     sim_vars['Ip'][i] = eq_stats['Ip']
 
     # Update profiles
