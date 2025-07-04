@@ -21,8 +21,8 @@ def update_config(geo_file, sim_vars, times, i, calc_vloop=True):
         'geometry_type': 'eqdsk',
         'geometry_file': geo_file,
         'geometry_directory': '/Users/johnl/Desktop/discharge-model',
-        'last_surface_factor': 0.95,
-        # 'n_surfaces': 50,
+        'last_surface_factor': 0.9,
+        'n_surfaces': 100,
         # 'nrho': N_RHO,
     }
     myconfig['numerics'] = {
@@ -335,13 +335,13 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
 
         set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
 
-        lcfs = get_boundary(sim_vars, i)
+        lcfs = get_boundary(sim_vars, i, len(lcfs))
         isoflux_weights = np.ones(len(lcfs))
 
         vloop = sim_vars['v_loop'][i]
         lcfs_psi_target -= dt * vloop / 2 / np.pi
         mygs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
-        mygs.set_isoflux(lcfs, isoflux_weights)
+        # mygs.set_isoflux(lcfs, isoflux_weights) # TODO: remvove?
 
         mygs.set_psi_dt(psi0,dt)
         err_flag = mygs.solve()
