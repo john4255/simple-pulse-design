@@ -47,6 +47,7 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
     sim_vars['deltaU'] = np.zeros(len(times))    
     sim_vars['deltaL'] = np.zeros(len(times))    
     sim_vars['B0'] = np.zeros(len(times))
+    sim_vars['V0'] = np.zeros(len(times))
     sim_vars['zbot'] = np.zeros(len(times))
     sim_vars['ztop'] = np.zeros(len(times))
     sim_vars['rbot'] = np.zeros(len(times))
@@ -109,6 +110,7 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
         sim_vars['deltaU'][i] = delta_upper
         sim_vars['deltaL'][i] = delta_lower
         sim_vars['B0'][i] = geqdsk['bcentr']
+        sim_vars['V0'][i] = geqdsk['zaxis']
         sim_vars['zbot'][i] = zmin
         sim_vars['ztop'][i] = zmax
         sim_vars['rbot'][i] = rmin
@@ -171,6 +173,8 @@ def transport_update(sim_vars, i, times, data_tree):
 
     sim_vars['ffp_prof'][i] = ffp_prof
     sim_vars['pp_prof'][i] = pp_prof
+
+    # sim_vars['vol'][i] = data_tree.profiles.volume.sel(time=t, method='nearest').to_numpy()
     
     return sim_vars
 
@@ -257,14 +261,14 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
             print(key)
             print("({}, {})".format(np.max(val[i]), np.min(val[i])))
     print("\n\n\n")
-    graph_var(sim_vars, 'ffp_prof', step)
+    # graph_var(sim_vars, 'vol', step)
 
     vsc_signs = {key: 0 for key in mygs.coil_sets}
     vsc_signs['F9A'] = 1.0
     vsc_signs['F9B'] = -1.0
     mygs.set_coil_vsc(vsc_signs)
 
-    mygs.set_targets(Ip=sim_vars['Ip'][0], Ip_ratio=1.0E-2, pax=sim_vars['pax'][0])
+    mygs.set_targets(Ip=sim_vars['Ip'][0], Ip_ratio=1.0E-2, pax=sim_vars['pax'][0], V0=sim_vars['V0'][0])
 
     psi_sample = np.linspace(0.0,1.0,N_PSI)
     psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][0]))
@@ -276,20 +280,21 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
                       foffset=sim_vars['R'][0]*sim_vars['B0'][0])
 
     set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
-    mygs.set_flux(None,None)    
+    mygs.set_flux(None,None)
 
     err_flag = mygs.init_psi(sim_vars['R'][0],
                              sim_vars['Z'][0],
                              sim_vars['a'][0],
                              sim_vars['kappa'][0], 
                              sim_vars['delta'][0])
+    # err_flag = mygs.init_psi(1.7, 0.0, 0.5, 1.3, -0.4)
 
     if err_flag:
         print("Error initializing Psi.")
 
     # lcfs = get_boundary(sim_vars, 0)
     lcfs = geqdsk['rzout']
-    isoflux_weights = np.ones(len(lcfs))
+    isoflux_weights = 10.0 * np.ones(len(lcfs))
     mygs.set_isoflux(lcfs, isoflux_weights)
 
     mygs.update_settings()
@@ -298,6 +303,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     fig, ax = plt.subplots(1,1)
     mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
     mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+    ax.plot(geqdsk['rzout'][:, 0], geqdsk['rzout'][:, 1], color='r')
     plt.show()
 
     if err_flag:
@@ -313,7 +319,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     for i in range(1, len(times)):
         dt = times[i] - times[i-1]
 
-        mygs.set_targets(Ip=sim_vars['Ip'][i], Ip_ratio=1.0E-2, pax=sim_vars['pax'][i])
+        mygs.set_targets(Ip=sim_vars['Ip'][i], Ip_ratio=1.0E-2, pax=sim_vars['pax'][i], V0=sim_vars['V0'][i])
 
         psi_sample = np.linspace(0.0,1.0,N_PSI)
         psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][i]))
@@ -331,17 +337,17 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
             psi_eta_values = np.linspace(0.0, 1.0, len(sim_vars['eta'][i]))
             eta_interp = np.interp(psi_sample, psi_eta_values, sim_vars['eta'][i])
+            # eta_interp /= np.max(eta_interp)
             mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': psi_sample, 'y': eta_interp})
 
         set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
 
         lcfs = get_boundary(sim_vars, i, len(lcfs))
-        isoflux_weights = np.ones(len(lcfs))
+        isoflux_weights = 10.0 * np.ones(len(lcfs))
 
         vloop = sim_vars['v_loop'][i]
         lcfs_psi_target -= dt * vloop / 2 / np.pi
         mygs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
-        # mygs.set_isoflux(lcfs, isoflux_weights) # TODO: remvove?
 
         mygs.set_psi_dt(psi0,dt)
         err_flag = mygs.solve()

@@ -29,7 +29,7 @@ mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh("DIIID/DIIID_mesh_1
 mygs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
 mygs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
 mygs.lim_zmax = 1.15
-mygs.settings.nl_tol=1.E-6
+mygs.settings.nl_tol=1.0E-5
 mygs.settings.maxits = 800
 
 # Load Files
@@ -49,6 +49,7 @@ mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
 times = np.linspace(0.0, 4.0, 5)
 
 step = 0
+err = 0
 sim_vars = init_vars(times, geqdsk, aeqdsk, pdict)
 # graph_sim(sim_vars, 0)
 
