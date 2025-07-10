@@ -56,14 +56,12 @@ sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 
 sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=False)
 
-while True:
+while err > CONV_THRESHOLD:
     sim_vars, cflux_transport = run_sims(sim_vars, times, step)
     step += 1
 
     sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True)
     err = (cflux_gs - cflux_transport) ** 2
-    if err < CONV_THRESHOLD:
-        break
     
     
 print("Discharge model complete.")
