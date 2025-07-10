@@ -14,8 +14,9 @@ from visualization import graph_var
 
 N_PSI = 50
 N_RHO = 50
+LCFS_WEIGHT = 10.0
 
-def update_config(geo_file, sim_vars, times, i, calc_vloop=True):
+def update_config(geo_file, sim_vars, times, i, prev_dt=None, calc_vloop=True):
     myconfig = default_tconfig.copy()
     myconfig['geometry'] = {
         'geometry_type': 'eqdsk',
@@ -28,7 +29,32 @@ def update_config(geo_file, sim_vars, times, i, calc_vloop=True):
     myconfig['numerics'] = {
         't_initial': times[i],
         't_final': times[i + 1],
-        'fixed_dt': (times[i + 1] - times[i]) / 10,
+        'fixed_dt': (times[i + 1] - times[i]) / 10.0,
+    }
+
+    prev_profiles = {}
+    if prev_dt is None:
+        prev_profiles = {
+            'T_e': {times[0]: sim_vars['T_e'][0]},
+            'T_i': {times[0]: sim_vars['T_i'][0]},
+            'n_e': {times[0]: sim_vars['n_e'][0]}
+        }
+    else:
+        prev_profiles = {
+            'psi': {times[i]: sim_vars['psi'][i]},
+            'T_e': {times[i]: sim_vars['T_e'][i]},
+            'T_i': {times[i]: sim_vars['T_i'][i]},
+            'n_e': {times[i]: sim_vars['n_e'][i]}
+        }
+
+    myconfig['profile_conditions'] = {
+        'Ip': {
+            times[i]: sim_vars['Ip'][i],
+            times[i+1]: sim_vars['Ip'][i+1],
+        },
+        # **pdict_profs,
+        **prev_profiles,
+        **myconfig['profile_conditions'],
     }
     if calc_vloop:
         myconfig['profile_conditions']['v_loop_lcfs'] = {times[i]: sim_vars['v_loop'][i][-1] for i in range(len(times))}
@@ -126,10 +152,10 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
         sim_vars['eta'][i]= np.zeros(N_RHO)
         sim_vars['psi'][i] = np.zeros(N_RHO)
 
-        # sim_vars['T_e'][i] = pdict['te(KeV)']
-        # sim_vars['T_i'][i] = pdict['ti(KeV)']
-        # sim_vars['n_e'][i] = pdict['ne(10^20/m^3)']
-        # sim_vars['n_i'][i] = pdict['ni(10^20/m^3)']
+        sim_vars['T_e'][i] = pdict['te(KeV)']
+        sim_vars['T_i'][i] = pdict['ti(KeV)']
+        sim_vars['n_e'][i] = pdict['ne(10^20/m^3)']
+        sim_vars['n_i'][i] = pdict['ni(10^20/m^3)']
         sim_vars['f_pol'][i] = geqdsk['fpol']
         
         # sim_vars['vol'][i] = aeqdsk['vout']
@@ -168,14 +194,29 @@ def transport_update(sim_vars, i, times, data_tree):
     pp_prof -= np.min(pp_prof)
     ffp_prof /= np.max(abs(ffp_prof))
     pp_prof /= np.max(abs(pp_prof))
-    ffp_prof[-1] = 0
-    pp_prof[-1] = 0
+    # ffp_prof[-1] = 0
+    # pp_prof[-1] = 0
 
     sim_vars['ffp_prof'][i] = ffp_prof
     sim_vars['pp_prof'][i] = pp_prof
 
-    # sim_vars['vol'][i] = data_tree.profiles.volume.sel(time=t, method='nearest').to_numpy()
-    
+    sim_vars['psi'][i] = dict(zip(
+        data_tree.profiles.psi.sel(time=t, method='nearest').coords['rho_norm'].values,
+        data_tree.profiles.psi.sel(time=t, method='nearest').to_numpy()
+    ))
+    sim_vars['T_e'][i] = dict(zip(
+        data_tree.profiles.T_e.sel(time=t, method='nearest').coords['rho_norm'].values,
+        data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
+    ))
+    sim_vars['T_i'][i] = dict(zip(
+        data_tree.profiles.T_i.sel(time=t, method='nearest').coords['rho_norm'].values,
+        data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
+    ))
+    sim_vars['n_e'][i] = dict(zip(
+        data_tree.profiles.n_e.sel(time=t, method='nearest').coords['rho_norm'].values,
+        data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
+    ))
+
     return sim_vars
 
 def gs_update(sim_vars, i, mygs, calc_vloop=True):
@@ -247,28 +288,36 @@ def get_boundary(sim_vars, i, npts=20):
     za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
     return np.vstack([ra, za]).transpose()
 
-def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True):
-    print("\n\n\n")
-    print("=== SIMVARS ===")
-    i = 1
-    for key, val in sim_vars.items():
-        if type(val) is list or type(val) is np.ndarray:
-            print(key)
-            print(val[i])
-        elif len(val) == 0:
-            continue
-        else:
-            print(key)
-            print("({}, {})".format(np.max(val[i]), np.min(val[i])))
-    print("\n\n\n")
-    # graph_var(sim_vars, 'vol', step)
+def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, verbose=True):
+    if verbose:
+        print("\n\n\n")
+        print("=== SIMVARS ===")
+        i = 1
+        for key, val in sim_vars.items():
+            if type(val) is list or type(val) is np.ndarray:
+                print(key)
+                print(val[i])
+            elif len(val) == 0:
+                continue
+            elif key in 'ffp_prof pp_prof eta':
+                vals = [v for _, v in val.items()]
+                print("min {} = {}".format(key, np.min(vals)))
+            elif type(val) is dict:
+                continue
+            else:
+                print(key)
+                print("({}, {})".format(np.max(val[i]), np.min(val[i])))
+        print("\n\n\n")
+
+    graph_var(sim_vars, 'ffp_prof', step)
+    graph_var(sim_vars, 'pp_prof', step)
 
     vsc_signs = {key: 0 for key in mygs.coil_sets}
     vsc_signs['F9A'] = 1.0
     vsc_signs['F9B'] = -1.0
     mygs.set_coil_vsc(vsc_signs)
 
-    mygs.set_targets(Ip=sim_vars['Ip'][0], Ip_ratio=1.0E-2, pax=sim_vars['pax'][0], V0=sim_vars['V0'][0])
+    mygs.set_targets(Ip=sim_vars['Ip'][0], pax=sim_vars['pax'][0], V0=sim_vars['V0'][0])
 
     psi_sample = np.linspace(0.0,1.0,N_PSI)
     psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][0]))
@@ -294,11 +343,16 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
 
     # lcfs = get_boundary(sim_vars, 0)
     lcfs = geqdsk['rzout']
-    isoflux_weights = 10.0 * np.ones(len(lcfs))
+    isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
     mygs.set_isoflux(lcfs, isoflux_weights)
+
+    mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': np.linspace(0.0, 1.0, N_PSI), 'y': 1.0E-7 * np.ones(N_PSI)})
 
     mygs.update_settings()
     err_flag = mygs.solve()
+
+    # print(lcfs_psi_target)
+    # print(mygs.psi_bounds[0])
 
     fig, ax = plt.subplots(1,1)
     mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
@@ -343,7 +397,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
 
         lcfs = get_boundary(sim_vars, i, len(lcfs))
-        isoflux_weights = 10.0 * np.ones(len(lcfs))
+        isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
 
         vloop = sim_vars['v_loop'][i]
         lcfs_psi_target -= dt * vloop / 2 / np.pi
@@ -359,12 +413,13 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
         mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
         plt.show()
+        print(lcfs_psi_target)
+        print(mygs.psi_bounds[0])
 
+        lcfs_psi_target = mygs.psi_bounds[0]
         psi0 = mygs.get_psi(False)
 
         sim_vars = gs_update(sim_vars, i, mygs, calc_vloop=calc_vloop)
-        if calc_vloop:
-            sim_vars['v_loop'][i] = mygs.calc_loopvoltage()
 
     consumed_flux = 0.0
     if calc_vloop:
@@ -372,17 +427,26 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     return sim_vars, consumed_flux
 
 def run_sims(sim_vars, times, step):
-    for i, _ in enumerate(times[:-1]):
+    _, ax = plt.subplots(1, len(times))
+
+    data_tree = None
+    for i, t in enumerate(times[:-1]):
         eqdsk_file = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
 
-        t_config = update_config(eqdsk_file, sim_vars, times, i, calc_vloop=step)
+        t_config = update_config(eqdsk_file, sim_vars, times, i, prev_dt=data_tree, calc_vloop=step)
         data_tree, hist = torax.run_simulation(t_config, log_timestep_info=False)
+        ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             print(hist.sim_error)
             raise ValueError(f'TORAX failed to run the simulation.')
         
+        if i == 0:
+            sim_vars = transport_update(sim_vars, i, times, data_tree)
         sim_vars = transport_update(sim_vars, i + 1, times, data_tree)
         # graph_sim(sim_vars, i)
+    i = len(times) - 1
+    ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
+    plt.show()
 
     return sim_vars, 0.0

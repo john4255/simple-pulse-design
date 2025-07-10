@@ -7,7 +7,7 @@ import matplotlib as mpl
 from scipy.interpolate import CubicSpline
 import torax
 from decimal import Decimal
-# from freeqdsk import aeqdsk
+from freeqdsk import aeqdsk
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -34,9 +34,10 @@ mygs.settings.maxits = 800
 
 # Load Files
 geqdsk = read_eqdsk('DIIID/g163520.02200.1.eqdsk')
+
+a_eqdsk = {}
 # with open('DIIID/a163520.02200', 'r') as f:
-#     aeqdsk = aeqdsk.read(f)
-aeqdsk = {}
+#     a_eqdsk = aeqdsk.read(f)
 
 e_coil_names = ['ECOILA','ECOILB','E567UP','E567DN','E89DN','E89UP']
 f_coil_names = ['F1A', 'F2A', 'F3A', 'F4A', 'F5A', 'F6A', 'F7A', 'F8A', 'F9A', 'F1B', 'F2B', 'F3B', 'F4B', 'F5B', 'F6B', 'F7B', 'F8B', 'F9B']
@@ -46,11 +47,11 @@ pdict = read_pfile('DIIID/p163520.02200')
 
 mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
 
-times = np.linspace(0.0, 4.0, 5)
+times = np.linspace(0.0, 8.0, 5)
 
 step = 0
 err = 0
-sim_vars = init_vars(times, geqdsk, aeqdsk, pdict)
+sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 # graph_sim(sim_vars, 0)
 
 sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=False)
