@@ -67,10 +67,9 @@ def graph_sim(sim_vars, i=0):
     plt.show()
 
 def graph_var(sim_vars, var, step):
-    profs = sim_vars[var]
-    fig, ax = plt.subplots(1, 5)
+    fig, ax = plt.subplots(1, len(sim_vars[var]), figsize=(8, 4))
     fig.suptitle("{} at step={}".format(var, step))
-    for i, prof in profs.items():
-        print(type(prof))
-        ax[i].plot(prof)
+    for i in range(len(sim_vars[var])):
+        keys, values = zip(*sim_vars[var][i].items())
+        ax[i].plot(keys, values)
     plt.show()

@@ -47,10 +47,10 @@ pdict = read_pfile('DIIID/p163520.02200')
 
 mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
 
-times = np.linspace(0.0, 8.0, 5)
+times = np.linspace(0.0, 4.0, 5)
 
 step = 0
-err = 0
+err = float('inf')
 sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 # graph_sim(sim_vars, 0)
 

@@ -146,11 +146,11 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
         sim_vars['v_loop'][i] = 0.0
 
         # Default Profiles
-        sim_vars['ffp_prof'][i] = ffp_prof.copy()
-        sim_vars['pp_prof'][i] = pp_prof.copy()
+        sim_vars['ffp_prof'][i] = {psi_sample[i]: ffp_prof[i] for i in range(len(psi_sample))}
+        sim_vars['pp_prof'][i] = {psi_sample[i]: pp_prof[i] for i in range(len(psi_sample))}
 
-        sim_vars['eta'][i]= np.zeros(N_RHO)
-        sim_vars['psi'][i] = np.zeros(N_RHO)
+        sim_vars['eta'][i]= {}
+        sim_vars['psi'][i] = {}
 
         sim_vars['T_e'][i] = pdict['te(KeV)']
         sim_vars['T_i'][i] = pdict['ti(KeV)']
@@ -184,7 +184,11 @@ def transport_update(sim_vars, i, times, data_tree):
     # sim_vars['pax'][i] = 0.0
     # if calc_vloop:
     #     sim_vars['v_loop'][i] = data_tree.profiles.v_loop[t][-1]
-    sim_vars['eta'][i] = 1.0 / data_tree.profiles.sigma_parallel.sel(time=t, method='nearest').to_numpy()
+    eta_prof = 1.0 / data_tree.profiles.sigma_parallel.sel(time=t, method='nearest').to_numpy()
+    sim_vars['eta'][i] = dict(zip(
+        data_tree.profiles.sigma_parallel.sel(time=t, method='nearest').coords['rho_norm'].values,
+        eta_prof
+    ))
 
     ffp_prof = data_tree.profiles.FFprime.sel(time=t, method='nearest').to_numpy()
     pp_prof = data_tree.profiles.pprime.sel(time=t, method='nearest').to_numpy()
@@ -197,9 +201,14 @@ def transport_update(sim_vars, i, times, data_tree):
     # ffp_prof[-1] = 0
     # pp_prof[-1] = 0
 
-    sim_vars['ffp_prof'][i] = ffp_prof
-    sim_vars['pp_prof'][i] = pp_prof
-
+    sim_vars['ffp_prof'][i] = dict(zip(
+        data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+        ffp_prof
+    ))
+    sim_vars['pp_prof'][i] = dict(zip(
+        data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+        pp_prof
+    ))
     sim_vars['psi'][i] = dict(zip(
         data_tree.profiles.psi.sel(time=t, method='nearest').coords['rho_norm'].values,
         data_tree.profiles.psi.sel(time=t, method='nearest').to_numpy()
@@ -288,7 +297,7 @@ def get_boundary(sim_vars, i, npts=20):
     za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
     return np.vstack([ra, za]).transpose()
 
-def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, verbose=True):
+def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, verbose=False):
     if verbose:
         print("\n\n\n")
         print("=== SIMVARS ===")
@@ -299,7 +308,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
                 print(val[i])
             elif len(val) == 0:
                 continue
-            elif key in 'ffp_prof pp_prof eta':
+            elif key in 'ffp_prof pp_prof':
                 vals = [v for _, v in val.items()]
                 print("min {} = {}".format(key, np.min(vals)))
             elif type(val) is dict:
@@ -309,8 +318,10 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
                 print("({}, {})".format(np.max(val[i]), np.min(val[i])))
         print("\n\n\n")
 
-    graph_var(sim_vars, 'ffp_prof', step)
-    graph_var(sim_vars, 'pp_prof', step)
+    # graph_var(sim_vars, 'ffp_prof', step)
+    # graph_var(sim_vars, 'pp_prof', step)
+    if step > 0:
+        graph_var(sim_vars, 'eta', step)
 
     vsc_signs = {key: 0 for key in mygs.coil_sets}
     vsc_signs['F9A'] = 1.0
@@ -320,10 +331,12 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     mygs.set_targets(Ip=sim_vars['Ip'][0], pax=sim_vars['pax'][0], V0=sim_vars['V0'][0])
 
     psi_sample = np.linspace(0.0,1.0,N_PSI)
-    psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][0]))
-    psi_pp_values = np.linspace(0.0, 1.0, len(sim_vars['pp_prof'][0]))
-    ffp_interp = np.interp(psi_sample, psi_ffp_values, sim_vars['ffp_prof'][0])
-    pp_interp = np.interp(psi_sample, psi_pp_values, sim_vars['pp_prof'][0])
+    ffp_rho = list(sim_vars['ffp_prof'][0].keys())
+    pp_rho = list(sim_vars['pp_prof'][0].keys())
+    ffp_vals = [sim_vars['ffp_prof'][0][rho] for rho in ffp_rho]
+    pp_vals = [sim_vars['pp_prof'][0][rho] for rho in ffp_rho]
+    ffp_interp = np.interp(psi_sample, ffp_rho, ffp_vals)
+    pp_interp = np.interp(psi_sample, pp_rho, pp_vals)
     mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
                       pp_prof={'type': 'linterp', 'y': pp_interp, 'x': psi_sample},
                       foffset=sim_vars['R'][0]*sim_vars['B0'][0])
@@ -331,25 +344,36 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
     mygs.set_flux(None,None)
 
+    mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': np.linspace(0.0, 1.0, N_PSI), 'y': 1.0E-7 * np.ones(N_PSI)})
+    
+    # if calc_vloop:
+    #     psi_sample = np.linspace(0.0, 1.0, N_PSI)
+    #     eta_rho_vals = list(sim_vars['eta'][0].keys())
+    #     eta_prof = [sim_vars['eta'][0][rho] for rho in eta_rho_vals]
+    #     eta_interp = np.interp(psi_sample, eta_rho_vals, eta_prof)
+    #     print("hello world")
+        # mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': psi_sample, 'y': eta_interp})
+
     err_flag = mygs.init_psi(sim_vars['R'][0],
                              sim_vars['Z'][0],
                              sim_vars['a'][0],
                              sim_vars['kappa'][0], 
                              sim_vars['delta'][0])
-    # err_flag = mygs.init_psi(1.7, 0.0, 0.5, 1.3, -0.4)
+    vloop = mygs.calc_loopvoltage()
 
     if err_flag:
         print("Error initializing Psi.")
 
-    # lcfs = get_boundary(sim_vars, 0)
     lcfs = geqdsk['rzout']
     isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
     mygs.set_isoflux(lcfs, isoflux_weights)
 
-    mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': np.linspace(0.0, 1.0, N_PSI), 'y': 1.0E-7 * np.ones(N_PSI)})
-
     mygs.update_settings()
     err_flag = mygs.solve()
+    if err_flag:
+        print("Error during initial solve.")
+
+    sim_vars = gs_update(sim_vars, 0, mygs, calc_vloop=calc_vloop)
 
     # print(lcfs_psi_target)
     # print(mygs.psi_bounds[0])
@@ -360,11 +384,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     ax.plot(geqdsk['rzout'][:, 0], geqdsk['rzout'][:, 1], color='r')
     plt.show()
 
-    if err_flag:
-        print("Error during initial solve.")
-
     mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, 0),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
-    sim_vars = gs_update(sim_vars, 0, mygs, calc_vloop=False)
     lcfs_psi_target = mygs.psi_bounds[0]
     psi0 = mygs.get_psi(False)
 
@@ -376,23 +396,25 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         mygs.set_targets(Ip=sim_vars['Ip'][i], Ip_ratio=1.0E-2, pax=sim_vars['pax'][i], V0=sim_vars['V0'][i])
 
         psi_sample = np.linspace(0.0,1.0,N_PSI)
-        psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][i]))
-        psi_ffp_values = np.linspace(0.0, 1.0, len(sim_vars['ffp_prof'][i]))
-        psi_pp_values = np.linspace(0.0, 1.0, len(sim_vars['pp_prof'][i]))
-        ffp_interp = np.interp(psi_sample, psi_ffp_values, sim_vars['ffp_prof'][i])
-        pp_interp = np.interp(psi_sample, psi_pp_values, sim_vars['pp_prof'][i])
+        ffp_rho = list(sim_vars['ffp_prof'][i].keys())
+        pp_rho = list(sim_vars['pp_prof'][i].keys())
+        ffp_vals = [sim_vars['ffp_prof'][i][rho] for rho in ffp_rho]
+        pp_vals = [sim_vars['pp_prof'][i][rho] for rho in ffp_rho]
+        ffp_interp = np.interp(psi_sample, ffp_rho, ffp_vals)
+        pp_interp = np.interp(psi_sample, pp_rho, pp_vals)
         mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
                         pp_prof={'type': 'linterp', 'y': pp_interp, 'x': psi_sample},
                         foffset=sim_vars['R'][i]*sim_vars['B0'][i])
         
         mygs.set_psi_dt(psi0,dt)
 
-        if calc_vloop:
-            psi_sample = np.linspace(0.0, 1.0, N_PSI)
-            psi_eta_values = np.linspace(0.0, 1.0, len(sim_vars['eta'][i]))
-            eta_interp = np.interp(psi_sample, psi_eta_values, sim_vars['eta'][i])
-            # eta_interp /= np.max(eta_interp)
-            mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': psi_sample, 'y': eta_interp})
+        # if calc_vloop:
+        #     psi_sample = np.linspace(0.0, 1.0, N_PSI)
+        #     eta_rho_vals = list(sim_vars['eta'][i].keys())
+        #     eta_prof = [sim_vars['eta'][i][rho] for rho in eta_rho_vals]
+        #     eta_interp = np.interp(psi_sample, eta_rho_vals, eta_prof)
+        #     mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': psi_sample, 'y': eta_interp})
+        mygs.set_resistivity(eta_prof={'type': 'linterp', 'x': np.linspace(0.0, 1.0, N_PSI), 'y': 1.0E-7 * np.ones(N_PSI)})
 
         set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
 
@@ -407,7 +429,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         err_flag = mygs.solve()
         if err_flag:
             print("Error solving at t={}.".format(times[i]))
-        mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker  EQDSK', cocos=2)
+        mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i), lcfs_pad=0.001, run_info='TokaMaker  EQDSK', cocos=2)
 
         fig, ax = plt.subplots(1,1)
         mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
@@ -427,7 +449,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     return sim_vars, consumed_flux
 
 def run_sims(sim_vars, times, step):
-    _, ax = plt.subplots(1, len(times))
+    # _, ax = plt.subplots(1, len(times))
 
     data_tree = None
     for i, t in enumerate(times[:-1]):
@@ -435,18 +457,18 @@ def run_sims(sim_vars, times, step):
 
         t_config = update_config(eqdsk_file, sim_vars, times, i, prev_dt=data_tree, calc_vloop=step)
         data_tree, hist = torax.run_simulation(t_config, log_timestep_info=False)
-        ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
+        # ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             print(hist.sim_error)
             raise ValueError(f'TORAX failed to run the simulation.')
         
         if i == 0:
-            sim_vars = transport_update(sim_vars, i, times, data_tree)
+            sim_vars = transport_update(sim_vars, 0, times, data_tree)
         sim_vars = transport_update(sim_vars, i + 1, times, data_tree)
         # graph_sim(sim_vars, i)
-    i = len(times) - 1
-    ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
+    # i = len(times) - 1
+    # ax[i].plot(data_tree.profiles.pressure_thermal_total.sel(time = t).to_numpy())
     plt.show()
 
     return sim_vars, 0.0
