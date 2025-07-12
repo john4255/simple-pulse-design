@@ -23,28 +23,28 @@ default_tconfig = {
         'Z_eff': {0.0: {0.0: 2.0, 1.0: 2.0}},  # sets impurity densities
     },
     'profile_conditions': {
-        'T_i': {0.0: {0.0: 6.0, 1.0: 0.2}}, # T_i initial condition
-        'T_i_right_bc': 0.2, # T_i boundary condition
-        'T_e': {0.0: {0.0: 6.0, 1.0: 0.2}},  # T_e initial condition
-        'T_e_right_bc': 0.2,  # T_e boundary condition
-        'n_e_right_bc_is_fGW': True,
-        'n_e_right_bc': {0: 0.35, 100: 0.35}, # n_e boundary condition
-        # set initial condition density according to Greenwald fraction.
-        'nbar': 0.85, # line average density for initial condition
-        'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
-        'normalize_n_e_to_nbar': True, # normalize initial n_e to nbar
-        'n_e_nbar_is_fGW': True, # nbar is in units for greenwald fraction
-        'initial_psi_from_j': True, # initial psi from current formula
-        'initial_j_is_total_current': True, # only ohmic current on init
-        'current_profile_nu': 2, # exponent in initial current formula
+        # 'T_i': {0.0: {0.0: 6.0, 1.0: 0.2}}, # T_i initial condition
+        # 'T_i_right_bc': 0.2, # T_i boundary condition
+        # 'T_e': {0.0: {0.0: 6.0, 1.0: 0.2}},  # T_e initial condition
+        # 'T_e_right_bc': 0.2,  # T_e boundary condition
+        # 'n_e_right_bc_is_fGW': True,
+        # 'n_e_right_bc': {0: 0.35, 100: 0.35}, # n_e boundary condition
+        # # set initial condition density according to Greenwald fraction.
+        # 'nbar': 0.85, # line average density for initial condition
+        # 'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
+        # 'normalize_n_e_to_nbar': True, # normalize initial n_e to nbar
+        # 'n_e_nbar_is_fGW': True, # nbar is in units for greenwald fraction
+        # 'initial_psi_from_j': True, # initial psi from current formula
+        # 'initial_j_is_total_current': True, # only ohmic current on init
+        # 'current_profile_nu': 2, # exponent in initial current formula
     },
     'numerics': {
-        't_final': 150,  # length of simulation time in seconds
-        'fixed_dt': 1, # fixed timestep
-        'evolve_ion_heat': True, # solve ion heat equation
-        'evolve_electron_heat': True, # solve electron heat equation
-        'evolve_current': True, # solve current equation
-        'evolve_density': True, # solve density equation
+        # 't_final': 150,  # length of simulation time in seconds
+        # 'fixed_dt': 1, # fixed timestep
+        # 'evolve_ion_heat': True, # solve ion heat equation
+        # 'evolve_electron_heat': True, # solve electron heat equation
+        # 'evolve_current': False, # solve current equation
+        # 'evolve_density': False, # solve density equation
     },
     'geometry': {
         # 'geometry_type': 'chease',

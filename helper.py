@@ -7,6 +7,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import xarray as xr
 from typing import Any
+import json
 from defaultconfig import default_tconfig
 # from freeqdsk import geqdsk
 from decimal import Decimal
@@ -38,25 +39,21 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     
     rho = np.linspace(0.0, 1.0, N_RHO)
 
-    # myconfig['profile_conditions'] = {
-    #     'Ip': {
-    #         times[i]: sim_vars['Ip'][i],
-    #         times[i+1]: sim_vars['Ip'][i+1],
-    #     },
-    #     'T_e': {
-    #         times[i]: sim_vars['T_e'][i],
-    #         # times[i+1]: sim_vars['T_e'][i+1],
-    #     },
-    #     'T_i': {
-    #         times[i]: sim_vars['T_i'][i],
-    #         # times[i+1]: sim_vars['T_i'][i+1],
-    #     },
-    #     'n_e': {
-    #         times[i]: sim_vars['n_e'][i],
-    #         # times[i+1]: sim_vars['n_e'][i+1],
-    #     },
-    #     **myconfig['profile_conditions'],
-    # }
+    myconfig['profile_conditions'] = {
+        'Ip': {
+            t: sim_vars['Ip'][i] for i, t in enumerate(times)
+        },
+        'T_e': {
+            t: sim_vars['T_e'][i] for i, t in enumerate(times)
+        },
+        'T_i': {
+            t: sim_vars['T_i'][i] for i, t in enumerate(times)
+        },
+        'n_e': {
+            t: sim_vars['n_e'][i] for i, t in enumerate(times)
+        },
+        'nbar': 0.85,
+    }
     # if calc_vloop:
     #     myconfig['profile_conditions']['v_loop_lcfs'] = {times[i]: sim_vars['v_loop'][i][-1] for i in range(len(times))}
     torax_config = torax.ToraxConfig.from_dict(myconfig)
@@ -153,9 +150,10 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
         sim_vars['eta'][i]= {}
         sim_vars['psi'][i] = {}
 
+        # print(pdict)
         sim_vars['T_e'][i] = pdict['te(KeV)']
         sim_vars['T_i'][i] = pdict['ti(KeV)']
-        sim_vars['n_e'][i] = pdict['ne(10^20/m^3)']
+        sim_vars['n_e'][i] = {key: 1.0E20 * val for key, val in pdict['ne(10^20/m^3)'].items()}
         sim_vars['n_i'][i] = pdict['ni(10^20/m^3)']
         sim_vars['f_pol'][i] = geqdsk['fpol']
         
@@ -323,6 +321,8 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     graph_var(sim_vars, 'pp_prof', step)
     if step > 0:
         graph_var(sim_vars, 'eta', step)
+    
+    save_state(sim_vars, step)
 
     vsc_signs = {key: 0 for key in mygs.coil_sets}
     vsc_signs['F9A'] = 1.0
@@ -363,7 +363,8 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     if err_flag:
         print("Error initializing Psi.")
 
-    lcfs = geqdsk['rzout']
+    # lcfs = geqdsk['rzout']
+    lcfs = get_boundary(sim_vars, 0)
     isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
     mygs.set_isoflux(lcfs, isoflux_weights)
 
@@ -459,5 +460,12 @@ def run_sims(sim_vars, times, step):
 
     return sim_vars, 0.0
 
-def save_sim():
-    pass
+def save_state(sim_vars, step):
+    class MyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return json.JSONEncoder.default(self, obj)
+
+    with open('state_{}.json'.format(step), 'w') as f:
+        json.dump(sim_vars, f, cls=MyEncoder)
