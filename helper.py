@@ -444,7 +444,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
 
     consumed_flux = 0.0
     if calc_vloop:
-        consumed_flux = np.trapz(sim_vars['v_loop'][:,1], sim_vars['v_loop'][:,0])
+        consumed_flux = np.trapz(times, sim_vars['v_loop'])
     return sim_vars, consumed_flux
 
 def run_sims(sim_vars, times, step):
