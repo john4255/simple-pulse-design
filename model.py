@@ -16,7 +16,7 @@ from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, read_mhdin, read_kfile,
 
 from helper import *
 
-CONV_THRESHOLD = 1.0E-8
+CONV_THRESHOLD = 1.0E-6
 
 os.makedirs('tmp', exist_ok=True)
 
@@ -54,13 +54,13 @@ err = float('inf')
 sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 # graph_sim(sim_vars, 0)
 
-sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=False)
+sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, graph=True, calc_vloop=False)
 
 while err > CONV_THRESHOLD and step < 10:
     sim_vars, cflux_transport = run_sims(sim_vars, times, step)
     step += 1
 
-    sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True)
+    sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, graph=True, calc_vloop=True)
     err = (cflux_gs - cflux_transport) ** 2
 
     with open('convergence_history.out', 'a') as f:

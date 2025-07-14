@@ -24,10 +24,10 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'geometry_type': 'eqdsk',
         # 'geometry_file': geo_file,
         'geometry_directory': '/Users/johnl/Desktop/discharge-model',
-        'last_surface_factor': 0.98,
+        'last_surface_factor': 0.95,
         'n_surfaces': 100,
         # 'nrho': N_RHO,
-        'Ip_from_parameters': False,
+        # 'Ip_from_parameters': False,
         'geometry_configs': {
             t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(times)
         }
@@ -35,7 +35,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     myconfig['numerics'] = {
         't_initial': times[0],
         't_final': times[-1],
-        # 'fixed_dt': (times[1] - times[0]) / 100.0,
+        'fixed_dt': (times[1] - times[0]) / 100.0,
     }
     
     # rho = np.linspace(0.0, 1.0, N_RHO)
@@ -43,6 +43,9 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     myconfig['profile_conditions'] = {
         'Ip': {
             t: sim_vars['Ip'][i] for i, t in enumerate(times)
+        },
+        'psi': {
+            t: sim_vars['psi'][i] for i, t in enumerate(times)
         },
         'T_e': {
             0.0: sim_vars['T_e'][0]
@@ -59,7 +62,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         # 'nbar': 0.85,
     }
     if calc_vloop:
-        myconfig['profile_conditions']['v_loop_lcfs'] = {t: sim_vars['v_loop'][i] for i,t in enumerate(times)}
+        myconfig['profile_conditions']['v_loop_lcfs'] = {0.0: sim_vars['v_loop'][0]}
     torax_config = torax.ToraxConfig.from_dict(myconfig)
     return torax_config
 
@@ -197,12 +200,13 @@ def transport_update(sim_vars, i, times, data_tree):
 
     ffp_prof = data_tree.profiles.FFprime.sel(time=t, method='nearest').to_numpy()
     pp_prof = data_tree.profiles.pprime.sel(time=t, method='nearest').to_numpy()
+
     # ffp_prof /= ffp_prof[0]
     # pp_prof /= pp_prof[0]
-    ffp_prof -= np.min(ffp_prof)
-    pp_prof -= np.min(pp_prof)
     ffp_prof /= np.max(abs(ffp_prof))
     pp_prof /= np.max(abs(pp_prof))
+    ffp_prof -= np.min(ffp_prof)
+    pp_prof -= np.min(pp_prof)
     # ffp_prof[-1] = 0
     # pp_prof[-1] = 0
 
@@ -210,6 +214,8 @@ def transport_update(sim_vars, i, times, data_tree):
         data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
         ffp_prof
     ))
+    print("FFP PROF")
+    print(ffp_prof)
     # sim_vars['pp_prof'][i] = dict(zip(
     #     data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
     #     pp_prof
@@ -256,8 +262,11 @@ def gs_update(sim_vars, i, mygs, calc_vloop=True):
     mu0 = np.pi*4.E-7
 
     sim_vars['f_pol'][i] = -f
-    sim_vars['psi'][i] = -psi # TODO: get psi from GS or transport?
-    sim_vars['ffp_prof'][i] = fp
+
+    rho_vals = np.linspace(0.0, 1.0, len(psi))
+    sim_vars['psi'][i] = {rho: -psi[i] for i, rho in enumerate(rho_vals)} # TODO: get psi from GS or transport?
+    # sim_vars['ffp_prof'][i] = fp
+    # plt.plot(fp)
     sim_vars['pp_prof'][i] = pp * mu0
 
     if calc_vloop:
@@ -303,7 +312,7 @@ def get_boundary(sim_vars, i, npts=20):
     za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
     return np.vstack([ra, za]).transpose()
 
-def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, verbose=False):
+def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, graph=False, verbose=False):
     if verbose:
         print("\n\n\n")
         print("=== SIMVARS ===")
@@ -324,11 +333,12 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
                 print("({}, {})".format(np.max(val[i]), np.min(val[i])))
         print("\n\n\n")
 
-    graph_var(sim_vars, 'ffp_prof', step)
-    graph_var(sim_vars, 'pp_prof', step)
-    if step > 0:
-        graph_var(sim_vars, 'eta', step)
-    
+    if graph:
+        graph_var(sim_vars, 'ffp_prof', step)
+        graph_var(sim_vars, 'pp_prof', step)
+        if step > 0:
+            graph_var(sim_vars, 'eta', step)
+        
     save_state(sim_vars, step)
 
     # sim_vars['v_loop'] = np.zeros(len(times))
@@ -378,20 +388,30 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     mygs.set_isoflux(lcfs, isoflux_weights)
 
     mygs.update_settings()
-    err_flag = mygs.solve()
-    if err_flag:
-        print("Error during initial solve.")
+    try:
+        err_flag = mygs.solve()
+        if err_flag:
+            print("Error during initial solve.")
+    except:
+        print("Solve failed.")
+        save_state(sim_vars, step)
+        graph_var(sim_vars, 'ffp_prof', step)
+        graph_var(sim_vars, 'pp_prof', step)
+        if step > 0:
+            graph_var(sim_vars, 'eta', step)
+        quit()
 
     sim_vars = gs_update(sim_vars, 0, mygs, calc_vloop=calc_vloop)
 
     # print(lcfs_psi_target)
     # print(mygs.psi_bounds[0])
 
-    fig, ax = plt.subplots(1,1)
-    mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-    mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-    ax.plot(geqdsk['rzout'][:, 0], geqdsk['rzout'][:, 1], color='r')
-    plt.show()
+    if graph:
+        fig, ax = plt.subplots(1,1)
+        mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
+        mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+        ax.plot(geqdsk['rzout'][:, 0], geqdsk['rzout'][:, 1], color='r')
+        plt.show()
 
     mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, 0),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
     lcfs_psi_target = mygs.psi_bounds[0]
@@ -435,16 +455,23 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         mygs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
         mygs.set_psi_dt(psi0,dt)
-        err_flag = mygs.solve()
-        if err_flag:
-            print("Error solving at t={}.".format(times[i]))
+        try:
+            err_flag = mygs.solve()
+            if err_flag:
+                print("Error solving at t={}.".format(times[i]))
+        except:
+            print("Solve failed.")
+            print(sim_vars)
+            return sim_vars, 0.0
+        
         mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i), lcfs_pad=0.001, run_info='TokaMaker  EQDSK', cocos=2)
         sim_vars = gs_update(sim_vars, i, mygs, calc_vloop=calc_vloop)
 
-        fig, ax = plt.subplots(1,1)
-        mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-        mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-        plt.show()
+        if graph:
+            fig, ax = plt.subplots(1,1)
+            mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
+            mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+            plt.show()
         print(lcfs_psi_target)
         print(mygs.psi_bounds[0])
 
