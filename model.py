@@ -33,7 +33,7 @@ mygs.settings.nl_tol=1.0E-5
 mygs.settings.maxits = 800
 
 # Load Files
-geqdsk = read_eqdsk('DIIID/g163520.02200.1.eqdsk')
+g_eqdsk = read_eqdsk('DIIID/g163520.02200.1.eqdsk')
 
 a_eqdsk = {}
 # with open('DIIID/a163520.02200', 'r') as f:
@@ -43,24 +43,23 @@ e_coil_names = ['ECOILA','ECOILB','E567UP','E567DN','E89DN','E89UP']
 f_coil_names = ['F1A', 'F2A', 'F3A', 'F4A', 'F5A', 'F6A', 'F7A', 'F8A', 'F9A', 'F1B', 'F2B', 'F3B', 'F4B', 'F5B', 'F6B', 'F7B', 'F8B', 'F9B']
 machine_dict, _ = read_mhdin('DIIID/mhdin_156001.dat', e_coil_names, f_coil_names)
 _, _, e_coil_dict, f_coil_dict, _ = read_kfile('DIIID/k163520.02200', machine_dict, e_coil_names, f_coil_names)
-pdict = read_pfile('DIIID/p163520.02200')
+p_eqdsk = read_pfile('DIIID/p163520.02200')
 
-mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
+mygs.setup(order=2, F0=g_eqdsk['rcentr']*g_eqdsk['bcentr'])
 
 times = np.linspace(0.0, 1.0, 5)
 
 step = 0
 err = float('inf')
-sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
-# graph_sim(sim_vars, 0)
+sim_vars = init_vars(times, g_eqdsk, a_eqdsk, p_eqdsk)
 
-sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, graph=True, calc_vloop=False)
+sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqdsk, step, graph=True, calc_vloop=False)
 
 while err > CONV_THRESHOLD and step < 10:
     sim_vars, cflux_transport = run_sims(sim_vars, times, step)
     step += 1
 
-    sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, graph=True, calc_vloop=True)
+    sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqdsk, step, graph=True, calc_vloop=True)
     err = (cflux_gs - cflux_transport) ** 2
 
     with open('convergence_history.out', 'a') as f:

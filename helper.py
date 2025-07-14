@@ -1,15 +1,9 @@
-import copy
-import jax
 import torax
-# from torax._src.geometry import standard_geometry
-from torax._src.geometry import geometry
 from matplotlib import pyplot as plt
 import numpy as np
-import xarray as xr
 from typing import Any
 import json
 from defaultconfig import default_tconfig
-# from freeqdsk import geqdsk
 from decimal import Decimal
 from visualization import graph_var
 
@@ -24,7 +18,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'geometry_type': 'eqdsk',
         # 'geometry_file': geo_file,
         'geometry_directory': '/Users/johnl/Desktop/discharge-model',
-        'last_surface_factor': 0.95,
+        'last_surface_factor': 0.9,
         'n_surfaces': 100,
         # 'nrho': N_RHO,
         # 'Ip_from_parameters': False,
@@ -36,13 +30,18 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         't_initial': times[0],
         't_final': times[-1],
         'fixed_dt': (times[1] - times[0]) / 100.0,
+        'evolve_ion_heat': True, # solve ion heat equation
+        'evolve_electron_heat': True, # solve electron heat equation
+        'evolve_current': True, # solve current equation
+        'evolve_density': True, # solve density equation
     }
     
     # rho = np.linspace(0.0, 1.0, N_RHO)
 
     myconfig['profile_conditions'] = {
         'Ip': {
-            t: sim_vars['Ip'][i] for i, t in enumerate(times)
+            0.0: sim_vars['Ip'][0]
+            # t: sim_vars['Ip'][i] for i, t in enumerate(times)
         },
         'psi': {
             t: sim_vars['psi'][i] for i, t in enumerate(times)
@@ -66,7 +65,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     torax_config = torax.ToraxConfig.from_dict(myconfig)
     return torax_config
 
-def init_vars(times, geqdsk, aeqdsk, pdict):
+def init_vars(times, g_eqdsk, aeqdsk, p_eqdsk):
     sim_vars = {}
 
     # Initialize Scalars
@@ -102,8 +101,8 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
     sim_vars['Bp'] = {}
 
     # Setup Profiles
-    ffprim = geqdsk['ffprim']
-    pprime = geqdsk['pprime']
+    ffprim = g_eqdsk['ffprim']
+    pprime = g_eqdsk['pprime']
 
     # plt.plot(ffprim)
     # Normalize ffprim
@@ -120,36 +119,36 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
     # pp_prof /= np.max(pp_prof)
 
     # Shaping parameters
-    zmax = np.max(geqdsk['rzout'][:,1])
-    zmin = np.min(geqdsk['rzout'][:,1])
-    rmax = np.max(geqdsk['rzout'][:,0])
-    rmin = np.min(geqdsk['rzout'][:,0])
+    zmax = np.max(g_eqdsk['rzout'][:,1])
+    zmin = np.min(g_eqdsk['rzout'][:,1])
+    rmax = np.max(g_eqdsk['rzout'][:,0])
+    rmin = np.min(g_eqdsk['rzout'][:,0])
     minor_radius = (rmax - rmin) / 2.0
     rgeo = (rmax + rmin) / 2.0
-    highest_pt_idx = np.argmax(geqdsk['rzout'][:,1])
-    lowest_pt_idx = np.argmin(geqdsk['rzout'][:,1])
-    rupper = geqdsk['rzout'][highest_pt_idx][0]
-    rlower = geqdsk['rzout'][lowest_pt_idx][0]
+    highest_pt_idx = np.argmax(g_eqdsk['rzout'][:,1])
+    lowest_pt_idx = np.argmin(g_eqdsk['rzout'][:,1])
+    rupper = g_eqdsk['rzout'][highest_pt_idx][0]
+    rlower = g_eqdsk['rzout'][lowest_pt_idx][0]
     delta_upper = (rgeo - rupper) / minor_radius
     delta_lower = (rgeo - rlower) / minor_radius
 
     for i,_ in enumerate(times):
         # Default Scalars
-        sim_vars['R'][i] = geqdsk['rcentr']
-        sim_vars['Z'][i] = geqdsk['zmid']
+        sim_vars['R'][i] = g_eqdsk['rcentr']
+        sim_vars['Z'][i] = g_eqdsk['zmid']
         sim_vars['a'][i] = minor_radius
         sim_vars['kappa'][i] = (zmax - zmin) / (2.0 * minor_radius)
         sim_vars['delta'][i] = (delta_upper + delta_lower) / 2.0
         sim_vars['deltaU'][i] = delta_upper
         sim_vars['deltaL'][i] = delta_lower
-        sim_vars['B0'][i] = geqdsk['bcentr']
-        sim_vars['V0'][i] = geqdsk['zaxis']
+        sim_vars['B0'][i] = g_eqdsk['bcentr']
+        sim_vars['V0'][i] = g_eqdsk['zaxis']
         sim_vars['zbot'][i] = zmin
         sim_vars['ztop'][i] = zmax
         sim_vars['rbot'][i] = rmin
         sim_vars['rtop'][i] = rmax
-        sim_vars['Ip'][i] = abs(geqdsk['ip'])
-        sim_vars['pax'][i] = geqdsk['pres'][0]
+        sim_vars['Ip'][i] = abs(g_eqdsk['ip'])
+        sim_vars['pax'][i] = g_eqdsk['pres'][0]
         sim_vars['v_loop'][i] = 0.0
 
         # Default Profiles
@@ -159,12 +158,12 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
         sim_vars['eta'][i]= {}
         sim_vars['psi'][i] = {}
 
-        # print(pdict)
-        sim_vars['T_e'][i] = pdict['te(KeV)']
-        sim_vars['T_i'][i] = pdict['ti(KeV)']
-        sim_vars['n_e'][i] = {key: 1.0E20 * val for key, val in pdict['ne(10^20/m^3)'].items()}
-        sim_vars['n_i'][i] = pdict['ni(10^20/m^3)']
-        sim_vars['f_pol'][i] = geqdsk['fpol']
+        # print(p_eqdsk)
+        sim_vars['T_e'][i] = p_eqdsk['te(KeV)']
+        sim_vars['T_i'][i] = p_eqdsk['ti(KeV)']
+        sim_vars['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
+        sim_vars['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
+        sim_vars['f_pol'][i] = g_eqdsk['fpol']
         
         # sim_vars['vol'][i] = aeqdsk['vout']
         # sim_vars['area'] = aeqdsk['psurfa']
@@ -201,6 +200,8 @@ def transport_update(sim_vars, i, times, data_tree):
     ffp_prof = data_tree.profiles.FFprime.sel(time=t, method='nearest').to_numpy()
     pp_prof = data_tree.profiles.pprime.sel(time=t, method='nearest').to_numpy()
 
+    plt.plot(ffp_prof)
+
     # ffp_prof /= ffp_prof[0]
     # pp_prof /= pp_prof[0]
     ffp_prof /= np.max(abs(ffp_prof))
@@ -214,17 +215,12 @@ def transport_update(sim_vars, i, times, data_tree):
         data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
         ffp_prof
     ))
-    print("FFP PROF")
-    print(ffp_prof)
-    # sim_vars['pp_prof'][i] = dict(zip(
-    #     data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
-    #     pp_prof
-    # ))
-    sim_vars['pp_prof'][i] = {0.0: 1.0, 1.0: 0.0}
-    sim_vars['psi'][i] = dict(zip(
-        data_tree.profiles.psi.sel(time=t, method='nearest').coords['rho_norm'].values,
-        data_tree.profiles.psi.sel(time=t, method='nearest').to_numpy()
+    sim_vars['pp_prof'][i] = dict(zip(
+        data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+        pp_prof
     ))
+    # sim_vars['pp_prof'][i] = {0.0: 1.0, 1.0: 0.0}
+
     sim_vars['T_e'][i] = dict(zip(
         data_tree.profiles.T_e.sel(time=t, method='nearest').coords['rho_norm'].values,
         data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
@@ -312,7 +308,7 @@ def get_boundary(sim_vars, i, npts=20):
     za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
     return np.vstack([ra, za]).transpose()
 
-def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True, graph=False, verbose=False):
+def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqdsk, step, calc_vloop=True, graph=False, verbose=False):
     if verbose:
         print("\n\n\n")
         print("=== SIMVARS ===")
@@ -382,7 +378,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     if err_flag:
         print("Error initializing Psi.")
 
-    # lcfs = geqdsk['rzout']
+    # lcfs = g_eqdsk['rzout']
     lcfs = get_boundary(sim_vars, 0)
     isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
     mygs.set_isoflux(lcfs, isoflux_weights)
@@ -410,7 +406,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         fig, ax = plt.subplots(1,1)
         mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
         mygs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-        ax.plot(geqdsk['rzout'][:, 0], geqdsk['rzout'][:, 1], color='r')
+        ax.plot(g_eqdsk['rzout'][:, 0], g_eqdsk['rzout'][:, 1], color='r')
         plt.show()
 
     mygs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, 0),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
