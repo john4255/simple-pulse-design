@@ -32,16 +32,16 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'fixed_dt': (times[1] - times[0]) / 100.0,
         'evolve_ion_heat': True, # solve ion heat equation
         'evolve_electron_heat': True, # solve electron heat equation
-        'evolve_current': True, # solve current equation
-        'evolve_density': True, # solve density equation
+        'evolve_current': False, # solve current equation
+        'evolve_density': False, # solve density equation
     }
     
     # rho = np.linspace(0.0, 1.0, N_RHO)
 
     myconfig['profile_conditions'] = {
         'Ip': {
-            0.0: sim_vars['Ip'][0]
-            # t: sim_vars['Ip'][i] for i, t in enumerate(times)
+            # 0.0: sim_vars['Ip'][0]
+            t: sim_vars['Ip'][i] for i, t in enumerate(times)
         },
         'psi': {
             t: sim_vars['psi'][i] for i, t in enumerate(times)
@@ -55,8 +55,8 @@ def update_config(step, sim_vars, times, calc_vloop=True):
             # t: sim_vars['T_i'][i] for i, t in enumerate(times)
         },
         'n_e': {
-            0.0: sim_vars['n_e'][0]
-            # t: sim_vars['n_e'][i] for i, t in enumerate(times)
+            # 0.0: sim_vars['n_e'][0]
+            t: sim_vars['n_e'][i] for i, t in enumerate(times)
         },
         # 'nbar': 0.85,
     }
@@ -65,7 +65,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     torax_config = torax.ToraxConfig.from_dict(myconfig)
     return torax_config
 
-def init_vars(times, g_eqdsk, aeqdsk, p_eqdsk):
+def init_vars(times, g_eqdsk, a_eqdsk, p_eqdsk):
     sim_vars = {}
 
     # Initialize Scalars
