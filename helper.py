@@ -27,6 +27,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'last_surface_factor': 0.98,
         'n_surfaces': 100,
         # 'nrho': N_RHO,
+        'Ip_from_parameters': False,
         'geometry_configs': {
             t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(times)
         }
@@ -34,7 +35,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     myconfig['numerics'] = {
         't_initial': times[0],
         't_final': times[-1],
-        'fixed_dt': (times[1] - times[0]) / 100.0,
+        # 'fixed_dt': (times[1] - times[0]) / 100.0,
     }
     
     # rho = np.linspace(0.0, 1.0, N_RHO)
@@ -44,13 +45,16 @@ def update_config(step, sim_vars, times, calc_vloop=True):
             t: sim_vars['Ip'][i] for i, t in enumerate(times)
         },
         'T_e': {
-            t: sim_vars['T_e'][i] for i, t in enumerate(times)
+            0.0: sim_vars['T_e'][0]
+            # t: sim_vars['T_e'][i] for i, t in enumerate(times)
         },
         'T_i': {
-            t: sim_vars['T_i'][i] for i, t in enumerate(times)
+            0.0: sim_vars['T_i'][0]
+            # t: sim_vars['T_i'][i] for i, t in enumerate(times)
         },
         'n_e': {
-            t: sim_vars['n_e'][i] for i, t in enumerate(times)
+            0.0: sim_vars['n_e'][0]
+            # t: sim_vars['n_e'][i] for i, t in enumerate(times)
         },
         # 'nbar': 0.85,
     }
@@ -107,10 +111,10 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
     ffp_prof = np.interp(psi_sample,psi_eqdsk,ffprim)
     pp_prof = np.interp(psi_sample,psi_eqdsk,pprime)
 
-    # ffp_prof /= np.max(ffp_prof)
-    # pp_prof /= np.max(pp_prof)
     # ffp_prof -= np.min(ffp_prof)
     # pp_prof -= np.min(pp_prof)
+    # ffp_prof /= np.max(ffp_prof)
+    # pp_prof /= np.max(pp_prof)
 
     # Shaping parameters
     zmax = np.max(geqdsk['rzout'][:,1])
@@ -193,8 +197,8 @@ def transport_update(sim_vars, i, times, data_tree):
 
     ffp_prof = data_tree.profiles.FFprime.sel(time=t, method='nearest').to_numpy()
     pp_prof = data_tree.profiles.pprime.sel(time=t, method='nearest').to_numpy()
-    ffp_prof /= ffp_prof[0]
-    pp_prof /= pp_prof[0]
+    # ffp_prof /= ffp_prof[0]
+    # pp_prof /= pp_prof[0]
     ffp_prof -= np.min(ffp_prof)
     pp_prof -= np.min(pp_prof)
     ffp_prof /= np.max(abs(ffp_prof))
@@ -206,10 +210,11 @@ def transport_update(sim_vars, i, times, data_tree):
         data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
         ffp_prof
     ))
-    sim_vars['pp_prof'][i] = dict(zip(
-        data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
-        pp_prof
-    ))
+    # sim_vars['pp_prof'][i] = dict(zip(
+    #     data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+    #     pp_prof
+    # ))
+    sim_vars['pp_prof'][i] = {0.0: 1.0, 1.0: 0.0}
     sim_vars['psi'][i] = dict(zip(
         data_tree.profiles.psi.sel(time=t, method='nearest').coords['rho_norm'].values,
         data_tree.profiles.psi.sel(time=t, method='nearest').to_numpy()
@@ -335,11 +340,11 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
 
     mygs.set_targets(Ip=sim_vars['Ip'][0], pax=sim_vars['pax'][0], V0=sim_vars['V0'][0])
 
-    psi_sample = np.linspace(0.0,1.0,N_PSI)
+    psi_sample = np.linspace(0.0, 1.0, N_PSI)
     ffp_rho = list(sim_vars['ffp_prof'][0].keys())
     pp_rho = list(sim_vars['pp_prof'][0].keys())
     ffp_vals = [sim_vars['ffp_prof'][0][rho] for rho in ffp_rho]
-    pp_vals = [sim_vars['pp_prof'][0][rho] for rho in ffp_rho]
+    pp_vals = [sim_vars['pp_prof'][0][rho] for rho in pp_rho]
     ffp_interp = np.interp(psi_sample, ffp_rho, ffp_vals)
     pp_interp = np.interp(psi_sample, pp_rho, pp_vals)
     mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
@@ -403,7 +408,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         ffp_rho = list(sim_vars['ffp_prof'][i].keys())
         pp_rho = list(sim_vars['pp_prof'][i].keys())
         ffp_vals = [sim_vars['ffp_prof'][i][rho] for rho in ffp_rho]
-        pp_vals = [sim_vars['pp_prof'][i][rho] for rho in ffp_rho]
+        pp_vals = [sim_vars['pp_prof'][i][rho] for rho in pp_rho]
         ffp_interp = np.interp(psi_sample, ffp_rho, ffp_vals)
         pp_interp = np.interp(psi_sample, pp_rho, pp_vals)
         mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
@@ -450,7 +455,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     consumed_flux = 0.0
     if calc_vloop:
         consumed_flux = np.trapz(times, sim_vars['v_loop'])
-    return sim_vars, consumed_flux
+    return sim_vars, np.abs(consumed_flux)
 
 def run_sims(sim_vars, times, step):
     t_config = update_config(step, sim_vars, times, calc_vloop=True)
@@ -467,7 +472,7 @@ def run_sims(sim_vars, times, step):
         sim_vars['v_loop'][i] = data_tree.profiles.v_loop.sel(time=t, method='nearest').to_numpy()[-1]
     consumed_flux = np.trapz(times, sim_vars['v_loop'])
 
-    return sim_vars, consumed_flux
+    return sim_vars, np.abs(consumed_flux)
 
 def save_state(sim_vars, step):
     class MyEncoder(json.JSONEncoder):

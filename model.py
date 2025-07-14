@@ -16,7 +16,7 @@ from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, read_mhdin, read_kfile,
 
 from helper import *
 
-CONV_THRESHOLD = 0.05
+CONV_THRESHOLD = 1.0E-8
 
 os.makedirs('tmp', exist_ok=True)
 
@@ -47,7 +47,7 @@ pdict = read_pfile('DIIID/p163520.02200')
 
 mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
 
-times = np.linspace(0.0, 0.1, 5)
+times = np.linspace(0.0, 1.0, 5)
 
 step = 0
 err = float('inf')
@@ -56,7 +56,7 @@ sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 
 sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=False)
 
-while err > CONV_THRESHOLD and step < 5:
+while err > CONV_THRESHOLD and step < 10:
     sim_vars, cflux_transport = run_sims(sim_vars, times, step)
     step += 1
 
