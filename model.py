@@ -47,7 +47,7 @@ pdict = read_pfile('DIIID/p163520.02200')
 
 mygs.setup(order=2, F0=geqdsk['rcentr']*geqdsk['bcentr'])
 
-times = np.linspace(0.0, 4.0, 5)
+times = np.linspace(0.0, 0.1, 5)
 
 step = 0
 err = float('inf')
@@ -56,12 +56,15 @@ sim_vars = init_vars(times, geqdsk, a_eqdsk, pdict)
 
 sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=False)
 
-while err > CONV_THRESHOLD:
+while err > CONV_THRESHOLD and step < 5:
     sim_vars, cflux_transport = run_sims(sim_vars, times, step)
     step += 1
 
     sim_vars, cflux_gs = run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqdsk, step, calc_vloop=True)
     err = (cflux_gs - cflux_transport) ** 2
+
+    with open('convergence_history.out', 'a') as f:
+        print(err, file=f)
     
     
 print("Discharge model complete.")

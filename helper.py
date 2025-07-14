@@ -14,8 +14,8 @@ from decimal import Decimal
 from visualization import graph_var
 
 N_PSI = 100
-N_RHO = 50
-LCFS_WEIGHT = 10.0
+N_RHO = 25
+LCFS_WEIGHT = 100.0
 
 def update_config(step, sim_vars, times, calc_vloop=True):
     myconfig = default_tconfig.copy()
@@ -24,7 +24,7 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'geometry_type': 'eqdsk',
         # 'geometry_file': geo_file,
         'geometry_directory': '/Users/johnl/Desktop/discharge-model',
-        'last_surface_factor': 0.9,
+        'last_surface_factor': 0.98,
         'n_surfaces': 100,
         # 'nrho': N_RHO,
         'geometry_configs': {
@@ -34,10 +34,10 @@ def update_config(step, sim_vars, times, calc_vloop=True):
     myconfig['numerics'] = {
         't_initial': times[0],
         't_final': times[-1],
-        'fixed_dt': (times[1] - times[0]) / 10.0,
+        'fixed_dt': (times[1] - times[0]) / 100.0,
     }
     
-    rho = np.linspace(0.0, 1.0, N_RHO)
+    # rho = np.linspace(0.0, 1.0, N_RHO)
 
     myconfig['profile_conditions'] = {
         'Ip': {
@@ -52,10 +52,10 @@ def update_config(step, sim_vars, times, calc_vloop=True):
         'n_e': {
             t: sim_vars['n_e'][i] for i, t in enumerate(times)
         },
-        'nbar': 0.85,
+        # 'nbar': 0.85,
     }
-    # if calc_vloop:
-    #     myconfig['profile_conditions']['v_loop_lcfs'] = {times[i]: sim_vars['v_loop'][i][-1] for i in range(len(times))}
+    if calc_vloop:
+        myconfig['profile_conditions']['v_loop_lcfs'] = {t: sim_vars['v_loop'][i] for i,t in enumerate(times)}
     torax_config = torax.ToraxConfig.from_dict(myconfig)
     return torax_config
 
@@ -97,18 +97,20 @@ def init_vars(times, geqdsk, aeqdsk, pdict):
     # Setup Profiles
     ffprim = geqdsk['ffprim']
     pprime = geqdsk['pprime']
+
+    # plt.plot(ffprim)
     # Normalize ffprim
-    ffprim /= ffprim[0]
-    pprime /= pprime[0]
+    # ffprim /= ffprim[0]
+    # pprime /= pprime[0]
     psi_eqdsk = np.linspace(0.0,1.0,len(ffprim))
     psi_sample = np.linspace(0.0,1.0,N_PSI)
     ffp_prof = np.interp(psi_sample,psi_eqdsk,ffprim)
     pp_prof = np.interp(psi_sample,psi_eqdsk,pprime)
 
-    ffp_prof /= np.max(ffp_prof)
-    pp_prof /= np.max(pp_prof)
-    ffp_prof -= np.min(ffp_prof)
-    pp_prof -= np.min(pp_prof)
+    # ffp_prof /= np.max(ffp_prof)
+    # pp_prof /= np.max(pp_prof)
+    # ffp_prof -= np.min(ffp_prof)
+    # pp_prof -= np.min(pp_prof)
 
     # Shaping parameters
     zmax = np.max(geqdsk['rzout'][:,1])
@@ -324,6 +326,8 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     
     save_state(sim_vars, step)
 
+    # sim_vars['v_loop'] = np.zeros(len(times))
+
     vsc_signs = {key: 0 for key in mygs.coil_sets}
     vsc_signs['F9A'] = 1.0
     vsc_signs['F9B'] = -1.0
@@ -421,6 +425,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
         isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
 
         vloop = sim_vars['v_loop'][i]
+        # vloop = 0.1
         lcfs_psi_target -= dt * vloop / 2 / np.pi
         mygs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
@@ -448,7 +453,7 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, geqds
     return sim_vars, consumed_flux
 
 def run_sims(sim_vars, times, step):
-    t_config = update_config(step, sim_vars, times, calc_vloop=step)
+    t_config = update_config(step, sim_vars, times, calc_vloop=True)
     data_tree, hist = torax.run_simulation(t_config, log_timestep_info=False)
 
     if hist.sim_error != torax.SimError.NO_ERROR:
@@ -458,7 +463,11 @@ def run_sims(sim_vars, times, step):
     for i in range(len(times)):
         sim_vars = transport_update(sim_vars, i, times, data_tree)
 
-    return sim_vars, 0.0
+    for i, t in enumerate(times):
+        sim_vars['v_loop'][i] = data_tree.profiles.v_loop.sel(time=t, method='nearest').to_numpy()[-1]
+    consumed_flux = np.trapz(times, sim_vars['v_loop'])
+
+    return sim_vars, consumed_flux
 
 def save_state(sim_vars, step):
     class MyEncoder(json.JSONEncoder):
