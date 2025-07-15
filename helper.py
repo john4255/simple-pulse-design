@@ -6,6 +6,7 @@ import json
 from defaultconfig import default_tconfig
 from decimal import Decimal
 from visualization import graph_var
+from OpenFUSIONToolkit.TokaMaker.util import create_power_flux_fun
 
 N_PSI = 100
 N_RHO = 25
@@ -47,12 +48,12 @@ def update_config(step, sim_vars, times, calc_vloop=True):
             t: sim_vars['psi'][i] for i, t in enumerate(times)
         },
         'T_e': {
-            0.0: sim_vars['T_e'][0]
-            # t: sim_vars['T_e'][i] for i, t in enumerate(times)
+            # 0.0: sim_vars['T_e'][0]
+            t: sim_vars['T_e'][i] for i, t in enumerate(times)
         },
         'T_i': {
-            0.0: sim_vars['T_i'][0]
-            # t: sim_vars['T_i'][i] for i, t in enumerate(times)
+            # 0.0: sim_vars['T_i'][0]
+            t: sim_vars['T_i'][i] for i, t in enumerate(times)
         },
         'n_e': {
             # 0.0: sim_vars['n_e'][0]
@@ -101,18 +102,20 @@ def init_vars(times, g_eqdsk, a_eqdsk, p_eqdsk):
     sim_vars['Bp'] = {}
 
     # Setup Profiles
-    ffprim = g_eqdsk['ffprim']
-    pprime = g_eqdsk['pprime']
+    # ffprim = g_eqdsk['ffprim']
+    # pprime = g_eqdsk['pprime']
 
     # plt.plot(ffprim)
     # Normalize ffprim
     # ffprim /= ffprim[0]
     # pprime /= pprime[0]
-    psi_eqdsk = np.linspace(0.0,1.0,len(ffprim))
-    psi_sample = np.linspace(0.0,1.0,N_PSI)
-    ffp_prof = np.interp(psi_sample,psi_eqdsk,ffprim)
-    pp_prof = np.interp(psi_sample,psi_eqdsk,pprime)
+    # psi_eqdsk = np.linspace(0.0,1.0,len(ffprim))
+    # psi_sample = np.linspace(0.0,1.0,N_PSI)
+    # ffp_prof = np.interp(psi_sample,psi_eqdsk,ffprim)
+    # pp_prof = np.interp(psi_sample,psi_eqdsk,pprime)
 
+    ffp_prof = create_power_flux_fun(40,1.5,2.0)
+    pp_prof = create_power_flux_fun(40,4.0,1.0)
     # ffp_prof -= np.min(ffp_prof)
     # pp_prof -= np.min(pp_prof)
     # ffp_prof /= np.max(ffp_prof)
@@ -152,8 +155,10 @@ def init_vars(times, g_eqdsk, a_eqdsk, p_eqdsk):
         sim_vars['v_loop'][i] = 0.0
 
         # Default Profiles
-        sim_vars['ffp_prof'][i] = {psi_sample[i]: ffp_prof[i] for i in range(len(psi_sample))}
-        sim_vars['pp_prof'][i] = {psi_sample[i]: pp_prof[i] for i in range(len(psi_sample))}
+        # sim_vars['ffp_prof'][i] = {psi_sample[i]: ffp_prof[i] for i in range(len(psi_sample))}
+        # sim_vars['pp_prof'][i] = {psi_sample[i]: pp_prof[i] for i in range(len(psi_sample))}
+        sim_vars['ffp_prof'][i] = {x: ffp_prof['y'][i] for i, x in enumerate(ffp_prof['x'])}
+        sim_vars['pp_prof'][i] = {x: pp_prof['y'][i] for i, x in enumerate(pp_prof['x'])}
 
         sim_vars['eta'][i]= {}
         sim_vars['psi'][i] = {}
@@ -180,12 +185,10 @@ def transport_update(sim_vars, i, times, data_tree):
     sim_vars['a'][i] = np.abs(data_tree.scalars.a_minor.sel(time=t, method='nearest'))
     sim_vars['kappa'][i] = data_tree.profiles.elongation.sel(time=t, method='nearest')[-1] # TODO: inspect
 
-    # rmax = data_tree.profiles.R_in.sel(time=t, method='nearest')[-1]
-    # rmin = data_tree.profiles.R_in.sel(time=t, method='nearest')[-1]
-    # rgeo = (rmax + rmin) / 2.0
-    # highest_pt_idx = np.argmax
-    # deltaU = (rgeo - rupper) / sim_vars['a']
-    # sim_vars['delta'][i] = 0.0
+    # print("TORAX DELTA")
+    sim_vars['deltaU'][i] = data_tree.profiles.delta_upper.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
+    sim_vars['deltaL'][i] = data_tree.profiles.delta_lower.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
+    sim_vars['delta'][i] = (sim_vars['deltaU'][i] + sim_vars['deltaL'][i]) / 2.0
 
     sim_vars['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
     # sim_vars['pax'][i] = 0.0
@@ -200,7 +203,7 @@ def transport_update(sim_vars, i, times, data_tree):
     ffp_prof = data_tree.profiles.FFprime.sel(time=t, method='nearest').to_numpy()
     pp_prof = data_tree.profiles.pprime.sel(time=t, method='nearest').to_numpy()
 
-    plt.plot(ffp_prof)
+    # plt.plot(ffp_prof)
 
     # ffp_prof /= ffp_prof[0]
     # pp_prof /= pp_prof[0]
@@ -211,28 +214,28 @@ def transport_update(sim_vars, i, times, data_tree):
     # ffp_prof[-1] = 0
     # pp_prof[-1] = 0
 
-    sim_vars['ffp_prof'][i] = dict(zip(
-        data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
-        ffp_prof
-    ))
-    sim_vars['pp_prof'][i] = dict(zip(
-        data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
-        pp_prof
-    ))
+    # sim_vars['ffp_prof'][i] = dict(zip(
+    #     data_tree.profiles.FFprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+    #     ffp_prof
+    # ))
+    # sim_vars['pp_prof'][i] = dict(zip(
+    #     data_tree.profiles.pprime.sel(time=t, method='nearest').coords['rho_face_norm'].values,
+    #     pp_prof
+    # ))
     # sim_vars['pp_prof'][i] = {0.0: 1.0, 1.0: 0.0}
 
-    sim_vars['T_e'][i] = dict(zip(
-        data_tree.profiles.T_e.sel(time=t, method='nearest').coords['rho_norm'].values,
-        data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
-    ))
-    sim_vars['T_i'][i] = dict(zip(
-        data_tree.profiles.T_i.sel(time=t, method='nearest').coords['rho_norm'].values,
-        data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
-    ))
-    sim_vars['n_e'][i] = dict(zip(
-        data_tree.profiles.n_e.sel(time=t, method='nearest').coords['rho_norm'].values,
-        data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
-    ))
+    # sim_vars['T_e'][i] = dict(zip(
+    #     data_tree.profiles.T_e.sel(time=t, method='nearest').coords['rho_norm'].values,
+    #     data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
+    # ))
+    # sim_vars['T_i'][i] = dict(zip(
+    #     data_tree.profiles.T_i.sel(time=t, method='nearest').coords['rho_norm'].values,
+    #     data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
+    # ))
+    # sim_vars['n_e'][i] = dict(zip(
+    #     data_tree.profiles.n_e.sel(time=t, method='nearest').coords['rho_norm'].values,
+    #     data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
+    # ))
 
     return sim_vars
 
@@ -253,9 +256,13 @@ def gs_update(sim_vars, i, mygs, calc_vloop=True):
     sim_vars['rtop'][i] = mygs.x_points[1,0]
     sim_vars['a'][i] = np.abs((sim_vars['rtop'][i] - sim_vars['rbot'][i]) / 2.0)
     sim_vars['Ip'][i] = eq_stats['Ip']
+    sim_vars['Bp'][i] = eq_stats['beta_pol']
+
+    print("BETAP")
+    print(sim_vars['Bp'][i])
 
     # Update profiles
-    mu0 = np.pi*4.E-7
+    # mu0 = np.pi*4.E-7
 
     sim_vars['f_pol'][i] = -f
 
@@ -263,7 +270,7 @@ def gs_update(sim_vars, i, mygs, calc_vloop=True):
     sim_vars['psi'][i] = {rho: -psi[i] for i, rho in enumerate(rho_vals)} # TODO: get psi from GS or transport?
     # sim_vars['ffp_prof'][i] = fp
     # plt.plot(fp)
-    sim_vars['pp_prof'][i] = pp * mu0
+    # sim_vars['pp_prof'][i] = pp * mu0
 
     if calc_vloop:
         sim_vars['v_loop'][i] = mygs.calc_loopvoltage()
@@ -356,6 +363,9 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqd
     mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
                       pp_prof={'type': 'linterp', 'y': pp_interp, 'x': psi_sample},
                       foffset=sim_vars['R'][0]*sim_vars['B0'][0])
+    # mygs.set_profiles(ffp_prof=sim_vars['ffp_prof'][0],
+    #                   pp_prof=sim_vars['pp_prof'][0],
+    #                   foffset=sim_vars['R'][0]*sim_vars['B0'][0])
 
     set_coil_reg(mygs, machine_dict, e_coil_dict, f_coil_dict)
     mygs.set_flux(None,None)
@@ -430,7 +440,10 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqd
         mygs.set_profiles(ffp_prof={'type': 'linterp', 'y': ffp_interp, 'x': psi_sample},
                         pp_prof={'type': 'linterp', 'y': pp_interp, 'x': psi_sample},
                         foffset=sim_vars['R'][i]*sim_vars['B0'][i])
-        
+        # mygs.set_profiles(ffp_prof=sim_vars['ffp_prof'][i],
+        #             pp_prof=sim_vars['pp_prof'][i],
+        #             foffset=sim_vars['R'][i]*sim_vars['B0'][i])
+
         mygs.set_psi_dt(psi0,dt)
 
         if calc_vloop:
@@ -478,6 +491,10 @@ def run_eqs(mygs, sim_vars, times, machine_dict, e_coil_dict, f_coil_dict, g_eqd
     consumed_flux = 0.0
     if calc_vloop:
         consumed_flux = np.trapz(times, sim_vars['v_loop'])
+
+    print("CF TokaMaker")
+    print(consumed_flux)
+
     return sim_vars, np.abs(consumed_flux)
 
 def run_sims(sim_vars, times, step):
@@ -492,8 +509,10 @@ def run_sims(sim_vars, times, step):
         sim_vars = transport_update(sim_vars, i, times, data_tree)
 
     for i, t in enumerate(times):
-        sim_vars['v_loop'][i] = data_tree.profiles.v_loop.sel(time=t, method='nearest').to_numpy()[-1]
+        sim_vars['v_loop'][i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
     consumed_flux = np.trapz(times, sim_vars['v_loop'])
+    print("CF Torax")
+    print(consumed_flux)
 
     return sim_vars, np.abs(consumed_flux)
 

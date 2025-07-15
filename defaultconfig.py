@@ -91,14 +91,14 @@ default_tconfig = {
         },
     },
     'pedestal': {
-        'model_name': 'set_T_ped_n_ped',
-        # use internal boundary condition model (for H-mode and L-mode)
-        'set_pedestal': True,
-        'T_i_ped': {0: 0.5, 100: 0.5, 105: 3.0},
-        'T_e_ped': {0: 0.5, 100: 0.5, 105: 3.0},
-        'n_e_ped_is_fGW': True,
-        'n_e_ped': 0.85, # pedestal top n_e in units of fGW
-        'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
+        # 'model_name': 'set_T_ped_n_ped',
+        # # use internal boundary condition model (for H-mode and L-mode)
+        # 'set_pedestal': True,
+        # 'T_i_ped': {0: 0.5, 100: 0.5, 105: 3.0},
+        # 'T_e_ped': {0: 0.5, 100: 0.5, 105: 3.0},
+        # 'n_e_ped_is_fGW': True,
+        # 'n_e_ped': 0.85, # pedestal top n_e in units of fGW
+        # 'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
     },
     'transport': {
         'model_name': 'qlknn',  # Using QLKNN_7_11 default
