@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torax
+import copy
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -36,8 +37,8 @@ class CGTS:
 
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
-        self._state['eta'] = {}
-        self._state['psi'] = {}
+        self._state['eta_prof'] = {}
+        self._state['psi_prof'] = {}
         self._state['T_e'] = {}
         self._state['T_i'] = {}
         self._state['n_e'] = {}
@@ -84,8 +85,8 @@ class CGTS:
             self._state['ffp_prof'][i] = ffp_prof
             self._state['pp_prof'][i] = pp_prof
 
-            self._state['eta'][i]= {}
-            self._state['psi'][i] = {}
+            self._state['eta_prof'][i]= {}
+            self._state['psi_prof'][i] = {}
             # self._state['f_pol'][i] = g_eqdsk['fpol']
 
         if p_eqdsk is not None:
@@ -99,7 +100,7 @@ class CGTS:
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
-        self._gs.setup(order = 2, F0 = 5.3*6.2)
+        self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
         self._gs.set_coil_vsc({'VS': 1.0})
 
@@ -126,7 +127,7 @@ class CGTS:
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
-        self._gs.maxits = 800
+        self._gs.settings.maxits = 500
         self._gs.update_settings()
 
     def _get_boundary(self, i, npts=20):
@@ -144,7 +145,7 @@ class CGTS:
         za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
         return np.vstack([ra, za]).transpose()
 
-    def _run_gs(self, step, calc_vloop=True, graph=False):
+    def _run_gs(self, step, graph=False):
         dt = self._times[1] - self._times[0]
         v_loop = np.zeros(len(self._times))
 
@@ -161,7 +162,7 @@ class CGTS:
             pp_prof = self._state['pp_prof'][i]
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
-            if calc_vloop:
+            if step > 0:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             err_flag = self._gs.init_psi(self._state['R'][0],
@@ -194,7 +195,7 @@ class CGTS:
 
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
             self._gs_update(i)
-            if calc_vloop:
+            if step > 0:
                 v_loop[i] = self._gs.calc_loopvoltage()
 
             lcfs_psi_target = self._gs.psi_bounds[0]
@@ -208,10 +209,10 @@ class CGTS:
 
         psi, _, _, _, _ = self._gs.get_profiles(npsi=100)
         rho_vals = np.linspace(0.0, 1.0, len(psi))
-        self._state['psi'][i] = {rho: -psi[j] for j, rho in enumerate(rho_vals)}
+        self._state['psi_prof'][i] = {rho: -psi[j] for j, rho in enumerate(rho_vals)}
 
     def _get_torax_config(self, step):
-        myconfig = BASE_CONFIG.copy()
+        myconfig = copy.deepcopy(BASE_CONFIG)
 
         myconfig['numerics'] = {
             't_initial': self._times[0],
@@ -238,8 +239,8 @@ class CGTS:
         #     'Ip': {
         #         t: self._state['Ip'][i] for i, t in enumerate(self._times)
         #     },
-        #     'psi': {
-        #         t: self._state['psi'][i] for i, t in enumerate(self._times)
+        #     'psi_prof': {
+        #         t: self._state['psi_prof'][i] for i, t in enumerate(self._times)
         #     },
         # }
 
@@ -259,7 +260,7 @@ class CGTS:
             v_loop[i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
         
         if graph:
-            for var in ['ffp_prof', 'pp_prof', 'eta']:
+            for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
                 fig, ax = plt.subplots(1, len(self._times))
                 fig.suptitle(var)
                 for i, _ in enumerate(self._times):
@@ -284,33 +285,40 @@ class CGTS:
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
 
         eta = 1.0 / data_tree.profiles.sigma_parallel.sel(time=t, method='nearest')
-        self._state['eta'][i] = {
+        self._state['eta_prof'][i] = {
             'x': eta.coords['rho_norm'].values,
             'y': eta.to_numpy(),
             'type': 'linterp',
         }
 
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
-        pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
+        # pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
         self._state['ffp_prof'][i] = {
             'x': ffprime.coords['rho_face_norm'].values,
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
-        self._state['pp_prof'][i] = {
-            'x': pprime.coords['rho_face_norm'].values,
-            'y': pprime.to_numpy(),
-            'type': 'linterp',
-        }
+        # self._state['pp_prof'][i] = {
+        #     'x': pprime.coords['rho_face_norm'].values,
+        #     'y': pprime.to_numpy(),
+        #     'type': 'linterp',
+        # }
+
+        # Normalize
+        self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
+        self._state['ffp_prof'][i]['y'][-1] = 0.0
+        # self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
+        # self._state['pp_prof'][i]['y'][-1] = 0.0
 
     def fly(self, convergence_threshold=1.0E-6):
         err = convergence_threshold + 1.0
         step = 0
 
         while err > convergence_threshold:
-            cflux_gs = self._run_gs(step, calc_vloop=False, graph=True)
+            cflux_gs = self._run_gs(step, graph=True)
             cflux_transport = self._run_transport(step, graph=True)
 
             err = (cflux_gs - cflux_transport) ** 2
+            print("Err = {}".format(err))
             step += 1
