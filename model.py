@@ -2,13 +2,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torax
 import copy
+import json
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
 from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 
-from baseconfig import BASE_CONFIG
+from baseconfig import BASE_CONFIG, set_LH_transition_time
 
 LCFS_WEIGHT = 100.0
 
@@ -42,7 +43,7 @@ class CGTS:
         self._state['T_e'] = {}
         self._state['T_i'] = {}
         self._state['n_e'] = {}
-        # self._state['n_i'] = {}
+        self._state['n_i'] = {}
         # self._state['f_pol'] = {}
         # self._state['pressure_thermal_total'] = {}
 
@@ -82,8 +83,8 @@ class CGTS:
             # Default Profiles
             # sim_vars['ffp_prof'][i] = {psi_sample[i]: ffp_prof[i] for i in range(len(psi_sample))}
             # sim_vars['pp_prof'][i] = {psi_sample[i]: pp_prof[i] for i in range(len(psi_sample))}
-            self._state['ffp_prof'][i] = ffp_prof
-            self._state['pp_prof'][i] = pp_prof
+            self._state['ffp_prof'][i] = ffp_prof.copy()
+            self._state['pp_prof'][i] = pp_prof.copy()
 
             self._state['eta_prof'][i]= {}
             self._state['psi_prof'][i] = {}
@@ -160,16 +161,17 @@ class CGTS:
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
+
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
             if step > 0:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
-            err_flag = self._gs.init_psi(self._state['R'][0],
-                                        self._state['Z'][0],
-                                        self._state['a'][0],
-                                        self._state['kappa'][0], 
-                                        self._state['delta'][0])
+            err_flag = self._gs.init_psi(self._state['R'][i],
+                                        self._state['Z'][i],
+                                        self._state['a'][i],
+                                        self._state['kappa'][i], 
+                                        self._state['delta'][i])
             if err_flag:
                 print("Error initializing psi.")
 
@@ -200,6 +202,7 @@ class CGTS:
 
             lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
+
         consumed_flux = np.trapz(self._times, v_loop)
         return consumed_flux
         
@@ -209,7 +212,7 @@ class CGTS:
 
         psi, _, _, _, _ = self._gs.get_profiles(npsi=100)
         rho_vals = np.linspace(0.0, 1.0, len(psi))
-        self._state['psi_prof'][i] = {rho: -psi[j] for j, rho in enumerate(rho_vals)}
+        self._state['psi_prof'][i] = {'x': rho_vals, 'y': -psi}
 
     def _get_torax_config(self, step):
         myconfig = copy.deepcopy(BASE_CONFIG)
@@ -217,7 +220,8 @@ class CGTS:
         myconfig['numerics'] = {
             't_initial': self._times[0],
             't_final': self._times[-1],  # length of simulation time in seconds
-            'fixed_dt': (self._times[1] - self._times[0]) / 10.0, # fixed timestep
+            # 'fixed_dt': (self._times[1] - self._times[0]) / 10.0, # fixed timestep
+            'fixed_dt': 1, # fixed timestep
             'evolve_ion_heat': True, # solve ion heat equation
             'evolve_electron_heat': True, # solve electron heat equation
             'evolve_current': True, # solve current equation
@@ -227,8 +231,7 @@ class CGTS:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            # 'geometry_file': self._, TODO: fill-in
-            'last_surface_factor': 0.95,
+            'last_surface_factor': 0.95,  # TODO: tweak
             'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
@@ -243,7 +246,7 @@ class CGTS:
         #         t: self._state['psi_prof'][i] for i, t in enumerate(self._times)
         #     },
         # }
-
+        # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
 
@@ -292,32 +295,75 @@ class CGTS:
         }
 
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
-        # pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
+        pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
         self._state['ffp_prof'][i] = {
             'x': ffprime.coords['rho_face_norm'].values,
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
-        # self._state['pp_prof'][i] = {
-        #     'x': pprime.coords['rho_face_norm'].values,
-        #     'y': pprime.to_numpy(),
-        #     'type': 'linterp',
-        # }
+        self._state['pp_prof'][i] = {
+            'x': pprime.coords['rho_face_norm'].values,
+            'y': pprime.to_numpy(),
+            'type': 'linterp',
+        }
 
-        # Normalize
+        # Normalize profiles
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
         self._state['ffp_prof'][i]['y'][-1] = 0.0
-        # self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
-        # self._state['pp_prof'][i]['y'][-1] = 0.0
+        self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
+        self._state['pp_prof'][i]['y'][-1] = 0.0
 
-    def fly(self, convergence_threshold=1.0E-6):
+        t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
+        t_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
+        n_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
+        n_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
+        
+        self._state['T_i'][i] = {
+            'x': t_i.coords['rho_norm'].values,
+            'y': t_i.to_numpy(),
+        }
+        self._state['T_e'][i] = {
+            'x': t_e.coords['rho_norm'].values,
+            'y': t_e.to_numpy(),
+        }
+        self._state['n_i'][i] = {
+            'x': n_i.coords['rho_norm'].values,
+            'y': n_i.to_numpy(),
+        }
+        self._state['n_e'][i] = {
+            'x': n_e.coords['rho_norm'].values,
+            'y': n_e.to_numpy(),
+        }
+
+        psi = data_tree.profiles.psi.sel(time=t, method='nearest')
+        self._state['psi_prof'][i] = {
+            'x': psi.coords['rho_norm'].values,
+            'y': psi.to_numpy(),
+        }
+
+    def save_state(self, fname):
+        class MyEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return json.JSONEncoder.default(self, obj)
+
+        with open(fname, 'w') as f:
+            json.dump(self._state, f, cls=MyEncoder)
+        
+    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False):
         err = convergence_threshold + 1.0
         step = 0
 
         while err > convergence_threshold:
-            cflux_gs = self._run_gs(step, graph=True)
-            cflux_transport = self._run_transport(step, graph=True)
+            cflux_gs = self._run_gs(step, graph=graph)
+            if save_states:
+                self.save_state('tmp/gs_state{}.json'.format(step))
+
+            cflux_transport = self._run_transport(step, graph=graph)
+            if save_states:
+                self.save_state('tmp/ts_state{}.json'.format(step))
 
             err = (cflux_gs - cflux_transport) ** 2
             print("Err = {}".format(err))

@@ -5,6 +5,7 @@ With Newton-Raphson solver and adaptive timestep (backtracking)
 """
 
 import numpy as np
+import copy
 
 _NBI_W_TO_MA = 1/16e6 # rough estimate of NBI heating power to current drive
 W_to_Ne_ratio = 0
@@ -152,3 +153,17 @@ BASE_CONFIG = {
         'calculator_type': 'fixed',
     },
 }
+
+#@title set_LH_transition_time_function
+def set_LH_transition_time(config, LH_transition_time: float):
+  """Modifies the base config by changing the LH transition time which sets the Ip ramp rate and heating switch-on."""
+
+  config = copy.deepcopy(config)
+#   _validate_input(LH_transition_time, (20.0, 130.0))
+  config['profile_conditions']['Ip'] = {0: 3e6, LH_transition_time: 12.5e6}
+  config['sources']['ecrh']['P_total'] = {0: 0, LH_transition_time-1: 0, LH_transition_time: 20.0e6}
+  config['sources']['generic_heat']['P_total'] = {0: 0, LH_transition_time-1: 0, LH_transition_time: 33.0e6}
+  config['sources']['generic_current']['I_generic'] = {0: 0, LH_transition_time-1: 0, LH_transition_time: 33.0e6 * _NBI_W_TO_MA}
+  config['pedestal']['T_i_ped'] = {0: 0.5, LH_transition_time: 0.5, LH_transition_time+5: 3.0}
+  config['pedestal']['T_e_ped'] = {0: 0.5, LH_transition_time: 0.5, LH_transition_time+5: 3.0}
+  return config
