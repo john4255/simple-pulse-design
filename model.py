@@ -49,22 +49,24 @@ class CGTS:
 
         # Calculate geometry
         g = read_eqdsk(g_eqdsk)
-        zmax = np.max(g['rzout'][:,1])
-        zmin = np.min(g['rzout'][:,1])
-        rmax = np.max(g['rzout'][:,0])
-        rmin = np.min(g['rzout'][:,0])
+
+        self._boundary = g['rzout'] * 2.0 * np.pi
+        zmax = np.max(self._boundary[:,1])
+        zmin = np.min(self._boundary[:,1])
+        rmax = np.max(self._boundary[:,0])
+        rmin = np.min(self._boundary[:,0])
         minor_radius = (rmax - rmin) / 2.0
         rgeo = (rmax + rmin) / 2.0
-        highest_pt_idx = np.argmax(g['rzout'][:,1])
-        lowest_pt_idx = np.argmin(g['rzout'][:,1])
-        rupper = g['rzout'][highest_pt_idx][0]
-        rlower = g['rzout'][lowest_pt_idx][0]
+        highest_pt_idx = np.argmax(self._boundary[:,1])
+        lowest_pt_idx = np.argmin(self._boundary[:,1])
+        rupper = self._boundary[highest_pt_idx][0]
+        rlower = self._boundary[lowest_pt_idx][0]
         delta_upper = (rgeo - rupper) / minor_radius
         delta_lower = (rgeo - rlower) / minor_radius
 
         # Calculate profiles
-        ffp_prof = create_power_flux_fun(40,1.5,2.0)
-        pp_prof = create_power_flux_fun(40,4.0,1.0)
+        # ffp_prof = create_power_flux_fun(40,1.5,2.0)
+        # pp_prof = create_power_flux_fun(40,4.0,1.0)
 
         for i, _ in enumerate(times):
             # Default Scalars
@@ -81,10 +83,20 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
 
             # Default Profiles
-            # sim_vars['ffp_prof'][i] = {psi_sample[i]: ffp_prof[i] for i in range(len(psi_sample))}
-            # sim_vars['pp_prof'][i] = {psi_sample[i]: pp_prof[i] for i in range(len(psi_sample))}
-            self._state['ffp_prof'][i] = ffp_prof.copy()
-            self._state['pp_prof'][i] = pp_prof.copy()
+            psi_sample = np.linspace(0.0, 1.0, 100)
+            psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
+            ffp_prof = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
+            pp_prof = np.interp(psi_sample, psi_eqdsk, g['pprime'])
+            self._state['ffp_prof'][i] = {'x': psi_sample, 'y': ffp_prof, 'type': 'linterp'}
+            self._state['pp_prof'][i] = {'x': psi_sample, 'y': pp_prof, 'type': 'linterp'}
+            # self._state['ffp_prof'][i] = ffp_prof
+            # self._state['pp_prof'][i] = pp_prof
+
+            # Normalize profiles
+            self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
+            self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
+            self._state['ffp_prof'][i]['y'] -= np.min(self._state['ffp_prof'][i]['y'])
+            self._state['pp_prof'][i]['y'] -= np.min(self._state['pp_prof'][i]['y'])
 
             self._state['eta_prof'][i]= {}
             self._state['psi_prof'][i] = {}
@@ -157,14 +169,14 @@ class CGTS:
             Ip_target = self._state['Ip'][i]
             P0_target = self._state['pax'][i]
             V0_target = self._state['V0'][i]
-            self._gs.set_targets(Ip=Ip_target, pax=P0_target, V0=V0_target)
+            self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
 
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
-            if step > 0:
+            if step:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             err_flag = self._gs.init_psi(self._state['R'][i],
@@ -172,6 +184,7 @@ class CGTS:
                                         self._state['a'][i],
                                         self._state['kappa'][i], 
                                         self._state['delta'][i])
+
             if err_flag:
                 print("Error initializing psi.")
 
@@ -310,9 +323,9 @@ class CGTS:
 
         # Normalize profiles
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
-        self._state['ffp_prof'][i]['y'][-1] = 0.0
+        # self._state['ffp_prof'][i]['y'][-1] = 0.0
         self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
-        self._state['pp_prof'][i]['y'][-1] = 0.0
+        # self._state['pp_prof'][i]['y'][-1] = 0.0
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
@@ -356,6 +369,29 @@ class CGTS:
         err = convergence_threshold + 1.0
         step = 0
 
+        if graph:
+            for var in ['ffp_prof', 'pp_prof']:
+                fig, ax = plt.subplots(1, len(self._times))
+                fig.suptitle(var)
+                for i, _ in enumerate(self._times):
+                    ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
+                plt.show()
+            print(self._state['R'][0])
+            print(self._state['Z'][0])
+            print(self._state['a'][0])
+            print(self._state['kappa'][0])
+            print(self._state['delta'][0])
+            print(self._state['B0'][i])
+            print(self._state['V0'][i])
+            print(self._state['Ip'][i])
+            print(self._state['pax'][i])
+
+            fig, ax = plt.subplots(1,1)
+            self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
+            self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+            ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
+            plt.show()
+
         while err > convergence_threshold:
             cflux_gs = self._run_gs(step, graph=graph)
             if save_states:
@@ -366,5 +402,6 @@ class CGTS:
                 self.save_state('tmp/ts_state{}.json'.format(step))
 
             err = (cflux_gs - cflux_transport) ** 2
-            print("Err = {}".format(err))
+            with open('convergence_history.txt', 'a') as f:
+                print("Err = {}".format(err), file=f)
             step += 1
