@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.interpolate import make_smoothing_spline
 import torax
 import copy
 import json
@@ -70,8 +71,8 @@ class CGTS:
 
         for i, _ in enumerate(times):
             # Default Scalars
-            self._state['R'][i] = g['rcentr']
-            self._state['Z'][i] = g['zmid']
+            self._state['R'][i] = 2.0 * np.pi * g['rcentr']
+            self._state['Z'][i] = 2.0 * np.pi * g['zmid']
             self._state['a'][i] = minor_radius
             self._state['kappa'][i] = (zmax - zmin) / (2.0 * minor_radius)
             self._state['delta'][i] = (delta_upper + delta_lower) / 2.0
@@ -169,7 +170,7 @@ class CGTS:
             Ip_target = self._state['Ip'][i]
             P0_target = self._state['pax'][i]
             V0_target = self._state['V0'][i]
-            self._gs.set_targets(Ip=Ip_target, pax=P0_target)
+            self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
@@ -272,7 +273,7 @@ class CGTS:
         
         v_loop = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            self._transport_update(i, data_tree)
+            self._transport_update(i, data_tree, step)
             v_loop[i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
         
         if graph:
@@ -286,7 +287,7 @@ class CGTS:
         consumed_flux = np.trapz(self._times, v_loop)
         return consumed_flux
 
-    def _transport_update(self, i, data_tree):
+    def _transport_update(self, i, data_tree, smooth=True):
         t = self._times[i]
 
         self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
@@ -307,6 +308,11 @@ class CGTS:
             'type': 'linterp',
         }
 
+        def smooth(x, y):
+            spline = make_smoothing_spline(x, y, lam=0.01)
+            smoothed = spline(x)
+            return smoothed
+
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
@@ -315,6 +321,7 @@ class CGTS:
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
+
         self._state['pp_prof'][i] = {
             'x': pprime.coords['rho_face_norm'].values,
             'y': pprime.to_numpy(),
@@ -323,9 +330,12 @@ class CGTS:
 
         # Normalize profiles
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
-        # self._state['ffp_prof'][i]['y'][-1] = 0.0
         self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
-        # self._state['pp_prof'][i]['y'][-1] = 0.0
+
+        # Smooth Profiles
+        if smooth:
+            self._state['ffp_prof']['y'] = smooth(self._state['ffp_prof']['x'], self._state['ffp_prof']['y'])
+            self._state['pp_prof']['y'] = smooth(self._state['pp_prof']['x'], self._state['pp_prof']['y'])
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
@@ -385,12 +395,15 @@ class CGTS:
             print(self._state['V0'][i])
             print(self._state['Ip'][i])
             print(self._state['pax'][i])
+            # print(np.min(self._boundary[:, 0]))
 
-            fig, ax = plt.subplots(1,1)
-            self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-            self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-            ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
-            plt.show()
+            # fig, ax = plt.subplots(1,1)
+            # self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
+            # self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+            # ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
+            # ax.scatter(self._state['R'], self._state['Z'], color='r')
+            # plt.show()
+
 
         while err > convergence_threshold:
             cflux_gs = self._run_gs(step, graph=graph)
