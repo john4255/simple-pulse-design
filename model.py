@@ -94,10 +94,10 @@ class CGTS:
             # self._state['pp_prof'][i] = pp_prof
 
             # Normalize profiles
+            self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
+            self._state['pp_prof'][i]['y'] -= self._state['pp_prof'][i]['y'][-1]
             self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
             self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
-            self._state['ffp_prof'][i]['y'] -= np.min(self._state['ffp_prof'][i]['y'])
-            self._state['pp_prof'][i]['y'] -= np.min(self._state['pp_prof'][i]['y'])
 
             self._state['eta_prof'][i]= {}
             self._state['psi_prof'][i] = {}
@@ -141,7 +141,7 @@ class CGTS:
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
-        self._gs.settings.maxits = 500
+        self._gs.settings.maxits = 800
         self._gs.update_settings()
 
     def _get_boundary(self, i, npts=20):
@@ -287,7 +287,7 @@ class CGTS:
         consumed_flux = np.trapz(self._times, v_loop)
         return consumed_flux
 
-    def _transport_update(self, i, data_tree, smooth=True):
+    def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
 
         self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
@@ -309,7 +309,7 @@ class CGTS:
         }
 
         def smooth(x, y):
-            spline = make_smoothing_spline(x, y, lam=0.01)
+            spline = make_smoothing_spline(x, y, lam=0.1)
             smoothed = spline(x)
             return smoothed
 
@@ -329,13 +329,15 @@ class CGTS:
         }
 
         # Normalize profiles
+        self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
+        self._state['pp_prof'][i]['y'] -= self._state['pp_prof'][i]['y'][-1]
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
-        self._state['pp_prof'][i]['y'] /= np.max(np.abs(self._state['pp_prof'][i]['y']))
+        self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
         # Smooth Profiles
         if smooth:
-            self._state['ffp_prof']['y'] = smooth(self._state['ffp_prof']['x'], self._state['ffp_prof']['y'])
-            self._state['pp_prof']['y'] = smooth(self._state['pp_prof']['x'], self._state['pp_prof']['y'])
+            self._state['ffp_prof'][i]['y'] = smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
+            self._state['pp_prof'][i]['y'] = smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
