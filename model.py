@@ -4,6 +4,8 @@ from scipy.interpolate import make_smoothing_spline
 import torax
 import copy
 import json
+import os
+import shutil
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -13,6 +15,7 @@ from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 from baseconfig import BASE_CONFIG, set_LH_transition_time
 
 LCFS_WEIGHT = 100.0
+N_PSI = 100
 
 class CGTS:
     def __init__(self, g_eqdsk, times, p_eqdsk=None):
@@ -45,11 +48,19 @@ class CGTS:
         self._state['T_i'] = {}
         self._state['n_e'] = {}
         self._state['n_i'] = {}
+        self._state['Ptot'] = {}
         # self._state['f_pol'] = {}
         # self._state['pressure_thermal_total'] = {}
 
         # Calculate geometry
         g = read_eqdsk(g_eqdsk)
+
+        # ffprim = g['ffprim']
+        # psi_eqdsk = np.linspace(0.0,1.0,np.size(ffprim))
+        # psi_sample = np.linspace(0.0,1.0,50)
+        # psi_prof = np.copy(psi_sample)
+        # ffp_prof = np.transpose(np.vstack((psi_prof,np.interp(psi_sample,psi_eqdsk,ffprim)))).copy()
+        # print(ffp_prof)
 
         self._boundary = g['rzout'] * 2.0 * np.pi
         zmax = np.max(self._boundary[:,1])
@@ -84,7 +95,7 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
 
             # Default Profiles
-            psi_sample = np.linspace(0.0, 1.0, 100)
+            psi_sample = np.linspace(0.0, 1.0, N_PSI)
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
             ffp_prof = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
             pp_prof = np.interp(psi_sample, psi_eqdsk, g['pprime'])
@@ -110,7 +121,7 @@ class CGTS:
                 self._state['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
                 self._state['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
 
-    def initialize_gs(self):
+    def initialize_gs(self, weight_mult=1.0):
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
@@ -128,20 +139,20 @@ class CGTS:
             # Set zero target current and different small weights to help conditioning of fit
             if name.startswith('CS'):
                 if name.startswith('CS1'):
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2))
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2 * weight_mult))
                 else:
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2))
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
             elif name.startswith('PF'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
             elif name.startswith('VS'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
         # Disable VSC virtual coil
         regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
         
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
-        self._gs.settings.maxits = 800
+        self._gs.settings.maxits = 200
         self._gs.update_settings()
 
     def _get_boundary(self, i, npts=20):
@@ -161,7 +172,7 @@ class CGTS:
 
     def _run_gs(self, step, graph=False):
         dt = self._times[1] - self._times[0]
-        v_loop = np.zeros(len(self._times))
+        v_loop = 0.0
 
         for i, _ in enumerate(self._times):
             self._gs.set_isoflux(None)
@@ -169,8 +180,10 @@ class CGTS:
 
             Ip_target = self._state['Ip'][i]
             P0_target = self._state['pax'][i]
-            V0_target = self._state['V0'][i]
-            self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0, pax=P0_target)
+            # V0_target = self._state['V0'][i]
+            print("asdf")
+            print(P0_target)
+            self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
@@ -193,14 +206,15 @@ class CGTS:
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             if i == 0:
                 self._gs.set_isoflux(lcfs, isoflux_weights)
-            else:
-                vloop = v_loop[i]
-                lcfs_psi_target -= dt * vloop / 2 / np.pi
+            else: # TODO: fix
+                lcfs_psi_target -= dt * v_loop / (2.0 * np.pi)
                 self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
                 self._gs.set_psi_dt(psi0,dt)
 
             self._gs.update_settings()
             err_flag = self._gs.solve()
+
+            self._gs.print_info()
 
             if graph:
                 fig, ax = plt.subplots(1,1)
@@ -211,29 +225,30 @@ class CGTS:
 
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
             self._gs_update(i)
-            if step > 0:
-                v_loop[i] = self._gs.calc_loopvoltage()
+            if step:
+                v_loop = self._gs.calc_loopvoltage()
 
             lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
 
-        consumed_flux = np.trapz(self._times, v_loop)
+        consumed_flux = 0.0
+        # consumed_flux = np.trapz(self._times, v_loop)
         return consumed_flux
         
     def _gs_update(self, i):
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        psi, _, _, _, _ = self._gs.get_profiles(npsi=100)
-        rho_vals = np.linspace(0.0, 1.0, len(psi))
+        psi, _, _, _, _ = self._gs.get_profiles(npsi=N_PSI)
+        rho_vals = np.linspace(0.0, 1.0, N_PSI)
         self._state['psi_prof'][i] = {'x': rho_vals, 'y': -psi}
 
     def _get_torax_config(self, step):
         myconfig = copy.deepcopy(BASE_CONFIG)
 
         myconfig['numerics'] = {
-            't_initial': self._times[0],
-            't_final': self._times[-1],  # length of simulation time in seconds
+            't_initial': 0.0,
+            't_final': 150.0,  # length of simulation time in seconds
             # 'fixed_dt': (self._times[1] - self._times[0]) / 10.0, # fixed timestep
             'fixed_dt': 1, # fixed timestep
             'evolve_ion_heat': True, # solve ion heat equation
@@ -245,21 +260,13 @@ class CGTS:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.95,  # TODO: tweak
+            'last_surface_factor': 0.90,  # TODO: tweak
             'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
-
-        # myconfig['profile_conditions'] = {
-        #     'Ip': {
-        #         t: self._state['Ip'][i] for i, t in enumerate(self._times)
-        #     },
-        #     'psi_prof': {
-        #         t: self._state['psi_prof'][i] for i, t in enumerate(self._times)
-        #     },
-        # }
+        # myconfig['profile_conditions']['Ip'] = {t: self._state['Ip'][i] for i, t in enumerate(self._times)}
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -273,7 +280,9 @@ class CGTS:
         
         v_loop = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            self._transport_update(i, data_tree, step)
+            print(i)
+            print(t)
+            self._transport_update(i, data_tree)
             v_loop[i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
         
         if graph:
@@ -287,14 +296,13 @@ class CGTS:
         consumed_flux = np.trapz(self._times, v_loop)
         return consumed_flux
 
-    def _transport_update(self, i, data_tree, smooth=False):
+    def _transport_update(self, i, data_tree, smooth=True):
         t = self._times[i]
 
         self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
         self._state['a'][i] = np.abs(data_tree.scalars.a_minor.sel(time=t, method='nearest'))
-        self._state['kappa'][i] = data_tree.profiles.elongation.sel(time=t, method='nearest')[-1] # TODO: inspect
+        self._state['kappa'][i] = data_tree.profiles.elongation.sel(time=t, rho_norm=1.0, method='nearest')
 
-        # print("TORAX DELTA")
         self._state['deltaU'][i] = data_tree.profiles.delta_upper.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
         self._state['deltaL'][i] = data_tree.profiles.delta_lower.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
         self._state['delta'][i] = (self._state['deltaU'][i] + self._state['deltaL'][i]) / 2.0
@@ -308,11 +316,6 @@ class CGTS:
             'type': 'linterp',
         }
 
-        def smooth(x, y):
-            spline = make_smoothing_spline(x, y, lam=0.1)
-            smoothed = spline(x)
-            return smoothed
-
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
@@ -322,11 +325,20 @@ class CGTS:
             'type': 'linterp',
         }
 
+        psi_sample = np.linspace(0.0, 1.0, N_PSI)
+        ffp_sample = np.interp(psi_sample, self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
+        self._state['ffp_prof'][i]['x'] = psi_sample
+        self._state['ffp_prof'][i]['y'] = ffp_sample
+
         self._state['pp_prof'][i] = {
             'x': pprime.coords['rho_face_norm'].values,
             'y': pprime.to_numpy(),
             'type': 'linterp',
         }
+
+        pp_sample = np.interp(psi_sample, self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
+        self._state['pp_prof'][i]['x'] = psi_sample
+        self._state['pp_prof'][i]['y'] = pp_sample
 
         # Normalize profiles
         self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
@@ -335,14 +347,38 @@ class CGTS:
         self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
         # Smooth Profiles
+        def make_smooth(x, y):
+            spline = make_smoothing_spline(x, y, lam=0.01)
+            smoothed = spline(x)
+            return smoothed
+
         if smooth:
-            self._state['ffp_prof'][i]['y'] = smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
-            self._state['pp_prof'][i]['y'] = smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
+            self._state['ffp_prof'][i]['y'] = make_smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
+            self._state['pp_prof'][i]['y'] = make_smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
+
+        # self._state['pp_prof'][i]['y'][self._state['pp_prof'][i]['y'] < 0] = 0.0
+
+        self._state['pp_prof'][i]['y'] = 1.0 - self._state['pp_prof'][i]['x']
+
+        # Edge Ramp
+        # ramp = np.zeros(N_PSI)
+        # for j in range(90, N_PSI):
+        #     ramp[j] = (j - 90) / 10
+        #     # ramp[j] = 1.0
+        # edge_ramp = np.ones(N_PSI) - ramp
+        # self._state['ffp_prof'][i]['y'] = np.multiply(self._state['ffp_prof'][i]['y'], edge_ramp)
+        # self._state['pp_prof'][i]['y'] = np.multiply(self._state['pp_prof'][i]['y'], edge_ramp)
+
+        # psi_ramp = np.linspace(0.95, 1.0, 5)
+        # ffp_ramp = np.interp(psi_ramp, [0.95, 1.0], [self._state['ffp_prof'][i]['y'][95], 0.0])
+        # self._state['ffp_prof'][i]['y'][95:] = ffp_ramp
+        # pp_ramp = np.interp(psi_ramp, [0.95, 1.0], [self._state['pp_prof'][i]['y'][95], 0.0])
+        # self._state['pp_prof'][i]['y'][95:] = pp_ramp
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
-        t_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
-        n_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
-        n_e = data_tree.profiles.T_i.sel(time=t, method='nearest')
+        t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
+        n_i = data_tree.profiles.n_i.sel(time=t, method='nearest')
+        n_e = data_tree.profiles.n_e.sel(time=t, method='nearest')
         
         self._state['T_i'][i] = {
             'x': t_i.coords['rho_norm'].values,
@@ -359,6 +395,12 @@ class CGTS:
         self._state['n_e'][i] = {
             'x': n_e.coords['rho_norm'].values,
             'y': n_e.to_numpy(),
+        }
+
+        ptot = data_tree.profiles.pressure_thermal_total.sel(time=t, method='nearest')
+        self._state['Ptot'][i] = {
+            'x': ptot.coords['rho_norm'].values,
+            'y': ptot.to_numpy(),
         }
 
         psi = data_tree.profiles.psi.sel(time=t, method='nearest')
@@ -393,19 +435,25 @@ class CGTS:
             print(self._state['a'][0])
             print(self._state['kappa'][0])
             print(self._state['delta'][0])
-            print(self._state['B0'][i])
-            print(self._state['V0'][i])
-            print(self._state['Ip'][i])
-            print(self._state['pax'][i])
-            # print(np.min(self._boundary[:, 0]))
+            print(self._state['B0'][0])
+            print(self._state['V0'][0])
+            print(self._state['Ip'][0])
+            print(self._state['pax'][0])
 
-            # fig, ax = plt.subplots(1,1)
-            # self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-            # self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-            # ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
-            # ax.scatter(self._state['R'], self._state['Z'], color='r')
+            # isoflux_pts = self._boundary.copy()#[::2]
+            # print(isoflux_pts)
+            # fig, ax = plt.subplots(1,1, figsize=(20,16))
+            # self._gs.plot_machine(fig,ax)
+            # ax.plot(isoflux_pts[:,0], isoflux_pts[:,1], 'r.')
+            # # plt.plot(x_points[:,0], x_points[:,1], 'bx')
             # plt.show()
-
+        
+        print("Delete temporary storage? [y/n] ")
+        del_tmp = input()
+        if del_tmp != 'y':
+            quit()
+        shutil.rmtree('./tmp')
+        os.mkdir('./tmp')
 
         while err > convergence_threshold:
             cflux_gs = self._run_gs(step, graph=graph)
