@@ -228,8 +228,9 @@ class CGTS:
             lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
 
-        consumed_flux = np.trapz(self._times, v_loops)
-        # consumed_flux = 0.0
+        consumed_flux = 0.0
+        if step:
+            consumed_flux = np.trapz(self._times, v_loops)
         return consumed_flux
         
     def _gs_update(self, i):
@@ -263,7 +264,6 @@ class CGTS:
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
-        # myconfig['profile_conditions']['Ip'] = {t: self._state['Ip'][i] for i, t in enumerate(self._times)}
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -397,7 +397,7 @@ class CGTS:
         with open(fname, 'w') as f:
             json.dump(self._state, f, cls=MyEncoder)
         
-    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=25):
+    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=100):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -408,24 +408,7 @@ class CGTS:
                 for i, _ in enumerate(self._times):
                     ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
                 plt.show()
-            print(self._state['R'][0])
-            print(self._state['Z'][0])
-            print(self._state['a'][0])
-            print(self._state['kappa'][0])
-            print(self._state['delta'][0])
-            print(self._state['B0'][0])
-            print(self._state['V0'][0])
-            print(self._state['Ip'][0])
-            print(self._state['pax'][0])
-
-            # isoflux_pts = self._boundary.copy()#[::2]
-            # print(isoflux_pts)
-            # fig, ax = plt.subplots(1,1, figsize=(20,16))
-            # self._gs.plot_machine(fig,ax)
-            # ax.plot(isoflux_pts[:,0], isoflux_pts[:,1], 'r.')
-            # # plt.plot(x_points[:,0], x_points[:,1], 'bx')
-            # plt.show()
-        
+                        
         print('Delete temporary storage? [y/n] ', end='')
         del_tmp = input()
         if del_tmp != 'y':
@@ -444,7 +427,8 @@ class CGTS:
             if save_states:
                 self.save_state('tmp/ts_state{}.json'.format(step))
 
-            err = (cflux_gs - cflux_transport) ** 2
+            if step > 0:
+                err = (cflux_gs - cflux_transport) ** 2
             with open('convergence_history.txt', 'a') as f:
                 print("Err = {}".format(err), file=f)
             step += 1
