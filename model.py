@@ -10,7 +10,7 @@ import shutil
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
+from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
 from baseconfig import BASE_CONFIG, set_LH_transition_time
 
@@ -50,17 +50,9 @@ class CGTS:
         self._state['n_i'] = {}
         self._state['Ptot'] = {}
         # self._state['f_pol'] = {}
-        # self._state['pressure_thermal_total'] = {}
 
         # Calculate geometry
         g = read_eqdsk(g_eqdsk)
-
-        # ffprim = g['ffprim']
-        # psi_eqdsk = np.linspace(0.0,1.0,np.size(ffprim))
-        # psi_sample = np.linspace(0.0,1.0,50)
-        # psi_prof = np.copy(psi_sample)
-        # ffp_prof = np.transpose(np.vstack((psi_prof,np.interp(psi_sample,psi_eqdsk,ffprim)))).copy()
-        # print(ffp_prof)
 
         self._boundary = g['rzout'] * 2.0 * np.pi
         zmax = np.max(self._boundary[:,1])
@@ -75,10 +67,6 @@ class CGTS:
         rlower = self._boundary[lowest_pt_idx][0]
         delta_upper = (rgeo - rupper) / minor_radius
         delta_lower = (rgeo - rlower) / minor_radius
-
-        # Calculate profiles
-        # ffp_prof = create_power_flux_fun(40,1.5,2.0)
-        # pp_prof = create_power_flux_fun(40,4.0,1.0)
 
         for i, _ in enumerate(times):
             # Default Scalars
@@ -110,8 +98,14 @@ class CGTS:
             self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
             self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
-            self._state['eta_prof'][i]= {}
-            self._state['psi_prof'][i] = {}
+            self._state['eta_prof'][i]= {
+                'x': np.zeros(N_PSI),
+                'y': np.zeros(N_PSI),
+            }
+            self._state['psi_prof'][i] = {
+                'x': np.zeros(N_PSI),
+                'y': np.zeros(N_PSI),
+            }
             # self._state['f_pol'][i] = g_eqdsk['fpol']
 
         if p_eqdsk is not None:
@@ -152,7 +146,7 @@ class CGTS:
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
-        self._gs.settings.maxits = 200
+        self._gs.settings.maxits = 500
         self._gs.update_settings()
 
     def _get_boundary(self, i, npts=20):
@@ -173,10 +167,12 @@ class CGTS:
     def _run_gs(self, step, graph=False):
         dt = self._times[1] - self._times[0]
         v_loop = 0.0
+        v_loops = np.array([])
 
         for i, _ in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
+
 
             Ip_target = self._state['Ip'][i]
             P0_target = self._state['pax'][i]
@@ -227,12 +223,13 @@ class CGTS:
             self._gs_update(i)
             if step:
                 v_loop = self._gs.calc_loopvoltage()
+                v_loops = np.append(v_loops, v_loop)
 
             lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
 
-        consumed_flux = 0.0
-        # consumed_flux = np.trapz(self._times, v_loop)
+        consumed_flux = np.trapz(self._times, v_loops)
+        # consumed_flux = 0.0
         return consumed_flux
         
     def _gs_update(self, i):
@@ -280,8 +277,6 @@ class CGTS:
         
         v_loop = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            print(i)
-            print(t)
             self._transport_update(i, data_tree)
             v_loop[i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
         
@@ -356,24 +351,7 @@ class CGTS:
             self._state['ffp_prof'][i]['y'] = make_smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
             self._state['pp_prof'][i]['y'] = make_smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
 
-        # self._state['pp_prof'][i]['y'][self._state['pp_prof'][i]['y'] < 0] = 0.0
-
-        self._state['pp_prof'][i]['y'] = 1.0 - self._state['pp_prof'][i]['x']
-
-        # Edge Ramp
-        # ramp = np.zeros(N_PSI)
-        # for j in range(90, N_PSI):
-        #     ramp[j] = (j - 90) / 10
-        #     # ramp[j] = 1.0
-        # edge_ramp = np.ones(N_PSI) - ramp
-        # self._state['ffp_prof'][i]['y'] = np.multiply(self._state['ffp_prof'][i]['y'], edge_ramp)
-        # self._state['pp_prof'][i]['y'] = np.multiply(self._state['pp_prof'][i]['y'], edge_ramp)
-
-        # psi_ramp = np.linspace(0.95, 1.0, 5)
-        # ffp_ramp = np.interp(psi_ramp, [0.95, 1.0], [self._state['ffp_prof'][i]['y'][95], 0.0])
-        # self._state['ffp_prof'][i]['y'][95:] = ffp_ramp
-        # pp_ramp = np.interp(psi_ramp, [0.95, 1.0], [self._state['pp_prof'][i]['y'][95], 0.0])
-        # self._state['pp_prof'][i]['y'][95:] = pp_ramp
+        # self._state['pp_prof'][i]['y'] = 1.0 - self._state['pp_prof'][i]['x']
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
@@ -419,7 +397,7 @@ class CGTS:
         with open(fname, 'w') as f:
             json.dump(self._state, f, cls=MyEncoder)
         
-    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False):
+    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=25):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -448,14 +426,16 @@ class CGTS:
             # # plt.plot(x_points[:,0], x_points[:,1], 'bx')
             # plt.show()
         
-        print("Delete temporary storage? [y/n] ")
+        print('Delete temporary storage? [y/n] ', end='')
         del_tmp = input()
         if del_tmp != 'y':
             quit()
+        with open('convergence_history.txt', 'w'):
+            pass
         shutil.rmtree('./tmp')
         os.mkdir('./tmp')
 
-        while err > convergence_threshold:
+        while err > convergence_threshold and step < max_step:
             cflux_gs = self._run_gs(step, graph=graph)
             if save_states:
                 self.save_state('tmp/gs_state{}.json'.format(step))
