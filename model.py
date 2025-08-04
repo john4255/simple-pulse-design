@@ -18,11 +18,12 @@ LCFS_WEIGHT = 100.0
 N_PSI = 100
 
 class CGTS:
-    def __init__(self, g_eqdsk, times, p_eqdsk=None):
+    def __init__(self, times, g_eqdsk_arr, p_eqdsk=None):
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
         self._state = {}
         self._times = times
+        self._boundary = {}
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -54,24 +55,24 @@ class CGTS:
         self._state['Ptot'] = {}
         # self._state['f_pol'] = {}
 
-        # Calculate geometry
-        g = read_eqdsk(g_eqdsk)
-
-        self._boundary = g['rzout'] # TODO: make time-dependent
-        zmax = np.max(self._boundary[:,1])
-        zmin = np.min(self._boundary[:,1])
-        rmax = np.max(self._boundary[:,0])
-        rmin = np.min(self._boundary[:,0])
-        minor_radius = (rmax - rmin) / 2.0
-        rgeo = (rmax + rmin) / 2.0
-        highest_pt_idx = np.argmax(self._boundary[:,1])
-        lowest_pt_idx = np.argmin(self._boundary[:,1])
-        rupper = self._boundary[highest_pt_idx][0]
-        rlower = self._boundary[lowest_pt_idx][0]
-        delta_upper = (rgeo - rupper) / minor_radius
-        delta_lower = (rgeo - rlower) / minor_radius
-
         for i, _ in enumerate(times):
+            # Calculate geometry
+            g = read_eqdsk(g_eqdsk_arr[i])
+
+            self._boundary[i] = g['rzout']
+            zmax = np.max(self._boundary[i][:,1])
+            zmin = np.min(self._boundary[i][:,1])
+            rmax = np.max(self._boundary[i][:,0])
+            rmin = np.min(self._boundary[i][:,0])
+            minor_radius = (rmax - rmin) / 2.0
+            rgeo = (rmax + rmin) / 2.0
+            highest_pt_idx = np.argmax(self._boundary[i][:,1])
+            lowest_pt_idx = np.argmin(self._boundary[i][:,1])
+            rupper = self._boundary[i][highest_pt_idx][0]
+            rlower = self._boundary[i][lowest_pt_idx][0]
+            delta_upper = (rgeo - rupper) / minor_radius
+            delta_lower = (rgeo - rlower) / minor_radius
+
             # Default Scalars
             self._state['R'][i] = g['rcentr']
             self._state['Z'][i] = g['zmid']
@@ -322,13 +323,13 @@ class CGTS:
     def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
 
-        self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
-        self._state['a'][i] = np.abs(data_tree.scalars.a_minor.sel(time=t, method='nearest'))
-        self._state['kappa'][i] = data_tree.profiles.elongation.sel(time=t, rho_norm=1.0, method='nearest')
+        # self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
+        # self._state['a'][i] = np.abs(data_tree.scalars.a_minor.sel(time=t, method='nearest'))
+        # self._state['kappa'][i] = data_tree.profiles.elongation.sel(time=t, rho_norm=1.0, method='nearest')
 
-        self._state['deltaU'][i] = data_tree.profiles.delta_upper.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
-        self._state['deltaL'][i] = data_tree.profiles.delta_lower.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
-        self._state['delta'][i] = (self._state['deltaU'][i] + self._state['deltaL'][i]) / 2.0
+        # self._state['deltaU'][i] = data_tree.profiles.delta_upper.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
+        # self._state['deltaL'][i] = data_tree.profiles.delta_lower.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
+        # self._state['delta'][i] = (self._state['deltaU'][i] + self._state['deltaL'][i]) / 2.0
 
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
