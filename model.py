@@ -57,7 +57,7 @@ class CGTS:
         # Calculate geometry
         g = read_eqdsk(g_eqdsk)
 
-        self._boundary = g['rzout'] * 2.0 * np.pi
+        self._boundary = g['rzout'] # TODO: make time-dependent
         zmax = np.max(self._boundary[:,1])
         zmin = np.min(self._boundary[:,1])
         rmax = np.max(self._boundary[:,0])
@@ -73,8 +73,8 @@ class CGTS:
 
         for i, _ in enumerate(times):
             # Default Scalars
-            self._state['R'][i] = 2.0 * np.pi * g['rcentr']
-            self._state['Z'][i] = 2.0 * np.pi * g['zmid']
+            self._state['R'][i] = g['rcentr']
+            self._state['Z'][i] = g['zmid']
             self._state['a'][i] = minor_radius
             self._state['kappa'][i] = (zmax - zmin) / (2.0 * minor_radius)
             self._state['delta'][i] = (delta_upper + delta_lower) / 2.0
@@ -152,7 +152,7 @@ class CGTS:
         # self._gs.settings.nl_tol = 1.E-4
         self._gs.update_settings()
 
-    def _get_boundary(self, i, npts=20):
+    def _get_boundary(self, i, npts=20): # TODO: use create_isoflux
         thp = np.linspace(0, 2*np.pi, npts+1)
         thp = thp[:-1]
 
@@ -168,11 +168,13 @@ class CGTS:
         return np.vstack([ra, za]).transpose()
 
     def _run_gs(self, step, graph=False):
-        dt = self._times[1] - self._times[0]
+        dt = 0
         v_loop = 0.0
         v_loops = np.array([])
 
         for i, _ in enumerate(self._times):
+            if i > 0:
+                dt = self._times[i] - self._times[i-1]
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
@@ -190,16 +192,24 @@ class CGTS:
             if step:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
-            err_flag = self._gs.init_psi(self._state['R'][i],
-                                        self._state['Z'][i],
-                                        self._state['a'][i],
-                                        self._state['kappa'][i], 
-                                        self._state['delta'][i])
+            # lcfs = self._boundary[::10] # TODO: make time-dependent
+            isoflux_pts = np.array([
+                [ 8.20,  0.41],
+                [ 8.06,  1.46],
+                [ 7.51,  2.62],
+                [ 6.14,  3.78],
+                [ 4.51,  3.02],
+                [ 4.26,  1.33],
+                [ 4.28,  0.08],
+                [ 4.49, -1.34],
+                [ 7.28, -1.89],
+                [ 8.00, -0.68]
+            ])
+            x_point = np.array([[5.125, -3.4],])
+            # self._gs.set_isoflux(np.vstack((isoflux_pts,x_point)))
+            # self._gs.set_saddles(x_point)
 
-            if err_flag:
-                print("Error initializing psi.")
-
-            lcfs = self._get_boundary(i)
+            lcfs = np.vstack((isoflux_pts,x_point))
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             if i == 0:
                 self._gs.set_isoflux(lcfs, isoflux_weights)
@@ -208,17 +218,26 @@ class CGTS:
                 self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
                 self._gs.set_psi_dt(psi0,dt)
 
-            self._gs.update_settings()
-            err_flag = self._gs.solve()
-
-            self._gs.print_info()
+            err_flag = self._gs.init_psi(self._state['R'][i],
+                                        self._state['Z'][i],
+                                        self._state['a'][i],
+                                        self._state['kappa'][i], 
+                                        self._state['delta'][i])
+            
+            if err_flag:
+                print("Error initializing psi.")
 
             if graph:
                 fig, ax = plt.subplots(1,1)
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-                # ax.plot(g_eqdsk['rzout'][:, 0], g_eqdsk['rzout'][:, 1], color='r')
+                ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
                 plt.show()
+
+            self._gs.update_settings()
+            err_flag = self._gs.solve()
+
+            self._gs.print_info()
 
             if step:
                 v_loop = self._gs.calc_loopvoltage()
@@ -300,7 +319,7 @@ class CGTS:
         # consumed_flux = 0.0
         return consumed_flux
 
-    def _transport_update(self, i, data_tree, smooth=True):
+    def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
 
         self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
@@ -440,5 +459,7 @@ class CGTS:
             if step > 0:
                 err = ((cflux_gs - cflux_transport) / cflux_transport) ** 2
             with open('convergence_history.txt', 'a') as f:
-                print("Err = {}".format(err), file=f)
+                # print("Err = {}".format(err), file=f)
+                print("GS CF = {}".format(cflux_gs), file=f)
+                print("TS CF = {}".format(cflux_transport), file=f)
             step += 1
