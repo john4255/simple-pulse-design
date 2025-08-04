@@ -33,12 +33,15 @@ class CGTS:
         self._state['deltaL'] = np.zeros(len(times))    
         self._state['B0'] = np.zeros(len(times))
         self._state['V0'] = np.zeros(len(times))
-        # self._state['zbot'] = np.zeros(len(times))
-        # self._state['ztop'] = np.zeros(len(times))
-        # self._state['rbot'] = np.zeros(len(times))
-        # self._state['rtop'] = np.zeros(len(times))
+        # self._state['zmin'] = np.zeros(len(times))
+        # self._state['zmax'] = np.zeros(len(times))
+        # self._state['rmin'] = np.zeros(len(times))
+        # self._state['rmax'] = np.zeros(len(times))
         self._state['Ip'] = np.zeros(len(times))
         self._state['pax'] = np.zeros(len(times))
+        self._state['beta_pol'] = np.zeros(len(times))
+        self._state['vloop'] = np.zeros(len(times))
+        self._state['q95'] = np.zeros(len(times))
 
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
@@ -81,6 +84,7 @@ class CGTS:
             self._state['V0'][i] = g['zaxis']
             self._state['Ip'][i] = abs(g['ip'])
             self._state['pax'][i] = g['pres'][0]
+            self._state['q95'][i] = np.percentile(g['qpsi'], 95)
 
             # Default Profiles
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
@@ -89,8 +93,6 @@ class CGTS:
             pp_prof = np.interp(psi_sample, psi_eqdsk, g['pprime'])
             self._state['ffp_prof'][i] = {'x': psi_sample, 'y': ffp_prof, 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': psi_sample, 'y': pp_prof, 'type': 'linterp'}
-            # self._state['ffp_prof'][i] = ffp_prof
-            # self._state['pp_prof'][i] = pp_prof
 
             # Normalize profiles
             self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
@@ -99,11 +101,11 @@ class CGTS:
             self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
             self._state['eta_prof'][i]= {
-                'x': np.zeros(N_PSI),
+                'x': np.linspace(0.0, 1.0, N_PSI),
                 'y': np.zeros(N_PSI),
             }
             self._state['psi_prof'][i] = {
-                'x': np.zeros(N_PSI),
+                'x': np.linspace(0.0, 1.0, N_PSI),
                 'y': np.zeros(N_PSI),
             }
             # self._state['f_pol'][i] = g_eqdsk['fpol']
@@ -147,6 +149,7 @@ class CGTS:
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
         self._gs.settings.maxits = 500
+        # self._gs.settings.nl_tol = 1.E-4
         self._gs.update_settings()
 
     def _get_boundary(self, i, npts=20):
@@ -175,10 +178,8 @@ class CGTS:
 
 
             Ip_target = self._state['Ip'][i]
-            P0_target = self._state['pax'][i]
+            # P0_target = self._state['pax'][i]
             # V0_target = self._state['V0'][i]
-            print("asdf")
-            print(P0_target)
             self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
 
             ffp_prof = self._state['ffp_prof'][i]
@@ -219,27 +220,33 @@ class CGTS:
                 # ax.plot(g_eqdsk['rzout'][:, 0], g_eqdsk['rzout'][:, 1], color='r')
                 plt.show()
 
-            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
-            self._gs_update(i)
             if step:
                 v_loop = self._gs.calc_loopvoltage()
                 v_loops = np.append(v_loops, v_loop)
+
+            self._gs_update(i, calc_vloop = step)
+            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
 
         consumed_flux = 0.0
         if step:
-            consumed_flux = np.trapz(self._times, v_loops)
+            consumed_flux = np.trapz(v_loops, self._times)
         return consumed_flux
         
-    def _gs_update(self, i):
+    def _gs_update(self, i, calc_vloop=False):
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        psi, _, _, _, _ = self._gs.get_profiles(npsi=N_PSI)
-        rho_vals = np.linspace(0.0, 1.0, N_PSI)
-        self._state['psi_prof'][i] = {'x': rho_vals, 'y': -psi}
+        psi = self._gs.get_psi(False)
+        default_space = np.linspace(0.0, 1.0, len(psi))
+        psi_space = np.linspace(0.0, 1.0, N_PSI)
+        psi_sample = np.interp(psi_space, default_space, psi)
+        self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
+
+        if calc_vloop:
+            self._state['vloop'][i] = self._gs.calc_loopvoltage()
 
     def _get_torax_config(self, step):
         myconfig = copy.deepcopy(BASE_CONFIG)
@@ -275,10 +282,11 @@ class CGTS:
             print(hist.sim_error)
             raise ValueError(f'TORAX failed to run the simulation.')
         
-        v_loop = np.zeros(len(self._times))
+        v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
             self._transport_update(i, data_tree)
-            v_loop[i] = data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest')
+            v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
+            self._state['vloop'][i] = v_loops[i] # TODO: move
         
         if graph:
             for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
@@ -288,7 +296,8 @@ class CGTS:
                     ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
                 plt.show()
 
-        consumed_flux = np.trapz(self._times, v_loop)
+        consumed_flux = np.trapz(v_loops, self._times)
+        # consumed_flux = 0.0
         return consumed_flux
 
     def _transport_update(self, i, data_tree, smooth=True):
@@ -303,6 +312,8 @@ class CGTS:
         self._state['delta'][i] = (self._state['deltaU'][i] + self._state['deltaL'][i]) / 2.0
 
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
+        self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
         eta = 1.0 / data_tree.profiles.sigma_parallel.sel(time=t, method='nearest')
         self._state['eta_prof'][i] = {
@@ -397,7 +408,7 @@ class CGTS:
         with open(fname, 'w') as f:
             json.dump(self._state, f, cls=MyEncoder)
         
-    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=100):
+    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=50):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -409,8 +420,7 @@ class CGTS:
                     ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
                 plt.show()
                         
-        print('Delete temporary storage? [y/n] ', end='')
-        del_tmp = input()
+        del_tmp = input('Delete temporary storage? [y/n] ')
         if del_tmp != 'y':
             quit()
         with open('convergence_history.txt', 'w'):
@@ -428,7 +438,7 @@ class CGTS:
                 self.save_state('tmp/ts_state{}.json'.format(step))
 
             if step > 0:
-                err = (cflux_gs - cflux_transport) ** 2
+                err = ((cflux_gs - cflux_transport) / cflux_transport) ** 2
             with open('convergence_history.txt', 'a') as f:
                 print("Err = {}".format(err), file=f)
             step += 1
