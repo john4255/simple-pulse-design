@@ -1,32 +1,32 @@
 import json
 import matplotlib.pyplot as plt
+import numpy as np
 
-f1 = 'tmp/ts_state0.json'
-f2 = 'tmp/notebook.json'
+import sys
 
-sim_state = {}
-nb_state = {}
-with open(f1, 'r') as f:
-    sim_state = json.loads(f.read())
-with open(f2, 'r') as f:
-    nb_state = json.loads(f.read())
+sim_states = []
 
-var = 'ffp_prof'
+n_steps = int(sys.argv[1])
 
-print(sim_state['ffp_prof'].keys())
+for i in range(n_steps):
+    f = 'tmp/ts_state{}.json'.format(i)
+
+    with open(f, 'r') as f:
+        sim_states = np.append(sim_states, json.loads(f.read()))
+
+
+var = sys.argv[2]
 
 fig, ax = plt.subplots(1, 6, figsize=(12,6))
-for t_key in sim_state[var].keys():
-    i = int(t_key)
 
-    ax[i].set_title("i={}".format(i), weight='bold')
-    x1 = sim_state[var][t_key]['x']
-    x2 = nb_state[var][t_key]['x']
-    y1 = sim_state[var][t_key]['y']
-    y2 = nb_state[var][t_key]['y']
-    ax[i].plot(x1, y1, label="Sim")
-    ax[i].plot(x2, y2, label="NB")
-    ax[i].legend()
+for j, st in enumerate(sim_states):
+    keys = sorted(st[var].keys())
+    for i, key in enumerate(keys):
+        ax[i].set_title("i={}".format(i), weight='bold')
+        x = st[var][key]['x']
+        y = st[var][key]['y']
+        ax[i].plot(x, y, label=j)
+        ax[i].legend()
 
 plt.tight_layout()
 plt.show()
