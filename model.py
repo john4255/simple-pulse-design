@@ -153,21 +153,6 @@ class CGTS:
         # self._gs.settings.nl_tol = 1.E-4
         self._gs.update_settings()
 
-    def _get_boundary(self, i, npts=20): # TODO: use create_isoflux
-        thp = np.linspace(0, 2*np.pi, npts+1)
-        thp = thp[:-1]
-
-        r0 = self._state['R'][i]
-        z0 = self._state['Z'][i]
-        a0 = self._state['a'][i]
-        kappa = self._state['kappa'][i]
-        delta = self._state['delta'][i]
-        squar = 0.0 # sim_vars['squar'][i]
-
-        ra = r0 + a0*np.cos(thp + delta*np.sin(thp) - squar*np.sin(2*thp))
-        za = z0 + kappa*a0*np.sin(thp + squar*np.sin(2*thp))
-        return np.vstack([ra, za]).transpose()
-
     def _run_gs(self, step, graph=False):
         dt = 0
         v_loop = 0.0
@@ -193,24 +178,25 @@ class CGTS:
             if step:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
-            # lcfs = self._boundary[::10] # TODO: make time-dependent
-            isoflux_pts = np.array([
-                [ 8.20,  0.41],
-                [ 8.06,  1.46],
-                [ 7.51,  2.62],
-                [ 6.14,  3.78],
-                [ 4.51,  3.02],
-                [ 4.26,  1.33],
-                [ 4.28,  0.08],
-                [ 4.49, -1.34],
-                [ 7.28, -1.89],
-                [ 8.00, -0.68]
-            ])
-            x_point = np.array([[5.125, -3.4],])
-            # self._gs.set_isoflux(np.vstack((isoflux_pts,x_point)))
-            # self._gs.set_saddles(x_point)
+            # isoflux_pts = np.array([
+            #     [ 8.20,  0.41],
+            #     [ 8.06,  1.46],
+            #     [ 7.51,  2.62],
+            #     [ 6.14,  3.78],
+            #     [ 4.51,  3.02],
+            #     [ 4.26,  1.33],
+            #     [ 4.28,  0.08],
+            #     [ 4.49, -1.34],
+            #     [ 7.28, -1.89],
+            #     [ 8.00, -0.68]
+            # ])
+            # x_point = np.array([[5.125, -3.4],])
+            # # self._gs.set_isoflux(np.vstack((isoflux_pts,x_point)))
+            # # self._gs.set_saddles(x_point)
 
-            lcfs = np.vstack((isoflux_pts,x_point))
+            # lcfs = np.vstack((isoflux_pts,x_point))
+
+            lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             if i == 0:
                 self._gs.set_isoflux(lcfs, isoflux_weights)
@@ -275,7 +261,7 @@ class CGTS:
             't_initial': 0.0,
             't_final': 150.0,  # length of simulation time in seconds
             # 'fixed_dt': (self._times[1] - self._times[0]) / 10.0, # fixed timestep
-            'fixed_dt': 1, # fixed timestep
+            'fixed_dt': 1.0, # fixed timestep
             'evolve_ion_heat': True, # solve ion heat equation
             'evolve_electron_heat': True, # solve electron heat equation
             'evolve_current': True, # solve current equation
@@ -286,11 +272,16 @@ class CGTS:
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
             'last_surface_factor': 0.90,  # TODO: tweak
-            'Ip_from_parameters': True,
+            'Ip_from_parameters': False,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
+        # if step:
+        #     myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
+        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
+        #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
+        #     }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -305,7 +296,7 @@ class CGTS:
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
             self._transport_update(i, data_tree)
-            v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
+            v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') # / self._state['a'][i]
             self._state['vloop'][i] = v_loops[i] # TODO: move
         
         if graph:
@@ -428,7 +419,7 @@ class CGTS:
         with open(fname, 'w') as f:
             json.dump(self._state, f, cls=MyEncoder)
         
-    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=50):
+    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False, max_step=500):
         err = convergence_threshold + 1.0
         step = 0
 
