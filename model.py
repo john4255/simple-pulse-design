@@ -17,8 +17,19 @@ from baseconfig import BASE_CONFIG, set_LH_transition_time
 LCFS_WEIGHT = 100.0
 N_PSI = 100
 
+class MyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
 class CGTS:
     def __init__(self, times, g_eqdsk_arr, p_eqdsk=None):
+        """
+        Initialize the Coupled Grad-Shafranov/Transport Solver Object.
+        @param times
+        @param g_eqdsk_arr
+        """
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
         self._state = {}
@@ -59,7 +70,9 @@ class CGTS:
             # Calculate geometry
             g = read_eqdsk(g_eqdsk_arr[i])
 
-            self._boundary[i] = g['rzout']
+            self._boundary[i] = g['rzout'].copy()
+            print(i)
+            print(len(self._boundary[i]))
             zmax = np.max(self._boundary[i][:,1])
             zmin = np.min(self._boundary[i][:,1])
             rmax = np.max(self._boundary[i][:,0])
@@ -83,10 +96,11 @@ class CGTS:
             self._state['deltaL'][i] = delta_lower
             self._state['B0'][i] = g['bcentr']
             self._state['V0'][i] = g['zaxis']
-            self._state['Ip'][i] = abs(g['ip'])
             self._state['pax'][i] = g['pres'][0]
             self._state['q95'][i] = np.percentile(g['qpsi'], 95)
-
+            self._state['Ip'][i] = abs(g['ip'])
+            # if ip is not None:
+            #     self._state['Ip'][i] = ip[i]
             # Default Profiles
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
@@ -117,6 +131,8 @@ class CGTS:
                 self._state['T_i'][i] = p_eqdsk['ti(KeV)']
                 self._state['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
                 self._state['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
+        
+        self._results = {}
 
     def initialize_gs(self, weight_mult=1.0):
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
@@ -178,24 +194,6 @@ class CGTS:
             if step:
                 self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
-            # isoflux_pts = np.array([
-            #     [ 8.20,  0.41],
-            #     [ 8.06,  1.46],
-            #     [ 7.51,  2.62],
-            #     [ 6.14,  3.78],
-            #     [ 4.51,  3.02],
-            #     [ 4.26,  1.33],
-            #     [ 4.28,  0.08],
-            #     [ 4.49, -1.34],
-            #     [ 7.28, -1.89],
-            #     [ 8.00, -0.68]
-            # ])
-            # x_point = np.array([[5.125, -3.4],])
-            # # self._gs.set_isoflux(np.vstack((isoflux_pts,x_point)))
-            # # self._gs.set_saddles(x_point)
-
-            # lcfs = np.vstack((isoflux_pts,x_point))
-
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             if i == 0:
@@ -218,7 +216,7 @@ class CGTS:
                 fig, ax = plt.subplots(1,1)
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-                ax.plot(self._boundary[:, 0], self._boundary[:, 1], color='r')
+                ax.plot(self._boundary[i][:, 0], self._boundary[i][:, 1], color='r')
                 plt.show()
 
             self._gs.update_settings()
@@ -365,7 +363,7 @@ class CGTS:
 
         # Smooth Profiles
         def make_smooth(x, y):
-            spline = make_smoothing_spline(x, y, lam=0.01)
+            spline = make_smoothing_spline(x, y, lam=0.1)
             smoothed = spline(x)
             return smoothed
 
@@ -409,17 +407,21 @@ class CGTS:
             'y': psi.to_numpy(),
         }
 
-    def save_state(self, fname):
-        class MyEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                return json.JSONEncoder.default(self, obj)
+        # Update sim results
+        self._results['Ip'] = {
+            'x': list(data_tree.scalars.Ip.coords['time'].values),
+            'y': data_tree.scalars.Ip.to_numpy(),
+        }
 
+    def save_state(self, fname):
         with open(fname, 'w') as f:
             json.dump(self._state, f, cls=MyEncoder)
-        
-    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False, max_step=500):
+    
+    def save_res(self):
+        with open('tmp/res.json', 'w') as f:
+            json.dump(self._results, f, cls=MyEncoder)
+
+    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False, max_step=100):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -447,6 +449,7 @@ class CGTS:
             cflux_transport = self._run_transport(step, graph=graph)
             if save_states:
                 self.save_state('tmp/ts_state{}.json'.format(step))
+            self.save_res()
 
             if step > 0:
                 err = ((cflux_gs - cflux_transport) / cflux_transport) ** 2
