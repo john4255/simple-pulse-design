@@ -251,6 +251,17 @@ class CGTS:
 
         if calc_vloop:
             self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        
+        # Update Results
+        coils, coil_regs = self._gs.get_coil_currents()
+        print("HI!")
+        print(len(coils))
+        print(len(coil_regs))
+        print(coil_regs)
+        if i == 0:
+            self._results['COIL'] = {coil: {} for coil in coils}
+        for coil, current in coils.items():
+            self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
 
     def _get_torax_config(self, step):
         myconfig = copy.deepcopy(BASE_CONFIG)
@@ -285,6 +296,8 @@ class CGTS:
         return torax_config
 
     def _run_transport(self, step, graph=False):
+        consumed_flux = 0.0
+
         myconfig = self._get_torax_config(step)
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
         if hist.sim_error != torax.SimError.NO_ERROR:
@@ -293,9 +306,10 @@ class CGTS:
         
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            self._transport_update(i, data_tree)
+            self._transport_update(i, data_tree, consumed_flux)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') # / self._state['a'][i]
             self._state['vloop'][i] = v_loops[i] # TODO: move
+            consumed_flux = np.trapz(v_loops, self._times)
         
         if graph:
             for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
@@ -305,20 +319,11 @@ class CGTS:
                     ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
                 plt.show()
 
-        consumed_flux = np.trapz(v_loops, self._times)
         # consumed_flux = 0.0
         return consumed_flux
-
-    def _transport_update(self, i, data_tree, smooth=False):
+    
+    def _transport_update(self, i, data_tree, consumed_flux, smooth=False):
         t = self._times[i]
-
-        # self._state['R'][i] = np.abs(data_tree.scalars.R_major.sel(time=t, method='nearest'))
-        # self._state['a'][i] = np.abs(data_tree.scalars.a_minor.sel(time=t, method='nearest'))
-        # self._state['kappa'][i] = data_tree.profiles.elongation.sel(time=t, rho_norm=1.0, method='nearest')
-
-        # self._state['deltaU'][i] = data_tree.profiles.delta_upper.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
-        # self._state['deltaL'][i] = data_tree.profiles.delta_lower.sel(time=t, rho_face_norm=1.0, method='nearest').to_numpy()
-        # self._state['delta'][i] = (self._state['deltaU'][i] + self._state['deltaL'][i]) / 2.0
 
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
@@ -408,9 +413,24 @@ class CGTS:
         }
 
         # Update sim results
-        self._results['Ip'] = {
-            'x': list(data_tree.scalars.Ip.coords['time'].values),
-            'y': data_tree.scalars.Ip.to_numpy(),
+        self._results['Q'] = {
+            'x': list(data_tree.scalars.Q_fusion.coords['time'].values),
+            'y': data_tree.scalars.Q_fusion.to_numpy(),
+        }
+
+        self._results['P_alpha_total'] = {
+            'x': list(data_tree.scalars.P_alpha_total.coords['time'].values),
+            'y': data_tree.scalars.P_alpha_total.to_numpy(),
+        }
+
+        self._results['P_aux_total'] = {
+            'x': list(data_tree.scalars.P_aux_total.coords['time'].values),
+            'y': data_tree.scalars.P_aux_total.to_numpy(),
+        }
+
+        self._results['P_ohmic_e'] = {
+            'x': list(data_tree.scalars.P_ohmic_e.coords['time'].values),
+            'y': data_tree.scalars.P_ohmic_e.to_numpy(),
         }
 
     def save_state(self, fname):
