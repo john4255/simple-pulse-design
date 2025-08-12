@@ -35,6 +35,7 @@ class CGTS:
         self._state = {}
         self._times = times
         self._boundary = {}
+        self._results = {}
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -66,13 +67,14 @@ class CGTS:
         self._state['Ptot'] = {}
         # self._state['f_pol'] = {}
 
+        self._results['lcfs'] = {}
+
         for i, _ in enumerate(times):
             # Calculate geometry
             g = read_eqdsk(g_eqdsk_arr[i])
 
             self._boundary[i] = g['rzout'].copy()
-            print(i)
-            print(len(self._boundary[i]))
+            self._results['lcfs'][i] = g['rzout'].copy()
             zmax = np.max(self._boundary[i][:,1])
             zmin = np.min(self._boundary[i][:,1])
             rmax = np.max(self._boundary[i][:,0])
@@ -132,8 +134,6 @@ class CGTS:
                 self._state['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
                 self._state['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
         
-        self._results = {}
-
     def initialize_gs(self, weight_mult=1.0):
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
@@ -254,10 +254,6 @@ class CGTS:
         
         # Update Results
         coils, coil_regs = self._gs.get_coil_currents()
-        print("HI!")
-        print(len(coils))
-        print(len(coil_regs))
-        print(coil_regs)
         if i == 0:
             self._results['COIL'] = {coil: {} for coil in coils}
         for coil, current in coils.items():
@@ -418,6 +414,81 @@ class CGTS:
             'y': data_tree.scalars.Q_fusion.to_numpy(),
         }
 
+        self._results['Ip'] = {
+            'x': list(data_tree.scalars.Ip.coords['time'].values),
+            'y': data_tree.scalars.Ip.to_numpy(),
+        }
+
+        self._results['B0'] = {
+            'x': list(data_tree.scalars.B_0.coords['time'].values),
+            'y': data_tree.scalars.B_0.to_numpy(),
+        }
+
+        self._results['n_e_line_avg'] = {
+            'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
+            'y': data_tree.scalars.n_e_line_avg.to_numpy(),
+        }
+
+        self._results['n_i_line_avg'] = {
+            'x': list(data_tree.scalars.n_i_line_avg.coords['time'].values),
+            'y': data_tree.scalars.n_i_line_avg.to_numpy(),
+        }
+
+        n_e_core = data_tree.profiles.n_e.sel(rho_norm=0.0)
+        self._results['n_e_core'] = {
+            'x': list(n_e_core.coords['time'].values),
+            'y': n_e_core.to_numpy(),
+        }
+
+        n_i_core = data_tree.profiles.n_i.sel(rho_norm=0.0)
+        self._results['n_i_core'] = {
+            'x': list(n_i_core.coords['time'].values),
+            'y': n_i_core.to_numpy(),
+        }
+
+        T_e_core = data_tree.profiles.T_e.sel(rho_norm=0.0)
+        self._results['T_e_core'] = {
+            'x': list(T_e_core.coords['time'].values),
+            'y': T_e_core.to_numpy(),
+        }
+
+        T_i_core = data_tree.profiles.T_i.sel(rho_norm=0.0)
+        self._results['T_i_core'] = {
+            'x': list(T_i_core.coords['time'].values),
+            'y': T_i_core.to_numpy(),
+        }
+
+        self._results['beta_N'] = {
+            'x': list(data_tree.scalars.beta_N.coords['time'].values),
+            'y': data_tree.scalars.beta_N.to_numpy(),
+        }
+
+        self._results['q95'] = {
+            'x': list(data_tree.scalars.q95.coords['time'].values),
+            'y': data_tree.scalars.q95.to_numpy(),
+        }
+
+        self._results['H98'] = {
+            'x': list(data_tree.scalars.H98.coords['time'].values),
+            'y': data_tree.scalars.H98.to_numpy(),
+        }
+
+        self._results['v_loop_lcfs'] = {
+            'x': list(data_tree.scalars.v_loop_lcfs.coords['time'].values),
+            'y': data_tree.scalars.v_loop_lcfs.to_numpy(),
+        }
+
+        flux_lcfs = data_tree.profiles.F.sel(rho_norm = 1.0)
+        self._results['flux_lcfs'] = {
+            'x': list(flux_lcfs.coords['time'].values),
+            'y': flux_lcfs.to_numpy(),
+        }
+
+        self._results['li3'] = {
+            'x': list(data_tree.scalars.li3.coords['time'].values),
+            'y': data_tree.scalars.li3.to_numpy(),
+        }
+
         self._results['P_alpha_total'] = {
             'x': list(data_tree.scalars.P_alpha_total.coords['time'].values),
             'y': data_tree.scalars.P_alpha_total.to_numpy(),
@@ -431,6 +502,16 @@ class CGTS:
         self._results['P_ohmic_e'] = {
             'x': list(data_tree.scalars.P_ohmic_e.coords['time'].values),
             'y': data_tree.scalars.P_ohmic_e.to_numpy(),
+        }
+
+        self._results['P_radiation_e'] = {
+            'x': list(data_tree.scalars.P_radiation_e.coords['time'].values),
+            'y': -1.0 * data_tree.scalars.P_radiation_e.to_numpy(),
+        }
+
+        self._results['P_SOL_total'] = {
+            'x': list(data_tree.scalars.P_SOL_total.coords['time'].values),
+            'y': -1.0 * data_tree.scalars.P_SOL_total.to_numpy(),
         }
 
     def save_state(self, fname):
