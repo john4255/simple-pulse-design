@@ -24,7 +24,7 @@ class MyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 class CGTS:
-    def __init__(self, times, g_eqdsk_arr, p_eqdsk=None):
+    def __init__(self, times, g_eqdsk_arr, p_eqdsk=None, tconfig={}):
         """
         Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param times
@@ -36,6 +36,8 @@ class CGTS:
         self._times = times
         self._boundary = {}
         self._results = {}
+
+        self._config_overrides = tconfig
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -171,15 +173,12 @@ class CGTS:
 
     def _run_gs(self, step, graph=False):
         dt = 0
-        v_loop = 0.0
-        v_loops = np.array([])
 
         for i, _ in enumerate(self._times):
             if i > 0:
                 dt = self._times[i] - self._times[i-1]
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
-
 
             Ip_target = self._state['Ip'][i]
             # P0_target = self._state['pax'][i]
@@ -191,15 +190,12 @@ class CGTS:
 
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
-            if step:
-                self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
-
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             if i == 0:
-                self._gs.set_isoflux(lcfs, isoflux_weights)
+                self._gs.set_isoflux(lcfs, isoflux_weights) # TODO: set flux (highest possible)
             else: # TODO: fix
-                lcfs_psi_target -= dt * v_loop / (2.0 * np.pi)
+                lcfs_psi_target = self._state['psi_prof'][i]['y'][-1] / (2.0 * np.pi)
                 self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
                 self._gs.set_psi_dt(psi0,dt)
 
@@ -223,21 +219,10 @@ class CGTS:
             err_flag = self._gs.solve()
 
             self._gs.print_info()
-
-            if step:
-                v_loop = self._gs.calc_loopvoltage()
-                v_loops = np.append(v_loops, v_loop)
-
-            self._gs_update(i, calc_vloop = step)
+            self._gs_update(i)
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
-            lcfs_psi_target = self._gs.psi_bounds[0]
             psi0 = self._gs.get_psi(False)
-
-        consumed_flux = 0.0
-        if step:
-            consumed_flux = np.trapz(v_loops, self._times)
-        return consumed_flux
         
     def _gs_update(self, i, calc_vloop=False):
         eq_stats = self._gs.get_stats()
@@ -288,7 +273,7 @@ class CGTS:
         #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
         #     }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
-        torax_config = torax.ToraxConfig.from_dict(myconfig)
+        torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
 
     def _run_transport(self, step, graph=False):
@@ -324,13 +309,6 @@ class CGTS:
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
-
-        eta = 1.0 / data_tree.profiles.sigma_parallel.sel(time=t, method='nearest')
-        self._state['eta_prof'][i] = {
-            'x': eta.coords['rho_norm'].values,
-            'y': eta.to_numpy(),
-            'type': 'linterp',
-        }
 
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
@@ -561,7 +539,7 @@ class CGTS:
         os.mkdir('./tmp')
 
         while err > convergence_threshold and step < max_step:
-            cflux_gs = self._run_gs(step, graph=graph)
+            self._run_gs(step, graph=graph)
             if save_states:
                 self.save_state('tmp/gs_state{}.json'.format(step))
 
@@ -570,10 +548,6 @@ class CGTS:
                 self.save_state('tmp/ts_state{}.json'.format(step))
             self.save_res()
 
-            if step > 0:
-                err = ((cflux_gs - cflux_transport) / cflux_transport) ** 2
             with open('convergence_history.txt', 'a') as f:
-                # print("Err = {}".format(err), file=f)
-                print("GS CF = {}".format(cflux_gs), file=f)
                 print("TS CF = {}".format(cflux_transport), file=f)
             step += 1
