@@ -434,6 +434,24 @@ class CGTS:
             'y': data_tree.scalars.n_i_line_avg.to_numpy(),
         }
 
+        my_times = list(data_tree.profiles.T_e.coords['time'].values)
+        T_e_line_avg = np.array([])
+        for my_t in my_times:
+            T_e_line_avg = np.append(T_e_line_avg, data_tree.profiles.T_e.sel(time=my_t).mean(dim='rho_norm'))
+        self._results['T_e_line_avg'] = {
+            'x': my_times,
+            'y': T_e_line_avg,
+        }
+
+        my_times = list(data_tree.profiles.T_i.coords['time'].values)
+        T_i_line_avg = np.array([])
+        for my_t in my_times:
+            T_i_line_avg = np.append(T_i_line_avg, data_tree.profiles.T_i.sel(time=my_t).mean(dim='rho_norm'))
+        self._results['T_i_line_avg'] = {
+            'x': my_times,
+            'y': T_i_line_avg,
+        }
+        
         n_e_core = data_tree.profiles.n_e.sel(rho_norm=0.0)
         self._results['n_e_core'] = {
             'x': list(n_e_core.coords['time'].values),
