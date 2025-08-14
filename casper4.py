@@ -19,7 +19,7 @@ ax[0,0].plot(res['P_radiation_e']['x'], res['P_radiation_e']['y'], label='P_radi
 ax[0,0].legend()
 
 ax[1,0].set_title('Q (Dimensionless)')
-ax[1,0].plot(res['Q']['x'], 1.0E7 * np.array(res['Q']['y']), label='Q')
+ax[1,0].plot(res['Q']['x'], res['Q']['y'], label='Q')
 
 ax[1,1].set_title('CS Coil Currents (MA-turns)')
 for coil in res['COIL']:
