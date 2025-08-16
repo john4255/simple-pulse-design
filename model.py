@@ -125,7 +125,7 @@ class CGTS:
             }
             self._state['psi_prof'][i] = {
                 'x': np.linspace(0.0, 1.0, N_PSI),
-                'y': np.zeros(N_PSI),
+                'y': np.linspace(0.0, abs(g['psibry']), N_PSI),
             }
             # self._state['f_pol'][i] = g_eqdsk['fpol']
 
@@ -172,7 +172,7 @@ class CGTS:
         self._gs.update_settings()
 
     def _run_gs(self, step, graph=False):
-        dt = 0
+        # dt = 0
 
         for i, _ in enumerate(self._times):
             if i > 0:
@@ -192,12 +192,12 @@ class CGTS:
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            if i == 0:
-                self._gs.set_isoflux(lcfs, isoflux_weights) # TODO: set flux (highest possible)
-            else: # TODO: fix
-                lcfs_psi_target = self._state['psi_prof'][i]['y'][-1] / (2.0 * np.pi)
-                self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
-                self._gs.set_psi_dt(psi0,dt)
+            # if i == 0:
+            #     self._gs.set_isoflux(lcfs, isoflux_weights) # TODO: set flux (highest possible)
+            # else: # TODO: fix
+            lcfs_psi_target = self._state['psi_prof'][i]['y'][-1] / (2.0 * np.pi)
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+            # self._gs.set_psi_dt(psi0,dt)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
                                         self._state['Z'][i],
@@ -222,17 +222,17 @@ class CGTS:
             self._gs_update(i)
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
-            psi0 = self._gs.get_psi(False)
+            # psi0 = self._gs.get_psi(False)
         
     def _gs_update(self, i, calc_vloop=False):
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        psi = self._gs.get_psi(False)
-        default_space = np.linspace(0.0, 1.0, len(psi))
-        psi_space = np.linspace(0.0, 1.0, N_PSI)
-        psi_sample = np.interp(psi_space, default_space, psi)
-        self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
+        # psi = self._gs.get_psi(False)
+        # default_space = np.linspace(0.0, 1.0, len(psi))
+        # psi_space = np.linspace(0.0, 1.0, N_PSI)
+        # psi_sample = np.interp(psi_space, default_space, psi)
+        # self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
 
         if calc_vloop:
             self._state['vloop'][i] = self._gs.calc_loopvoltage()
@@ -267,11 +267,14 @@ class CGTS:
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
-        # if step:
-        #     myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
-        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
-        #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
-        #     }
+        if step:
+            myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
+            myconfig['profile_conditions']['v_loop_lcfs'] = {
+                t: self._state['vloop'][i] for i, t in enumerate(self._times)
+            }
+        # myconfig['profile_conditions']['Ip'] = {
+        #     t: self._state['Ip'][i] for i, t in enumerate(self._times)
+        # }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
@@ -287,7 +290,7 @@ class CGTS:
         
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            self._transport_update(i, data_tree, consumed_flux)
+            self._transport_update(i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') # / self._state['a'][i]
             self._state['vloop'][i] = v_loops[i] # TODO: move
             consumed_flux = np.trapz(v_loops, self._times)
@@ -303,7 +306,7 @@ class CGTS:
         # consumed_flux = 0.0
         return consumed_flux
     
-    def _transport_update(self, i, data_tree, consumed_flux, smooth=False):
+    def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
 
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
