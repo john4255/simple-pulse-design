@@ -533,7 +533,7 @@ class CGTS:
         with open('tmp/res.json', 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=1.0E-6, save_states=False, graph=False, max_step=100):
+    def fly(self, convergence_threshold=1.0E-2, save_states=False, graph=False, max_step=100):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -559,14 +559,14 @@ class CGTS:
             if save_states:
                 self.save_state('tmp/gs_state{}.json'.format(step))
 
-            cflux_transport = self._run_transport(step, graph=graph)
+            cflux = self._run_transport(step, graph=graph)
             if save_states:
                 self.save_state('tmp/ts_state{}.json'.format(step))
             self.save_res()
 
             with open('convergence_history.txt', 'a') as f:
-                print("TS CF = {}".format(cflux_transport), file=f)
+                print("TS CF = {}".format(cflux), file=f)
             step += 1
 
-            err = (cflux_transport - cflux_prev) ** 2
-            cflux_prev = cflux_transport
+            err = np.abs(cflux - cflux_prev)
+            cflux_prev = cflux
