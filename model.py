@@ -122,6 +122,7 @@ class CGTS:
             self._state['eta_prof'][i]= {
                 'x': np.linspace(0.0, 1.0, N_PSI),
                 'y': np.zeros(N_PSI),
+                'type': 'linterp',
             }
             self._state['psi_prof'][i] = {
                 'x': np.linspace(0.0, 1.0, N_PSI),
@@ -190,6 +191,9 @@ class CGTS:
 
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
+            # if step > 0:
+            #     self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             # if i == 0:
@@ -219,7 +223,7 @@ class CGTS:
             err_flag = self._gs.solve()
 
             self._gs.print_info()
-            self._gs_update(i)
+            self._gs_update(i, calc_vloop=False)
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             # psi0 = self._gs.get_psi(False)
@@ -267,11 +271,11 @@ class CGTS:
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
-        if step:
-            myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
-            myconfig['profile_conditions']['v_loop_lcfs'] = {
-                t: self._state['vloop'][i] for i, t in enumerate(self._times)
-            }
+        # if step:
+        #     myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
+        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
+        #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
+        #     }
         # myconfig['profile_conditions']['Ip'] = {
         #     t: self._state['Ip'][i] for i, t in enumerate(self._times)
         # }
@@ -292,8 +296,7 @@ class CGTS:
         for i, t in enumerate(self._times):
             self._transport_update(i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') # / self._state['a'][i]
-            self._state['vloop'][i] = v_loops[i] # TODO: move
-            consumed_flux = np.trapz(v_loops, self._times)
+            # self._state['vloop'][i] = v_loops[i] # TODO: move
         
         if graph:
             for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
@@ -304,12 +307,13 @@ class CGTS:
                 plt.show()
 
         # consumed_flux = 0.0
+        consumed_flux = np.trapz(v_loops, self._times)
         return consumed_flux
     
     def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
 
-        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        # self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
@@ -383,11 +387,19 @@ class CGTS:
             'y': ptot.to_numpy(),
         }
 
-        psi = data_tree.profiles.psi.sel(time=t, method='nearest')
-        self._state['psi_prof'][i] = {
-            'x': psi.coords['rho_norm'].values,
-            'y': psi.to_numpy(),
+        conductivity = data_tree.profiles.sigma_parallel.sel(time=t, method='nearest')
+        self._state['eta_prof'][i] = {
+            'x': conductivity.coords['rho_norm'].values,
+            'y': 1.0 / conductivity.to_numpy(),
+            'type': 'linterp',
         }
+
+        if i > 0:
+            psi = data_tree.profiles.psi.sel(time=t, method='nearest')
+            self._state['psi_prof'][i] = {
+                'x': psi.coords['rho_norm'].values,
+                'y': psi.to_numpy(),
+            }
 
         # Update sim results
         self._results['Q'] = {
@@ -395,10 +407,10 @@ class CGTS:
             'y': data_tree.scalars.Q_fusion.to_numpy(),
         }
 
-        self._results['Ip'] = {
-            'x': list(data_tree.scalars.Ip.coords['time'].values),
-            'y': data_tree.scalars.Ip.to_numpy(),
-        }
+        # self._results['Ip'] = {
+        #     'x': list(data_tree.scalars.Ip.coords['time'].values),
+        #     'y': data_tree.scalars.Ip.to_numpy(),
+        # }
 
         self._results['B0'] = {
             'x': list(data_tree.scalars.B_0.coords['time'].values),
@@ -541,6 +553,7 @@ class CGTS:
         shutil.rmtree('./tmp')
         os.mkdir('./tmp')
 
+        cflux_prev = 0.0
         while err > convergence_threshold and step < max_step:
             self._run_gs(step, graph=graph)
             if save_states:
@@ -554,3 +567,6 @@ class CGTS:
             with open('convergence_history.txt', 'a') as f:
                 print("TS CF = {}".format(cflux_transport), file=f)
             step += 1
+
+            err = (cflux_transport - cflux_prev) ** 2
+            cflux_prev = cflux_transport
