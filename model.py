@@ -134,7 +134,7 @@ class CGTS:
                 self._state['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
                 self._state['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
         
-    def initialize_gs(self, weight_mult=1.0):
+    def initialize_gs(self, weight_mult=0.1):
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
@@ -277,7 +277,7 @@ class CGTS:
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
             'last_surface_factor': 0.90,  # TODO: tweak
-            'Ip_from_parameters': True,
+            'Ip_from_parameters': False,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
@@ -287,9 +287,9 @@ class CGTS:
             myconfig['profile_conditions']['v_loop_lcfs'] = {
                 t: self._state['vloop'][i] for i, t in enumerate(self._times)
             }
-        myconfig['profile_conditions']['Ip'] = {
-            t: self._state['Ip'][i] for i, t in enumerate(self._times)
-        }
+        # myconfig['profile_conditions']['Ip'] = {
+        #     t: self._state['Ip'][i] for i, t in enumerate(self._times)
+        # }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
@@ -327,7 +327,7 @@ class CGTS:
         
         # print(data_tree.profiles.psi.sel(time=t, rho_norm=1.0))
 
-        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        # self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
