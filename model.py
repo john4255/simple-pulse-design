@@ -192,13 +192,13 @@ class CGTS:
         v_loops = []
 
         for i, _ in enumerate(self._times):
-            if i > 0:
-                dt = self._times[i] - self._times[i-1]
+            # if i > 0:
+            #     dt = self._times[i] - self._times[i-1]
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
             Ip_target = abs(self._state['Ip'][i])
-            # P0_target = abs(self._state['pax'][i])
+            P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
             self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
             # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
@@ -348,7 +348,7 @@ class CGTS:
         
         # print(data_tree.profiles.psi.sel(time=t, rho_norm=1.0))
 
-        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        # self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
@@ -356,7 +356,7 @@ class CGTS:
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
         self._state['ffp_prof'][i] = {
-            'x': ffprime.coords['rho_face_norm'].values,
+            'x': np.pow(ffprime.coords['rho_face_norm'].values, 2),
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
@@ -367,7 +367,7 @@ class CGTS:
         self._state['ffp_prof'][i]['y'] = ffp_sample
 
         self._state['pp_prof'][i] = {
-            'x': pprime.coords['rho_face_norm'].values,
+            'x': np.pow(pprime.coords['rho_face_norm'].values, 2),
             'y': pprime.to_numpy(),
             'type': 'linterp',
         }
@@ -400,41 +400,49 @@ class CGTS:
         n_e = data_tree.profiles.n_e.sel(time=t, method='nearest')
         
         self._state['T_i'][i] = {
-            'x': t_i.coords['rho_norm'].values,
+            'x': np.pow(t_i.coords['rho_norm'].values, 2),
             'y': t_i.to_numpy(),
         }
         self._state['T_e'][i] = {
-            'x': t_e.coords['rho_norm'].values,
+            'x': np.pow(t_e.coords['rho_norm'].values, 2),
             'y': t_e.to_numpy(),
         }
         self._state['n_i'][i] = {
-            'x': n_i.coords['rho_norm'].values,
+            'x': np.pow(n_i.coords['rho_norm'].values, 2),
             'y': n_i.to_numpy(),
         }
         self._state['n_e'][i] = {
-            'x': n_e.coords['rho_norm'].values,
+            'x': np.pow(n_e.coords['rho_norm'].values, 2),
             'y': n_e.to_numpy(),
         }
 
         ptot = data_tree.profiles.pressure_thermal_total.sel(time=t, method='nearest')
         self._state['Ptot'][i] = {
-            'x': ptot.coords['rho_norm'].values,
+            'x': np.pow(ptot.coords['rho_norm'].values, 2),
             'y': ptot.to_numpy(),
         }
 
         conductivity = data_tree.profiles.sigma_parallel.sel(time=t, method='nearest')
         self._state['eta_prof'][i] = {
-            'x': conductivity.coords['rho_norm'].values,
+            'x': np.pow(conductivity.coords['rho_norm'].values, 2),
             'y': 1.0 / conductivity.to_numpy(),
             'type': 'linterp',
         }
+        psi_sample = np.linspace(0.0, 1.0, N_PSI)
+        eta_sample = np.interp(psi_sample, self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'])
+        self._state['eta_prof'][i]['x'] = psi_sample
+        self._state['eta_prof'][i]['y'] = eta_sample
 
         if i > 0:
             psi = data_tree.profiles.psi.sel(time=t, method='nearest')
             self._state['psi_prof'][i] = {
-                'x': psi.coords['rho_norm'].values,
+                'x': np.pow(psi.coords['rho_norm'].values, 2),
                 'y': psi.to_numpy(),
             }
+            psi_sample = np.linspace(0.0, 1.0, N_PSI)
+            my_psi_sample = np.interp(psi_sample, self._state['psi_prof'][i]['x'], self._state['psi_prof'][i]['y'])
+            self._state['psi_prof'][i]['x'] = psi_sample
+            self._state['psi_prof'][i]['y'] = my_psi_sample
 
         # Update sim results
         self._results['Q'] = {
