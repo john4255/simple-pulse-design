@@ -17,16 +17,16 @@ for i in range(n_steps):
 
 var = sys.argv[2]
 
-fig, ax = plt.subplots(1, 6, figsize=(12,6))
+fig, ax = plt.subplots(4, 5, figsize=(12,6))
 
 for j, st in enumerate(sim_states):
     keys = sorted(st[var].keys())
     for i, key in enumerate(keys):
-        ax[i].set_title("i={}".format(i), weight='bold')
+        ax[i // 5, i % 5].set_title("i={}".format(i), weight='bold')
         x = st[var][key]['x']
         y = st[var][key]['y']
-        ax[i].plot(x, y, label=j)
-        ax[i].legend()
+        ax[i // 5, i % 5].plot(x, y, label=j)
 
+plt.legend()
 plt.tight_layout()
 plt.show()
