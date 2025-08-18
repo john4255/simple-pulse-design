@@ -134,38 +134,56 @@ class CGTS:
                 self._state['n_e'][i] = {key: 1.0E20 * val for key, val in p_eqdsk['ne(10^20/m^3)'].items()}
                 self._state['n_i'][i] = p_eqdsk['ni(10^20/m^3)']
         
-    def initialize_gs(self, weight_mult=0.1):
-        mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh('ITER_mesh.h5')
+    def initialize_gs(self, mesh='ITER_mesh.h5'):
+        mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh(mesh)
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.set_coil_vsc({'VS': 1.0})
+        self._gs.settings.maxits = 500
 
+        targets = {
+            'PF1': 0.0,
+            'PF2': 0.0,
+            'PF3': 0.0,
+            'PF4': 0.0,
+            'PF5': 0.0,
+            'PF6': 0.0,
+            'CS1L': 0.0,
+            'CS2L': 0.0,
+            'CS3L': 0.0,
+            'CS1U': 0.0,
+            'CS2U': 0.0,
+            'CS3U': 0.0,
+            'VS': 0.0,
+        }
+
+        self.set_coil_reg(targets, weight_mult=0.1)
+
+    def set_coil_reg(self, targets, weight_mult=1.0):
+        # Set regularization weights
+        self._gs.set_coil_vsc({'VS': 1.0})
         coil_bounds = {key: [-50.E6, 50.E6] for key in self._gs.coil_sets}
         self._gs.set_coil_bounds(coil_bounds)
 
-        # Set regularization weights
         # TODO: generalize to allow for non-ITER cases
         regularization_terms = []
         for name, coil in self._gs.coil_sets.items():
             # Set zero target current and different small weights to help conditioning of fit
             if name.startswith('CS'):
                 if name.startswith('CS1'):
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2 * weight_mult))
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=2.E-2 * weight_mult))
                 else:
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2 * weight_mult))
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=2.E-2 * weight_mult))
             elif name.startswith('PF'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.0E-2 * weight_mult))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=1.0E-2 * weight_mult))
             elif name.startswith('VS'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.0E-2 * weight_mult))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=1.0E-2 * weight_mult))
         # Disable VSC virtual coil
         regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
         
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
-
-        self._gs.settings.maxits = 500
         # self._gs.settings.nl_tol = 1.E-4
         self._gs.update_settings()
 
@@ -179,10 +197,11 @@ class CGTS:
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
-            Ip_target = self._state['Ip'][i]
-            # P0_target = self._state['pax'][i]
+            Ip_target = abs(self._state['Ip'][i])
+            # P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
             self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
+            # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
@@ -228,6 +247,9 @@ class CGTS:
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             # psi0 = self._gs.get_psi(False)
+
+            coils, _ = self._gs.get_coil_currents()
+            self.set_coil_reg(coils, weight_mult=0.1)
 
         consumed_flux = 0.0
         if step:
@@ -288,7 +310,7 @@ class CGTS:
                 t: self._state['vloop'][i] for i, t in enumerate(self._times)
             }
         # myconfig['profile_conditions']['Ip'] = {
-        #     t: self._state['Ip'][i] for i, t in enumerate(self._times)
+        #     t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         # }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
@@ -321,13 +343,12 @@ class CGTS:
     
     def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
-        print("hello world")
         print(data_tree.profiles.psi_from_Ip.sel(time=t, rho_norm=1.0, method='nearest').to_numpy())
         print(data_tree.profiles.psi_from_geo.sel(time=t, rho_cell_norm=1.0, method='nearest').to_numpy())
         
         # print(data_tree.profiles.psi.sel(time=t, rho_norm=1.0))
 
-        # self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
