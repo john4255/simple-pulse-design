@@ -24,7 +24,7 @@ class MyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 class CGTS:
-    def __init__(self, times, g_eqdsk_arr, p_eqdsk=None, tconfig={}):
+    def __init__(self, times, g_eqdsk_arr, p_eqdsk=None, config_overrides={}):
         """
         Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param times
@@ -37,7 +37,7 @@ class CGTS:
         self._boundary = {}
         self._results = {}
 
-        self._config_overrides = tconfig
+        self._config_overrides = config_overrides
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -103,9 +103,6 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
             self._state['q95'][i] = np.percentile(g['qpsi'], 95)
             self._state['Ip'][i] = abs(g['ip'])
-            # if ip is not None:
-            #     self._state['Ip'][i] = ip[i]
-            # Default Profiles
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
             ffp_prof = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
@@ -126,7 +123,7 @@ class CGTS:
             }
             self._state['psi_prof'][i] = {
                 'x': np.linspace(0.0, 1.0, N_PSI),
-                'y': np.linspace(0.0, abs(g['psibry']), N_PSI),
+                'y': -50.0 + 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']), N_PSI),
             }
             # self._state['f_pol'][i] = g_eqdsk['fpol']
 
@@ -157,11 +154,11 @@ class CGTS:
                 if name.startswith('CS1'):
                     regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2 * weight_mult))
                 else:
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=2.E-2 * weight_mult))
             elif name.startswith('PF'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.0E-2 * weight_mult))
             elif name.startswith('VS'):
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E-2 * weight_mult))
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.0E-2 * weight_mult))
         # Disable VSC virtual coil
         regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
         
@@ -174,6 +171,7 @@ class CGTS:
 
     def _run_gs(self, step, graph=False):
         # dt = 0
+        v_loops = []
 
         for i, _ in enumerate(self._times):
             if i > 0:
@@ -191,8 +189,8 @@ class CGTS:
 
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
 
-            # if step > 0:
-            #     self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+            if step:
+                self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
@@ -204,10 +202,10 @@ class CGTS:
             # self._gs.set_psi_dt(psi0,dt)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
-                                        self._state['Z'][i],
-                                        self._state['a'][i],
-                                        self._state['kappa'][i], 
-                                        self._state['delta'][i])
+                                         self._state['Z'][i],
+                                         self._state['a'][i],
+                                         self._state['kappa'][i],
+                                         self._state['delta'][i])
             
             if err_flag:
                 print("Error initializing psi.")
@@ -222,21 +220,34 @@ class CGTS:
             self._gs.update_settings()
             err_flag = self._gs.solve()
 
+            if step:
+                v_loops.append(self._gs.calc_loopvoltage())
+
             self._gs.print_info()
-            self._gs_update(i, calc_vloop=False)
+            self._gs_update(i, calc_vloop=step)
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             # psi0 = self._gs.get_psi(False)
+
+        consumed_flux = 0.0
+        if step:
+            consumed_flux = np.trapz(v_loops, self._times)
+        return consumed_flux
         
     def _gs_update(self, i, calc_vloop=False):
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        # psi = self._gs.get_psi(False)
-        # default_space = np.linspace(0.0, 1.0, len(psi))
-        # psi_space = np.linspace(0.0, 1.0, N_PSI)
-        # psi_sample = np.interp(psi_space, default_space, psi)
-        # self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
+        psi = self._gs.get_psi(normalized=False)
+        default_space = np.linspace(0.0, 1.0, len(psi))
+        psi_space = np.linspace(0.0, 1.0, N_PSI)
+        psi_sample = np.interp(psi_space, default_space, psi)
+        self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
+
+        if 'flux_lcfs_tmaker' not in self._results:
+            self._results['flux_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
+        self._results['flux_lcfs_tmaker']['x'][i] = self._times[i]
+        self._results['flux_lcfs_tmaker']['y'][i] = self._state['psi_prof'][i]['y'][-1]
 
         if calc_vloop:
             self._state['vloop'][i] = self._gs.calc_loopvoltage()
@@ -266,26 +277,24 @@ class CGTS:
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
             'last_surface_factor': 0.90,  # TODO: tweak
-            'Ip_from_parameters': False,
+            'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
         }
-        # if step:
-        #     myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
-        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
-        #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
-        #     }
-        # myconfig['profile_conditions']['Ip'] = {
-        #     t: self._state['Ip'][i] for i, t in enumerate(self._times)
-        # }
+        if step:
+            myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
+            myconfig['profile_conditions']['v_loop_lcfs'] = {
+                t: self._state['vloop'][i] for i, t in enumerate(self._times)
+            }
+        myconfig['profile_conditions']['Ip'] = {
+            t: self._state['Ip'][i] for i, t in enumerate(self._times)
+        }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
 
     def _run_transport(self, step, graph=False):
-        consumed_flux = 0.0
-
         myconfig = self._get_torax_config(step)
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
         if hist.sim_error != torax.SimError.NO_ERROR:
@@ -312,8 +321,13 @@ class CGTS:
     
     def _transport_update(self, i, data_tree, smooth=False):
         t = self._times[i]
+        print("hello world")
+        print(data_tree.profiles.psi_from_Ip.sel(time=t, rho_norm=1.0, method='nearest').to_numpy())
+        print(data_tree.profiles.psi_from_geo.sel(time=t, rho_cell_norm=1.0, method='nearest').to_numpy())
+        
+        # print(data_tree.profiles.psi.sel(time=t, rho_norm=1.0))
 
-        # self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
@@ -407,10 +421,10 @@ class CGTS:
             'y': data_tree.scalars.Q_fusion.to_numpy(),
         }
 
-        # self._results['Ip'] = {
-        #     'x': list(data_tree.scalars.Ip.coords['time'].values),
-        #     'y': data_tree.scalars.Ip.to_numpy(),
-        # }
+        self._results['Ip'] = {
+            'x': list(data_tree.scalars.Ip.coords['time'].values),
+            'y': data_tree.scalars.Ip.to_numpy(),
+        }
 
         self._results['B0'] = {
             'x': list(data_tree.scalars.B_0.coords['time'].values),
@@ -489,8 +503,8 @@ class CGTS:
             'y': data_tree.scalars.v_loop_lcfs.to_numpy(),
         }
 
-        flux_lcfs = data_tree.profiles.F.sel(rho_norm = 1.0)
-        self._results['flux_lcfs'] = {
+        flux_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
+        self._results['flux_lcfs_torax'] = {
             'x': list(flux_lcfs.coords['time'].values),
             'y': flux_lcfs.to_numpy(),
         }
@@ -533,7 +547,7 @@ class CGTS:
         with open('tmp/res.json', 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=1.0E-2, save_states=False, graph=False, max_step=100):
+    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=100):
         err = convergence_threshold + 1.0
         step = 0
 
@@ -555,7 +569,7 @@ class CGTS:
 
         cflux_prev = 0.0
         while err > convergence_threshold and step < max_step:
-            self._run_gs(step, graph=graph)
+            cflux_gs = self._run_gs(step, graph=graph)
             if save_states:
                 self.save_state('tmp/gs_state{}.json'.format(step))
 
@@ -565,6 +579,7 @@ class CGTS:
             self.save_res()
 
             with open('convergence_history.txt', 'a') as f:
+                print("GS CF = {}".format(cflux_gs), file=f)
                 print("TS CF = {}".format(cflux), file=f)
             step += 1
 
