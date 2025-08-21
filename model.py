@@ -121,10 +121,10 @@ class CGTS:
             }
             self._state['psi_prof'][i] = {
                 'x': np.linspace(0.0, 1.0, N_PSI),
-                'y': -50.0 + 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']), N_PSI),
+                'y': 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']), N_PSI),
             }
         
-    def initialize_gs(self, mesh, vsc=None):
+    def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
         @param mesh Filename of reactor mesh.
         @param vsc Vertical Stability Coil.
@@ -136,13 +136,11 @@ class CGTS:
 
         self._gs.settings.maxits = 500
 
-        # print(coil_dict.keys())
         targets = {coil_name: 0.0 for coil_name in self._gs.coil_sets}
-        print(targets)
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
-        self.set_coil_reg(targets, weight_mult=0.1)
+        self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
     def set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -165,7 +163,6 @@ class CGTS:
                 else:
                     weights[name] = 1.0E-2
 
-        print(targets)
         for name, coil in self._gs.coil_sets.items():
             regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=weights[name] * weight_mult))
 
@@ -568,7 +565,7 @@ class CGTS:
         with open('tmp/res.json', 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=1.0E-5, save_states=False, graph=False, max_step=100):
+    def fly(self, convergence_threshold=5.0E-5, save_states=False, graph=False, max_step=100):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference allowed for convergence.
         @param save_states Save intermediate simulation states.
