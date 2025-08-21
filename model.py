@@ -12,7 +12,7 @@ from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
 from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
-from baseconfig import BASE_CONFIG, set_LH_transition_time
+from baseconfig import BASE_CONFIG
 
 LCFS_WEIGHT = 100.0
 N_PSI = 100
@@ -57,11 +57,12 @@ class CGTS:
         self._state['beta_pol'] = np.zeros(len(times))
         self._state['vloop'] = np.zeros(len(times))
         self._state['q95'] = np.zeros(len(times))
+        self._state['psi_lcfs'] = np.zeros(len(times))
+        self._state['psi_axis'] = np.zeros(len(times))
 
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
         self._state['eta_prof'] = {}
-        self._state['psi_prof'] = {}
         self._state['T_e'] = {}
         self._state['T_i'] = {}
         self._state['n_e'] = {}
@@ -102,6 +103,9 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
             self._state['q95'][i] = np.percentile(g['qpsi'], 95)
             self._state['Ip'][i] = abs(g['ip'])
+            self._state['psi_lcfs'][i] = 2.0 * np.pi * abs(g['psibry'])
+
+            # Default Profiles
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
             ffp_prof = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
@@ -120,10 +124,6 @@ class CGTS:
                 'y': np.zeros(N_PSI),
                 'type': 'linterp',
             }
-            self._state['psi_prof'][i] = {
-                'x': np.linspace(0.0, 1.0, N_PSI),
-                'y': -50.0 + 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']),N_PSI),
-            }
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -141,9 +141,9 @@ class CGTS:
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
-        self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
+        self._set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
-    def set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
+    def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
         @param weights Default weight for each coil.
@@ -191,6 +191,7 @@ class CGTS:
             # P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
             self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
+            # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
@@ -200,7 +201,7 @@ class CGTS:
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_prof'][i]['y'][-1] / (2.0 * np.pi)
+            lcfs_psi_target = self._state['psi_lcfs'][i] / (2.0 * np.pi)
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
@@ -226,36 +227,32 @@ class CGTS:
                 v_loops.append(self._gs.calc_loopvoltage())
 
             self._gs.print_info()
-            self._gs_update(i, calc_vloop=step)
+            self._gs_update(i)
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             coils, _ = self._gs.get_coil_currents()
-            self.set_coil_reg(coils, weight_mult=0.1)
+            self._set_coil_reg(coils, weight_mult=0.1)
 
         consumed_flux = np.trapz(v_loops, self._times)
         return consumed_flux
         
-    def _gs_update(self, i, calc_vloop=False):
+    def _gs_update(self, i):
         r'''! Update internal state and coil current results based on results of GS solver.
         @param i Timestep of the solve.
-        @param calc_vloop Whether to calculate loop voltage.
         '''
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        psi = self._gs.get_psi(normalized=False)
-        default_space = np.linspace(0.0, 1.0, len(psi))
-        psi_space = np.linspace(0.0, 1.0, N_PSI)
-        psi_sample = np.interp(psi_space, default_space, psi)
-        self._state['psi_prof'][i] = {'x': psi_space, 'y': psi_sample}
+        if i:
+            self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
+            self._state['psi_axis'][i] = self._gs.psi_bounds[1]
 
         if 'flux_lcfs_tmaker' not in self._results:
             self._results['flux_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
         self._results['flux_lcfs_tmaker']['x'][i] = self._times[i]
-        self._results['flux_lcfs_tmaker']['y'][i] = self._state['psi_prof'][i]['y'][-1]
+        self._results['flux_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
-        if calc_vloop:
-            self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -356,8 +353,10 @@ class CGTS:
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
 
+        psi_norm = data_tree.profiles.psi_norm.sel(time=t, method='nearest')
+
         self._state['ffp_prof'][i] = {
-            'x': np.pow(ffprime.coords['rho_face_norm'].values, 2),
+            'x': [psi_norm.sel(rho_face_norm=rfn, method='nearest') for rfn in ffprime.coords['rho_face_norm'].values],
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
@@ -368,7 +367,7 @@ class CGTS:
         self._state['ffp_prof'][i]['y'] = ffp_sample
 
         self._state['pp_prof'][i] = {
-            'x': np.pow(pprime.coords['rho_face_norm'].values, 2),
+            'x': [psi_norm.sel(rho_face_norm=rfn, method='nearest') for rfn in pprime.coords['rho_face_norm'].values],
             'y': pprime.to_numpy(),
             'type': 'linterp',
         }
@@ -432,16 +431,9 @@ class CGTS:
         self._state['eta_prof'][i]['x'] = psi_sample
         self._state['eta_prof'][i]['y'] = eta_sample
 
-        if i > 0:
-            psi = data_tree.profiles.psi.sel(time=t, method='nearest')
-            self._state['psi_prof'][i] = {
-                'x': np.pow(psi.coords['rho_norm'].values, 2),
-                'y': psi.to_numpy(),
-            }
-            psi_sample = np.linspace(0.0, 1.0, N_PSI)
-            my_psi_sample = np.interp(psi_sample, self._state['psi_prof'][i]['x'], self._state['psi_prof'][i]['y'])
-            self._state['psi_prof'][i]['x'] = psi_sample
-            self._state['psi_prof'][i]['y'] = my_psi_sample
+        if i:
+            self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest')
+            self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest')
 
         # Update sim results
         self._results['Q'] = {
@@ -582,21 +574,10 @@ class CGTS:
     def fly(self, convergence_threshold=5.0E-5, save_states=False, graph=False, max_step=100):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference allowed for convergence.
-        @param save_states Save intermediate simulation states.
+        @param save_states Save intermediate simulation states. (For debugging.)
         @param graph Whether to display psi and profile graphs at each iteration (for testing).
         @param max_step Maximum number of simulation iterations allowed.
         '''
-        err = convergence_threshold + 1.0
-        step = 0
-
-        if graph:
-            for var in ['ffp_prof', 'pp_prof']:
-                fig, ax = plt.subplots(1, len(self._times))
-                fig.suptitle(var)
-                for i, _ in enumerate(self._times):
-                    ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
-                plt.show()
-                        
         del_tmp = input('Delete temporary storage? [y/n] ')
         if del_tmp != 'y':
             quit()
@@ -605,7 +586,18 @@ class CGTS:
         shutil.rmtree('./tmp')
         os.mkdir('./tmp')
 
+        if graph:
+            for var in ['ffp_prof', 'pp_prof']:
+                fig, ax = plt.subplots(1, len(self._times))
+                fig.suptitle(var)
+                for i, _ in enumerate(self._times):
+                    ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
+                plt.show()           
+
+        err = convergence_threshold + 1.0
+        step = 0
         cflux_prev = 0.0
+
         while err > convergence_threshold and step < max_step:
             cflux = self._run_transport(step, graph=graph)
             if save_states:
