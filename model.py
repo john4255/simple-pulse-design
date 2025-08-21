@@ -103,7 +103,7 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
             self._state['q95'][i] = np.percentile(g['qpsi'], 95)
             self._state['Ip'][i] = abs(g['ip'])
-            self._state['psi_lcfs'][i] = 2.0 * np.pi * abs(g['psibry'])
+            self._state['psi_lcfs'][i] = abs(g['psibry'])
 
             # Default Profiles
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
@@ -247,10 +247,10 @@ class CGTS:
             self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
             self._state['psi_axis'][i] = self._gs.psi_bounds[1]
 
-        if 'flux_lcfs_tmaker' not in self._results:
-            self._results['flux_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
-        self._results['flux_lcfs_tmaker']['x'][i] = self._times[i]
-        self._results['flux_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
+        if 'psi_lcfs_tmaker' not in self._results:
+            self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
+        self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
+        self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
         self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
@@ -523,10 +523,10 @@ class CGTS:
             'y': data_tree.scalars.v_loop_lcfs.to_numpy(),
         }
 
-        flux_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
-        self._results['flux_lcfs_torax'] = {
-            'x': list(flux_lcfs.coords['time'].values),
-            'y': flux_lcfs.to_numpy(),
+        psi_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
+        self._results['psi_lcfs_torax'] = {
+            'x': list(psi_lcfs.coords['time'].values),
+            'y': psi_lcfs.to_numpy(),
         }
 
         self._results['li3'] = {
