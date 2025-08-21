@@ -39,6 +39,7 @@ class CGTS:
         self._times = times
         self._boundary = {}
         self._results = {}
+        self._init_files = g_eqdsk_arr
 
         self._config_overrides = config_overrides
 
@@ -121,7 +122,7 @@ class CGTS:
             }
             self._state['psi_prof'][i] = {
                 'x': np.linspace(0.0, 1.0, N_PSI),
-                'y': 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']), N_PSI),
+                'y': -50.0 + 2.0 * np.pi * np.linspace(0.0, abs(g['psibry']),N_PSI),
             }
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
@@ -195,9 +196,7 @@ class CGTS:
             pp_prof = self._state['pp_prof'][i]
 
             self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
-
-            if step:
-                self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
@@ -233,9 +232,7 @@ class CGTS:
             coils, _ = self._gs.get_coil_currents()
             self.set_coil_reg(coils, weight_mult=0.1)
 
-        consumed_flux = 0.0
-        if step:
-            consumed_flux = np.trapz(v_loops, self._times)
+        consumed_flux = np.trapz(v_loops, self._times)
         return consumed_flux
         
     def _gs_update(self, i, calc_vloop=False):
@@ -290,12 +287,29 @@ class CGTS:
             'last_surface_factor': 0.90,  # TODO: tweak
             'Ip_from_parameters': True,
             'geometry_configs': {
-                t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
+                t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._times)
             }
         }
+        if step:
+            myconfig['geometry']['geometry_configs'] = {
+                t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
+            }
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
+
+        # if step:
+        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
+        #         t: abs(self._state['vloop'][i]) for i, t in enumerate(self._times)
+        #     }
+
+        # myconfig['profile_conditions']['psi'] = {}
+        # for i, t in enumerate(self._times):
+        #     rho_arr = np.sqrt(self._state['psi_prof'][i]['x'])
+        #     psi_arr = self._state['psi_prof'][i]['y']
+        #     myconfig['profile_conditions']['psi'][t] = {
+        #         rho: 50.0 + psi_arr[j] for j, rho in enumerate(rho_arr)
+        #     }
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
 
@@ -593,19 +607,20 @@ class CGTS:
 
         cflux_prev = 0.0
         while err > convergence_threshold and step < max_step:
-            cflux_gs = self._run_gs(step, graph=graph)
-            if save_states:
-                self.save_state('tmp/gs_state{}.json'.format(step))
-
             cflux = self._run_transport(step, graph=graph)
             if save_states:
                 self.save_state('tmp/ts_state{}.json'.format(step))
+            step += 1
+
+            cflux_gs = self._run_gs(step, graph=graph)
+            if save_states:
+                self.save_state('tmp/gs_state{}.json'.format(step-1))
+
             self.save_res()
 
             with open('convergence_history.txt', 'a') as f:
                 print("GS CF = {}".format(cflux_gs), file=f)
                 print("TS CF = {}".format(cflux), file=f)
-            step += 1
 
             err = np.abs(cflux - cflux_prev) / cflux_prev
             cflux_prev = cflux
