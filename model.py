@@ -299,7 +299,7 @@ class CGTS:
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
             'last_surface_factor': 0.90,  # TODO: tweak
-            'Ip_from_parameters': False,
+            'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
@@ -309,9 +309,9 @@ class CGTS:
         #     myconfig['profile_conditions']['v_loop_lcfs'] = {
         #         t: self._state['vloop'][i] for i, t in enumerate(self._times)
         #     }
-        # myconfig['profile_conditions']['Ip'] = {
-        #     t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
-        # }
+        myconfig['profile_conditions']['Ip'] = {
+            t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
+        }
         # myconfig = set_LH_transition_time(myconfig, LH_transition_time = 80)
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
@@ -348,7 +348,7 @@ class CGTS:
         
         # print(data_tree.profiles.psi.sel(time=t, rho_norm=1.0))
 
-        # self._state['Ip'][i ] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip'][i ] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
@@ -576,7 +576,7 @@ class CGTS:
         with open('tmp/res.json', 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=5.0E-3, save_states=False, graph=False, max_step=100):
+    def fly(self, convergence_threshold=1.0E-3, save_states=False, graph=False, max_step=100):
         err = convergence_threshold + 1.0
         step = 0
 
