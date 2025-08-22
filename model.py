@@ -153,6 +153,11 @@ class CGTS:
         self._set_coil_reg(targets, weights=weights, weight_mult=0.1)
     
     def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
+        r'''! Set heating sources for Torax.
+        @param nbi NBI heating (dictionary of heating at times).
+        @param eccd ECCD heating (dictionary of heating at times).
+        @param eccd_loc Location of ECCD heating.
+        '''
         if nbi is not None:
             self._nbi_heating = nbi
         if eccd is not None and eccd_loc is not None:
@@ -160,6 +165,10 @@ class CGTS:
             self._eccd_loc = eccd_loc
 
     def set_pedestal(self, T_i_ped=None, T_e_ped=None):
+        r'''! Set pedestals for ion and electron temperatures.
+        @pararm T_i_ped Ion temperature pedestal (dictionary of temperature at times).
+        @pararm T_e_ped Electron temperature pedestal (dictionary of temperature at times).
+        '''
         if T_i_ped is not None:
             self._T_i_ped = T_i_ped
         if T_e_ped is not None:
@@ -591,8 +600,8 @@ class CGTS:
 
     def fly(self, convergence_threshold=5.0E-5, save_states=False, graph=False, max_step=100):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
-        @pararm convergence_threshold Maximum percent difference allowed for convergence.
-        @param save_states Save intermediate simulation states. (For debugging.)
+        @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
+        @param save_states Save intermediate simulation states (for testing).
         @param graph Whether to display psi and profile graphs at each iteration (for testing).
         @param max_step Maximum number of simulation iterations allowed.
         '''
