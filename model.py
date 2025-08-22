@@ -16,6 +16,7 @@ from baseconfig import BASE_CONFIG
 
 LCFS_WEIGHT = 100.0
 N_PSI = 100
+_NBI_W_TO_MA = 1/16e6
 
 class MyEncoder(json.JSONEncoder):
     '''! JSON Encoder Object to store simulation results.'''
@@ -27,7 +28,7 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, times, g_eqdsk_arr, config_overrides={}):
+    def __init__(self, t_final, times, g_eqdsk_arr, config_overrides={}):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param times Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
@@ -40,6 +41,7 @@ class CGTS:
         self._boundary = {}
         self._results = {}
         self._init_files = g_eqdsk_arr
+        self._t_final = t_final
 
         self._config_overrides = config_overrides
 
@@ -125,6 +127,13 @@ class CGTS:
                 'type': 'linterp',
             }
         
+        self._nbi_heating = {0: 0, t_final: 0}
+        self._eccd_heating = {0: 0, t_final: 0}
+        self._eccd_loc = 0.1
+
+        self._T_i_ped = {0: 0.5, t_final: 0.5}
+        self._T_e_ped = {0: 0.5, t_final: 0.5}
+        
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
         @param mesh Filename of reactor mesh.
@@ -142,6 +151,19 @@ class CGTS:
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
         self._set_coil_reg(targets, weights=weights, weight_mult=0.1)
+    
+    def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
+        if nbi is not None:
+            self._nbi_heating = nbi
+        if eccd is not None and eccd_loc is not None:
+            self._eccd_heating = eccd
+            self._eccd_loc = eccd_loc
+
+    def set_pedestal(self, T_i_ped=None, T_e_ped=None):
+        if T_i_ped is not None:
+            self._T_i_ped = T_i_ped
+        if T_e_ped is not None:
+            self._T_e_ped = T_e_ped
 
     def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -270,7 +292,7 @@ class CGTS:
 
         myconfig['numerics'] = {
             't_initial': 0.0,
-            't_final': 150.0,  # length of simulation time in seconds
+            't_final': self._t_final,  # length of simulation time in seconds
             'fixed_dt': 1.0, # fixed timestep
             'evolve_ion_heat': True, # solve ion heat equation
             'evolve_electron_heat': True, # solve electron heat equation
@@ -295,18 +317,14 @@ class CGTS:
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
 
-        # if step:
-        #     myconfig['profile_conditions']['v_loop_lcfs'] = {
-        #         t: abs(self._state['vloop'][i]) for i, t in enumerate(self._times)
-        #     }
+        myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
+        myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
+        myconfig['sources']['generic_heat']['P_total'] = self._nbi_heating
+        myconfig['sources']['generic_current']['I_generic'] = {x: y*_NBI_W_TO_MA for x,y in self._nbi_heating.items()}
 
-        # myconfig['profile_conditions']['psi'] = {}
-        # for i, t in enumerate(self._times):
-        #     rho_arr = np.sqrt(self._state['psi_prof'][i]['x'])
-        #     psi_arr = self._state['psi_prof'][i]['y']
-        #     myconfig['profile_conditions']['psi'][t] = {
-        #         rho: 50.0 + psi_arr[j] for j, rho in enumerate(rho_arr)
-        #     }
+        myconfig['pedestal']['T_i_ped'] = self._T_i_ped
+        myconfig['pedestal']['T_e_ped'] = self._T_e_ped
+ 
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
 

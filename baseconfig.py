@@ -31,7 +31,7 @@ BASE_CONFIG = {
         'Z_eff': {0.0: {0.0: 2.0, 1.0: 2.0}},  # sets impurity densities
     },
     'profile_conditions': {
-        # 'Ip': {0: 3e6, 100: 12.5e6},  # total plasma current in MA
+        'Ip': {0: 3e6, 100: 12.5e6},  # total plasma current in MA
         'T_i': {0.0: {0.0: 6.0, 1.0: 0.2}}, # T_i initial condition
         'T_i_right_bc': 0.2, # T_i boundary condition
         'T_e': {0.0: {0.0: 6.0, 1.0: 0.2}},  # T_e initial condition
@@ -70,13 +70,13 @@ BASE_CONFIG = {
         # Current sources (for psi equation)
         'ecrh': { # ECRH/ECCD (with Lin-Liu)
            'gaussian_width': 0.05,
-           'gaussian_location': 0.35,
-           'P_total': eccd_power,
+        #    'gaussian_location': 0.35,
+        #    'P_total': eccd_power,
            },
         'generic_heat': { # Proxy for NBI heat source
             'gaussian_location': r_nbi, # Gaussian location in normalized coordinates
             'gaussian_width': w_nbi, # Gaussian width in normalized coordinates
-            'P_total': (nbi_times, nbi_powers), # Total heating power
+            # 'P_total': (nbi_times, nbi_powers), # Total heating power
             # electron heating fraction r
             'electron_heat_fraction': el_heat_fraction,
         },
@@ -104,8 +104,8 @@ BASE_CONFIG = {
         'model_name': 'set_T_ped_n_ped',
         # use internal boundary condition model (for H-mode and L-mode)
         'set_pedestal': True,
-        'T_i_ped': {0: 0.5, 100: 0.5, 105: 3.0},
-        'T_e_ped': {0: 0.5, 100: 0.5, 105: 3.0},
+        # 'T_i_ped': {0: 0.5, 100: 0.5, 105: 3.0},
+        # 'T_e_ped': {0: 0.5, 100: 0.5, 105: 3.0},
         'n_e_ped_is_fGW': True,
         'n_e_ped': 0.85, # pedestal top n_e in units of fGW
         'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
