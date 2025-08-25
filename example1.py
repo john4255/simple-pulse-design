@@ -22,7 +22,7 @@ T_e_ped = {0: 0.5, 100: 0.5, 105: 3.0}
 
 mysim = CGTS(150, times, g_arr)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
-mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35) # TODO: check if ECCD is working
+mysim.set_heating(nbi=None, eccd=eccd_powers, eccd_loc=0.35) # TODO: check if ECCD is working
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped)
 
 mysim.fly(save_states=True, graph=False)
