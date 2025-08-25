@@ -30,6 +30,7 @@ class CGTS:
 
     def __init__(self, t_final, times, g_eqdsk_arr, config_overrides={}):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
+        @param t_final Total length of simulation (in seconds).
         @param times Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
         @param config_overrides Dictionary of values to override values from default torax config.
