@@ -42,6 +42,7 @@ class CGTS:
         self._boundary = {}
         self._results = {}
         self._init_files = g_eqdsk_arr
+        self._init_ip = None
         self._t_final = t_final
 
         self._config_overrides = config_overrides
@@ -152,6 +153,9 @@ class CGTS:
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
         self._set_coil_reg(targets, weights=weights, weight_mult=0.1)
+
+    def set_ip(self, ip):
+        self._init_ip = ip
     
     def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
         r'''! Set heating sources for Torax.
@@ -323,9 +327,13 @@ class CGTS:
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
             }
+
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
+
+        if self._init_ip is not None and step == 0:
+             myconfig['profile_conditions']['Ip'] = self._init_ip
 
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
@@ -478,6 +486,61 @@ class CGTS:
             'x': list(data_tree.scalars.B_0.coords['time'].values),
             'y': data_tree.scalars.B_0.to_numpy(),
         }
+
+        if self._t_final > 100:
+            q_prof = data_tree.profiles.q.sel(time=100, method='nearest')
+            self._results['q_100s'] = {
+                'x': list(q_prof.coords['rho_face_norm'].values),
+                'y': q_prof.to_numpy(),
+            }
+        
+        if self._t_final > 300:
+            # Density
+            n_i_prof = data_tree.profiles.n_i.sel(time=80, method='nearest')
+            self._results['n_i_80s'] = {
+                'x': list(n_i_prof.coords['rho_norm'].values),
+                'y': n_i_prof.to_numpy(),
+            }
+
+            n_e_prof = data_tree.profiles.n_e.sel(time=80, method='nearest')
+            self._results['n_e_80s'] = {
+                'x': list(n_e_prof.coords['rho_norm'].values),
+                'y': n_e_prof.to_numpy(),
+            }
+            n_i_prof = data_tree.profiles.n_i.sel(time=300, method='nearest')
+            self._results['n_i_300s'] = {
+                'x': list(n_i_prof.coords['rho_norm'].values),
+                'y': n_i_prof.to_numpy(),
+            }
+
+            n_e_prof = data_tree.profiles.n_e.sel(time=300, method='nearest')
+            self._results['n_e_300s'] = {
+                'x': list(n_e_prof.coords['rho_norm'].values),
+                'y': n_e_prof.to_numpy(),
+            }
+             # Temp
+            T_i_prof = data_tree.profiles.T_i.sel(time=80, method='nearest')
+            self._results['T_i_80s'] = {
+                'x': list(T_i_prof.coords['rho_norm'].values),
+                'y': T_i_prof.to_numpy(),
+            }
+
+            T_e_prof = data_tree.profiles.T_e.sel(time=80, method='nearest')
+            self._results['T_e_80s'] = {
+                'x': list(T_e_prof.coords['rho_norm'].values),
+                'y': T_e_prof.to_numpy(),
+            }
+            T_i_prof = data_tree.profiles.T_i.sel(time=300, method='nearest')
+            self._results['T_i_300s'] = {
+                'x': list(T_i_prof.coords['rho_norm'].values),
+                'y': T_i_prof.to_numpy(),
+            }
+
+            T_e_prof = data_tree.profiles.T_e.sel(time=300, method='nearest')
+            self._results['T_e_300s'] = {
+                'x': list(T_e_prof.coords['rho_norm'].values),
+                'y': T_e_prof.to_numpy(),
+            }
 
         self._results['n_e_line_avg'] = {
             'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
