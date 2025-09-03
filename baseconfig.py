@@ -20,10 +20,6 @@ r_nbi = 0.25
 w_nbi = 0.25
 el_heat_fraction = 0.66
 
-# No ECCD power for this config (but kept here for future flexibility)
-eccd_power = {0: 0, 99: 0, 100: 20.0e6}
-
-
 BASE_CONFIG = {
     'plasma_composition': {
         'main_ion': {'D': 0.5, 'T': 0.5},  # (bundled isotope average)
@@ -74,6 +70,7 @@ BASE_CONFIG = {
         #    'P_total': eccd_power,
            },
         'generic_heat': { # Proxy for NBI heat source
+            # 'mode': 'PRESCRIBED',
             'gaussian_location': r_nbi, # Gaussian location in normalized coordinates
             'gaussian_width': w_nbi, # Gaussian width in normalized coordinates
             # 'P_total': (nbi_times, nbi_powers), # Total heating power
@@ -81,10 +78,11 @@ BASE_CONFIG = {
             'electron_heat_fraction': el_heat_fraction,
         },
         'generic_current': { # Proxy for NBI current source
+            # 'mode': 'PRESCRIBED',
             'use_absolute_current': True, # I_generic is total external current
             'gaussian_width': w_nbi,
             'gaussian_location': r_nbi,
-            'I_generic': (nbi_times, nbi_cd),
+            # 'I_generic': (nbi_times, nbi_cd),
         },
         'fusion': {}, # fusion power
         'ei_exchange': {}, # equipartition
