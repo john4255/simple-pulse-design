@@ -66,6 +66,8 @@ class CGTS:
 
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
+        self._state['ffp_prof_tmp'] = {}
+        self._state['pp_prof_tmp'] = {}
         self._state['eta_prof'] = {}
         self._state['T_e'] = {}
         self._state['T_i'] = {}
@@ -74,6 +76,8 @@ class CGTS:
         self._state['Ptot'] = {}
 
         self._results['lcfs'] = {}
+        self._results['vloop_tmaker'] = np.zeros(len(times))
+        self._results['vloop_torax'] = np.zeros(len(times))
 
         for i, _ in enumerate(times):
             # Calculate geometry
@@ -217,7 +221,7 @@ class CGTS:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
-        v_loops = []
+        v_loops = np.zeros(len(self._times))
 
         for i, _ in enumerate(self._times):
             self._gs.set_isoflux(None)
@@ -226,18 +230,27 @@ class CGTS:
             Ip_target = abs(self._state['Ip'][i])
             # P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
-            self._gs.set_targets(Ip=Ip_target, Ip_ratio=2.0)
+            self._gs.set_targets(Ip=Ip_target, Ip_ratio = 0.05)
             # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
+            ffp_prof_tmp = self._state['ffp_prof_tmp'][i]
+            pp_prof_tmp = self._state['pp_prof_tmp'][i]
 
-            self._gs.set_profiles(ffp_prof=ffp_prof, pp_prof=pp_prof)
+            def mix_profiles(tmp, curr):
+                my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
+                for i, x in enumerate(curr['x']):
+                    my_prof['x'][i] = x
+                    my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
+
+            self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_tmp, ffp_prof), pp_prof=mix_profiles(pp_prof_tmp, pp_prof))
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs'][i] / (2.0 * np.pi)
+
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
@@ -254,13 +267,13 @@ class CGTS:
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
                 ax.plot(self._boundary[i][:, 0], self._boundary[i][:, 1], color='r')
+                ax.set_title(f'i={i}')
                 plt.show()
 
             self._gs.update_settings()
             err_flag = self._gs.solve()
 
-            if step:
-                v_loops.append(self._gs.calc_loopvoltage())
+            v_loops[i] = self._gs.calc_loopvoltage()
 
             self._gs.print_info()
             self._gs_update(i)
@@ -289,6 +302,7 @@ class CGTS:
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
         self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        self._results['vloop_tmaker'][i] = self._gs.calc_loopvoltage()
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -337,11 +351,13 @@ class CGTS:
 
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
-        myconfig['sources']['generic_heat']['P_total'] = self._nbi_heating
-        myconfig['sources']['generic_current']['I_generic'] = {x: y*_NBI_W_TO_MA for x,y in self._nbi_heating.items()}
 
-        myconfig['pedestal']['T_i_ped'] = self._T_i_ped
-        myconfig['pedestal']['T_e_ped'] = self._T_e_ped
+        nbi_times, nbi_pow = zip(*self._nbi_heating.items())
+        myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
+        myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
+
+        # myconfig['pedestal']['T_i_ped'] = self._T_i_ped
+        # myconfig['pedestal']['T_e_ped'] = self._T_e_ped
  
         torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
         return torax_config
@@ -370,7 +386,7 @@ class CGTS:
                 for i, _ in enumerate(self._times):
                     ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
                 plt.show()
-
+        
         consumed_flux = np.trapz(v_loops, self._times)
         return consumed_flux
     
@@ -382,9 +398,15 @@ class CGTS:
         '''
         t = self._times[i]
         
-        self._state['Ip'][i ] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['pax'][i] = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
+        # print(f'pax={self._state['pax'][i]}')
+        # print(f'Bp={self._state['beta_pol'][i]}')
+
+        self._state['ffp_prof_tmp'][i] = self._state['ffp_prof'][i]
+        self._state['pp_prof_tmp'][i] = self._state['pp_prof'][i]
 
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
@@ -472,6 +494,13 @@ class CGTS:
             self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest')
 
         # Update sim results
+        self._results['vloop_torax'][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
+
+        self._results['E_fusion'] = {
+            'x': list(data_tree.scalars.E_fusion.coords['time'].values),
+            'y': data_tree.scalars.E_fusion.to_numpy()
+        }
+
         self._results['Q'] = {
             'x': list(data_tree.scalars.Q_fusion.coords['time'].values),
             'y': data_tree.scalars.Q_fusion.to_numpy(),
