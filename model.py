@@ -145,6 +145,7 @@ class CGTS:
 
         self._T_i_ped = 1.0
         self._T_e_ped = 1.0
+        self._n_e_ped = 0.3
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -191,7 +192,7 @@ class CGTS:
             self._eccd_heating = eccd
             self._eccd_loc = eccd_loc
 
-    def set_pedestal(self, T_i_ped=None, T_e_ped=None):
+    def set_pedestal(self, T_i_ped=None, T_e_ped=None, n_e_ped=None):
         r'''! Set pedestals for ion and electron temperatures.
         @pararm T_i_ped Ion temperature pedestal (dictionary of temperature at times).
         @pararm T_e_ped Electron temperature pedestal (dictionary of temperature at times).
@@ -200,6 +201,8 @@ class CGTS:
             self._T_i_ped = T_i_ped
         if T_e_ped:
             self._T_e_ped = T_e_ped
+        if n_e_ped:
+            self._n_e_ped = n_e_ped
 
     def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -388,6 +391,10 @@ class CGTS:
 
         myconfig['pedestal']['T_i_ped'] = self._T_i_ped
         myconfig['pedestal']['T_e_ped'] = self._T_e_ped
+        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+
+        # Test
+        myconfig['profile_conditions']['n_e_right_bc'] = {0: 0.157E20, 80: 0.414E20}
  
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -566,6 +573,19 @@ class CGTS:
                 'x': list(n_e_prof.coords['rho_norm'].values),
                 'y': n_e_prof.to_numpy(),
             }
+
+            n_e_prof = data_tree.profiles.n_e.sel(time=85, method='nearest')
+            self._results['n_e_85s'] = {
+                'x': list(n_e_prof.coords['rho_norm'].values),
+                'y': n_e_prof.to_numpy(),
+            }
+
+            n_e_prof = data_tree.profiles.n_e.sel(time=90, method='nearest')
+            self._results['n_e_90s'] = {
+                'x': list(n_e_prof.coords['rho_norm'].values),
+                'y': n_e_prof.to_numpy(),
+            }
+
             n_i_prof = data_tree.profiles.n_i.sel(time=300, method='nearest')
             self._results['n_i_300s'] = {
                 'x': list(n_i_prof.coords['rho_norm'].values),
@@ -577,6 +597,7 @@ class CGTS:
                 'x': list(n_e_prof.coords['rho_norm'].values),
                 'y': n_e_prof.to_numpy(),
             }
+
              # Temp
             T_i_prof = data_tree.profiles.T_i.sel(time=80, method='nearest')
             self._results['T_i_80s'] = {
@@ -600,6 +621,19 @@ class CGTS:
                 'x': list(T_e_prof.coords['rho_norm'].values),
                 'y': T_e_prof.to_numpy(),
             }
+
+            # Safety Factor
+            # q_prof = data_tree.profiles.q.sel(time=80, method='nearest')
+            # self._results['q_80s'] = {
+            #     'x': list(q_prof.coords['rho_norm'].values),
+            #     'y': q_prof.to_numpy(),
+            # }
+
+            # q_prof = data_tree.profiles.q.sel(time=300, method='nearest')
+            # self._results['q_300s'] = {
+            #     'x': list(q_prof.coords['rho_norm'].values),
+            #     'y': q_prof.to_numpy(),
+            # }
 
         self._results['n_e_line_avg'] = {
             'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
