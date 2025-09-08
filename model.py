@@ -137,8 +137,14 @@ class CGTS:
         self._eccd_heating = {0: 0, t_final: 0}
         self._eccd_loc = 0.1
 
-        self._T_i_ped = {0: 0.5, t_final: 0.5}
-        self._T_e_ped = {0: 0.5, t_final: 0.5}
+        self._z_eff = None
+
+        self._n_e = None
+        self._T_i = None
+        self._T_e = None
+
+        self._T_i_ped = 1.0
+        self._T_e_ped = 1.0
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -161,6 +167,18 @@ class CGTS:
     def set_ip(self, ip):
         self._init_ip = ip
     
+    def set_density(self, n_e):
+        self._n_e = n_e
+
+    def set_Te(self, T_e):
+        self._T_e = T_e
+            
+    def set_Ti(self, T_i):
+        self._T_i = T_i
+
+    def set_z_eff(self, z_eff):
+        self._z_eff = z_eff
+
     def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
         r'''! Set heating sources for Torax.
         @param nbi NBI heating (dictionary of heating at times).
@@ -178,9 +196,9 @@ class CGTS:
         @pararm T_i_ped Ion temperature pedestal (dictionary of temperature at times).
         @pararm T_e_ped Electron temperature pedestal (dictionary of temperature at times).
         '''
-        if T_i_ped is not None:
+        if T_i_ped:
             self._T_i_ped = T_i_ped
-        if T_e_ped is not None:
+        if T_e_ped:
             self._T_e_ped = T_e_ped
 
     def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
@@ -242,7 +260,7 @@ class CGTS:
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
                 for i, x in enumerate(curr['x']):
                     my_prof['x'][i] = x
-                    my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
+                    my_prof['y'][i] = 0.05 * tmp['y'][i] + 0.95 * curr['y'][i]
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_tmp, ffp_prof), pp_prof=mix_profiles(pp_prof_tmp, pp_prof))
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
@@ -346,9 +364,21 @@ class CGTS:
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
 
-        if self._init_ip is not None and step == 0:
+        if self._init_ip and step == 0:
              myconfig['profile_conditions']['Ip'] = self._init_ip
-
+        
+        if self._n_e and step == 0:
+            myconfig['profile_conditions']['n_e'] = self._n_e
+        
+        if self._T_e and step == 0:
+            myconfig['profile_conditions']['T_e'] = self._T_e
+        
+        if self._T_i and step == 0:
+            myconfig['profile_conditions']['T_i'] = self._T_i
+        
+        if self._z_eff:
+            myconfig['plasma_composition']['Z_eff'] = self._z_eff
+        
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
 
@@ -356,10 +386,10 @@ class CGTS:
         myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
         myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
 
-        # myconfig['pedestal']['T_i_ped'] = self._T_i_ped
-        # myconfig['pedestal']['T_e_ped'] = self._T_e_ped
+        myconfig['pedestal']['T_i_ped'] = self._T_i_ped
+        myconfig['pedestal']['T_e_ped'] = self._T_e_ped
  
-        torax_config = torax.ToraxConfig.from_dict({**myconfig, **self._config_overrides})
+        torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
 
     def _run_transport(self, step, graph=False):
