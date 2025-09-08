@@ -391,10 +391,10 @@ class CGTS:
 
         myconfig['pedestal']['T_i_ped'] = self._T_i_ped
         myconfig['pedestal']['T_e_ped'] = self._T_e_ped
-        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        # myconfig['pedestal']['n_e_ped'] = self._n_e_ped
 
         # Test
-        myconfig['profile_conditions']['n_e_right_bc'] = {0: 0.157E20, 80: 0.414E20}
+        # myconfig['profile_conditions']['n_e_right_bc'] = {0: 0.157E20, 80: 0.414E20}
  
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
