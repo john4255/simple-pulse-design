@@ -34,8 +34,9 @@ nbi_powers = {k: 0.5 * v for k, v in powers.items()}
 eccd_powers = {k: 0.5 * v for k, v in powers.items()}
 
 # Set pedestals
-T_i_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5}
-T_e_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5}
+T_i_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
+T_e_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
+n_e_ped = {0: 1.0E18, 100: 1.0E18, 105: 0.717E20, 500: 0.717E20, 505: 1.0E18}
 
 # Set density profiles
 def get_data(fname, mult):
@@ -51,25 +52,12 @@ def get_data(fname, mult):
 
     return dict
 
-n_e_80s = get_data('n_e_80s.txt', 1.0E20)
-n_e_300s = get_data('n_e_300s.txt', 1.0E20)
-
-# Set temp profiles
-T_e_80s = get_data('T_e_80s.txt', 1.0)
-T_i_80s = get_data('T_i_80s.txt', 1.0)
-
-T_e_300s = get_data('T_e_300s.txt', 1.0)
-T_i_300s = get_data('T_i_300s.txt', 1.0)
-
 # Run sim
 mysim = CGTS(600, times, g_arr)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 mysim.set_ip(ip)
-# mysim.set_density({80: n_e_80s, 300: n_e_300s})
-# mysim.set_Te({80: T_e_80s, 300: T_e_300s})
-# mysim.set_Ti({80: T_i_80s, 300: T_i_300s})
 mysim.set_z_eff(1.8)
-mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35) #, eccd=eccd_powers, eccd_loc=0.35)
-mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped)
+mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
+mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 
 mysim.fly(save_states=True, graph=False)

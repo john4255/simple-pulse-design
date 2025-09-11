@@ -145,7 +145,7 @@ class CGTS:
 
         self._T_i_ped = 1.0
         self._T_e_ped = 1.0
-        self._n_e_ped = 0.3
+        self._n_e_ped = 0.7E20
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -263,7 +263,7 @@ class CGTS:
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
                 for i, x in enumerate(curr['x']):
                     my_prof['x'][i] = x
-                    my_prof['y'][i] = 0.05 * tmp['y'][i] + 0.95 * curr['y'][i]
+                    my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_tmp, ffp_prof), pp_prof=mix_profiles(pp_prof_tmp, pp_prof))
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
@@ -391,10 +391,13 @@ class CGTS:
 
         myconfig['pedestal']['T_i_ped'] = self._T_i_ped
         myconfig['pedestal']['T_e_ped'] = self._T_e_ped
-        # myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        
+        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        myconfig['pedestal']['n_e_ped_is_fGW'] = False
 
         # Test
-        # myconfig['profile_conditions']['n_e_right_bc'] = {0: 0.157E20, 80: 0.414E20}
+        myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False
+        myconfig['profile_conditions']['n_e_right_bc'] = 1.0E18
  
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config

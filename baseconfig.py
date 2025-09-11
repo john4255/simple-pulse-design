@@ -32,11 +32,11 @@ BASE_CONFIG = {
         # 'T_i_right_bc': 0.2, # T_i boundary condition
         # 'T_e': {0.0: {0.0: 6.0, 1.0: 0.2}},  # T_e initial condition
         # 'T_e_right_bc': 0.2,  # T_e boundary condition
-        # 'n_e_right_bc_is_fGW': True,
-        # 'n_e_right_bc': {0: 0.35, 100: 0.35}, # n_e boundary condition
+        # 'n_e_right_bc_is_fGW': False,
+        # 'n_e_right_bc': {0: 0.5E18, 100: 0.3585E20}, # n_e boundary condition
         # set initial condition density according to Greenwald fraction.
         'nbar': 0.85, # line average density for initial condition
-        'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
+        # 'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
         'normalize_n_e_to_nbar': True, # normalize initial n_e to nbar
         'n_e_nbar_is_fGW': True, # nbar is in units for greenwald fraction
         'initial_psi_from_j': True, # initial psi from current formula
@@ -104,7 +104,7 @@ BASE_CONFIG = {
         'set_pedestal': True,
         # 'T_i_ped': {0: 0.5, 100: 0.5, 105: 3.0},
         # 'T_e_ped': {0: 0.5, 100: 0.5, 105: 3.0},
-        'n_e_ped_is_fGW': True,
+        'n_e_ped_is_fGW': False,
         'n_e_ped': 0.85, # pedestal top n_e in units of fGW
         'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
     },
