@@ -9,7 +9,7 @@ sim_states = []
 n_steps = int(sys.argv[1])
 
 for i in range(n_steps):
-    f = 'tmp/ts_state{}.json'.format(i)
+    f = 'tmp/gs_state{}.json'.format(i)
 
     with open(f, 'r') as f:
         sim_states = np.append(sim_states, json.loads(f.read()))
@@ -17,15 +17,17 @@ for i in range(n_steps):
 
 var = sys.argv[2]
 
-fig, ax = plt.subplots(4, 5, figsize=(12,6))
+fig, ax = plt.subplots(3, 10, figsize=(12,6))
 
-for j, st in enumerate(sim_states):
-    keys = sorted(st[var].keys())
-    for i, key in enumerate(keys):
-        ax[i // 5, i % 5].set_title("i={}".format(i), weight='bold')
-        x = st[var][key]['x']
-        y = st[var][key]['y']
-        ax[i // 5, i % 5].plot(x, y, label=j)
+for st_idx, st in enumerate(sim_states):
+    for idx in range(30):
+        i = idx // 10
+        j = idx % 10
+        data = st[var]
+        x = data[str(idx)]['x']
+        y = data[str(idx)]['y']
+        ax[i][j].set_title(f'i={idx}')
+        ax[i][j].plot(x, y, label=st_idx)
 
 plt.legend()
 plt.tight_layout()
