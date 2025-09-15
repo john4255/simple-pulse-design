@@ -36,7 +36,7 @@ eccd_powers = {k: 0.5 * v for k, v in powers.items()}
 # Set pedestals
 T_i_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
 T_e_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
-n_e_ped = {0: 1.0E18, 100: 1.0E18, 105: 0.717E20, 500: 0.717E20, 505: 1.0E18}
+n_e_ped = {0: 0.2E20, 79: 0.2E20, 80: 0.4E20}
 
 # Set density profiles
 def get_data(fname, mult):
@@ -52,12 +52,18 @@ def get_data(fname, mult):
 
     return dict
 
+# Set boundary conditions
+ne_right_bc = 1.0E18
+Te_right_bc = 0.01
+Ti_right_bc = 0.01
+
 # Run sim
 mysim = CGTS(600, times, g_arr)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 mysim.set_ip(ip)
 mysim.set_z_eff(1.8)
 mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
+# mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 
 mysim.fly(save_states=True, graph=False)

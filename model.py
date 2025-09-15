@@ -146,6 +146,10 @@ class CGTS:
         self._T_i_ped = 1.0
         self._T_e_ped = 1.0
         self._n_e_ped = 0.7E20
+
+        self._Te_right_bc = 0.01
+        self._Ti_right_bc = 0.01
+        self._ne_right_bc = 1.0E18
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -179,6 +183,14 @@ class CGTS:
 
     def set_z_eff(self, z_eff):
         self._z_eff = z_eff
+    
+    def set_right_bc(self, ne_right_bc=None, Te_right_bc=None, Ti_right_bc=None):
+        if ne_right_bc:
+            self._ne_right_bc = ne_right_bc
+        if Te_right_bc:
+            self._Te_right_bc = Te_right_bc
+        if Ti_right_bc:
+            self._Ti_right_bc = Ti_right_bc
 
     def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
         r'''! Set heating sources for Torax.
@@ -392,12 +404,13 @@ class CGTS:
         myconfig['pedestal']['T_i_ped'] = self._T_i_ped
         myconfig['pedestal']['T_e_ped'] = self._T_e_ped
         
-        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
         myconfig['pedestal']['n_e_ped_is_fGW'] = False
+        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
 
-        # Test
         myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False
-        myconfig['profile_conditions']['n_e_right_bc'] = 1.0E18
+        myconfig['profile_conditions']['n_e_right_bc'] = self._ne_right_bc
+        myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
+        myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
  
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
