@@ -6,7 +6,7 @@ from model import CGTS
 
 # Set timesteps
 rampup_times = np.linspace(5.0, 80.0, 10)
-flattop_times = np.linspace(100.0, 450.0, 10)
+flattop_times = np.linspace(100.0, 450.0, 20)
 rampdown_times = np.linspace(500.0, 600.0, 10)
 times = np.r_[rampup_times, flattop_times, rampdown_times]
 
@@ -21,7 +21,7 @@ g_arr_rampup = ['ramp8/iter_i=0.eqdsk',
                 'ramp8/iter_i=7.eqdsk',
                 'ramp8/iter_i=8.eqdsk',
                 'ramp8/iter_i=9.eqdsk']
-g_arr_flattop = ['ramp8/Hmode.eqdsk'] * 10
+g_arr_flattop = ['ramp8/Hmode.eqdsk'] * 20
 g_arr_rampdown = g_arr_rampup[::-1]
 g_arr = np.r_[g_arr_rampup, g_arr_flattop, g_arr_rampdown]
 
@@ -36,7 +36,7 @@ eccd_powers = {k: 0.5 * v for k, v in powers.items()}
 # Set pedestals
 T_i_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
 T_e_ped = {0: 1.0, 80: 1.0, 85: 4.5, 500: 4.5, 505: 1.0}
-n_e_ped = {0: 0.2E20, 79: 0.2E20, 80: 0.4E20}
+n_e_ped = {0: 1.821E19, 79: 1.821E19, 80: 7.482E19}
 
 # Set density profiles
 def get_data(fname, mult):
@@ -53,9 +53,10 @@ def get_data(fname, mult):
     return dict
 
 # Set boundary conditions
-ne_right_bc = 1.0E18
-Te_right_bc = 0.01
-Ti_right_bc = 0.01
+# ne_right_bc = 1.0E18
+ne_right_bc = {0: 0.157E20, 79: 0.157E20, 80: 0.414E20}
+# Te_right_bc = 0.01
+# Ti_right_bc = 0.01
 
 # Run sim
 mysim = CGTS(600, times, g_arr)
@@ -63,7 +64,7 @@ mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 mysim.set_ip(ip)
 mysim.set_z_eff(1.8)
 mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
-# mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
+mysim.set_right_bc(ne_right_bc=ne_right_bc)
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 
 mysim.fly(save_states=True, graph=False)

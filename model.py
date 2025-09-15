@@ -270,6 +270,12 @@ class CGTS:
             pp_prof = self._state['pp_prof'][i]
             ffp_prof_tmp = self._state['ffp_prof_tmp'][i]
             pp_prof_tmp = self._state['pp_prof_tmp'][i]
+            # ffp_prof_tmp = self._state['ffp_prof'][i]
+            # pp_prof_tmp = self._state['pp_prof'][i]
+            # if i > 0:
+            #     ffp_prof_tmp = self._state['ffp_prof_tmp'][i-1]
+            #     pp_prof_tmp = self._state['pp_prof_tmp'][i-1]
+
 
             def mix_profiles(tmp, curr):
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
@@ -278,6 +284,7 @@ class CGTS:
                     my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_tmp, ffp_prof), pp_prof=mix_profiles(pp_prof_tmp, pp_prof))
+            
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
