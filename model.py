@@ -139,17 +139,22 @@ class CGTS:
 
         self._z_eff = None
 
+        self._evolve_density = True
+        self._evolve_current = True
+        self._evolve_Ti = True
+        self._evolve_Te = True
+
         self._n_e = None
         self._T_i = None
         self._T_e = None
 
         self._T_i_ped = 1.0
         self._T_e_ped = 1.0
-        self._n_e_ped = 0.7E20
+        self._n_e_ped = None
 
-        self._Te_right_bc = 0.01
-        self._Ti_right_bc = 0.01
-        self._ne_right_bc = 1.0E18
+        self._Te_right_bc = None
+        self._Ti_right_bc = None
+        self._ne_right_bc = None
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -215,6 +220,12 @@ class CGTS:
             self._T_e_ped = T_e_ped
         if n_e_ped:
             self._n_e_ped = n_e_ped
+
+    def set_evolve(self, density=True, Ti=True, Te=True, current=True):
+        self._evolve_density = density
+        self._evolve_current = current
+        self._evolve_Ti = Ti
+        self._evolve_Te = Te
 
     def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -362,10 +373,10 @@ class CGTS:
             't_initial': 0.0,
             't_final': self._t_final,  # length of simulation time in seconds
             'fixed_dt': 1.0, # fixed timestep
-            'evolve_ion_heat': True, # solve ion heat equation
-            'evolve_electron_heat': True, # solve electron heat equation
-            'evolve_current': True, # solve current equation
-            'evolve_density': True, # solve density equation
+            'evolve_ion_heat': self._evolve_Ti, # solve ion heat equation
+            'evolve_electron_heat': self._evolve_Te, # solve electron heat equation
+            'evolve_current': self._evolve_current, # solve current equation
+            'evolve_density': self._evolve_density, # solve density equation
         }
 
         myconfig['geometry'] = {
@@ -389,13 +400,13 @@ class CGTS:
         if self._init_ip and step == 0:
              myconfig['profile_conditions']['Ip'] = self._init_ip
         
-        if self._n_e and step == 0:
+        if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
-        if self._T_e and step == 0:
+        if self._T_e:
             myconfig['profile_conditions']['T_e'] = self._T_e
         
-        if self._T_i and step == 0:
+        if self._T_i:
             myconfig['profile_conditions']['T_i'] = self._T_i
         
         if self._z_eff:
@@ -408,16 +419,23 @@ class CGTS:
         myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
         myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
 
-        myconfig['pedestal']['T_i_ped'] = self._T_i_ped
-        myconfig['pedestal']['T_e_ped'] = self._T_e_ped
+        if self._T_i_ped:
+            myconfig['pedestal']['T_i_ped'] = self._T_i_ped
+        if self._T_e_ped:
+            myconfig['pedestal']['T_e_ped'] = self._T_e_ped
         
-        myconfig['pedestal']['n_e_ped_is_fGW'] = False
-        myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        if self._n_e_ped:
+            myconfig['pedestal']['n_e_ped_is_fGW'] = False
+            myconfig['pedestal']['n_e_ped'] = self._n_e_ped
 
-        myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False
-        myconfig['profile_conditions']['n_e_right_bc'] = self._ne_right_bc
-        myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
-        myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
+        if self._ne_right_bc:
+            myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False
+            myconfig['profile_conditions']['n_e_right_bc'] = self._ne_right_bc
+
+        if self._Te_right_bc:
+            myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
+        if self._Ti_right_bc:
+            myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
  
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -462,8 +480,6 @@ class CGTS:
         self._state['pax'][i] = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
-        # print(f'pax={self._state['pax'][i]}')
-        # print(f'Bp={self._state['beta_pol'][i]}')
 
         self._state['ffp_prof_tmp'][i] = self._state['ffp_prof'][i]
         self._state['pp_prof_tmp'][i] = self._state['pp_prof'][i]
@@ -514,7 +530,7 @@ class CGTS:
         t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
         n_i = data_tree.profiles.n_i.sel(time=t, method='nearest')
         n_e = data_tree.profiles.n_e.sel(time=t, method='nearest')
-        
+
         self._state['T_i'][i] = {
             'x': np.pow(t_i.coords['rho_norm'].values, 2),
             'y': t_i.to_numpy(),

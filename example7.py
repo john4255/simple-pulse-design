@@ -2,7 +2,7 @@ import numpy as np
 
 from model import CGTS
 
-# Reproduciton of Capser (2014) with density evolution
+# Exact reproduciton of Capser (2014) (no density or temperature evolution)
 
 # Set timesteps
 rampup_times = np.linspace(5.0, 80.0, 10)
@@ -52,8 +52,14 @@ def get_data(fname, mult):
 
     return dict
 
-# Set boundary conditions
-# ne_right_bc = 1.0E18
+n_e_80s = get_data('n_e_80s.txt', 1.0E20)
+n_e_300s = get_data('n_e_300s.txt', 1.0E20)
+
+T_e_80s = get_data('T_e_80s.txt', 1.0)
+T_e_300s = get_data('T_e_300s.txt', 1.0)
+T_i_80s = get_data('T_i_80s.txt', 1.0)
+T_i_300s = get_data('T_i_300s.txt', 1.0)
+
 ne_right_bc = {0: 0.157E20, 79: 0.157E20, 80: 0.414E20}
 Te_right_bc = 0.01
 Ti_right_bc = 0.01
@@ -64,7 +70,12 @@ mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 mysim.set_ip(ip)
 mysim.set_z_eff(1.8)
 mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
-mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
+mysim.set_density({0: n_e_80s, 79: n_e_80s, 80: n_e_300s, 499: n_e_300s, 500: n_e_80s})
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
+mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
+
+mysim.set_Te({0: T_e_80s, 79: T_e_80s, 80: T_e_300s })
+mysim.set_Ti({0: T_i_80s, 79: T_i_80s, 80: T_i_300s })
+mysim.set_evolve(density=False, Ti=False, Te=False)
 
 mysim.fly(save_states=True, graph=False)
