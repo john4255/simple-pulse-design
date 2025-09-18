@@ -66,5 +66,6 @@ mysim.set_z_eff(1.8)
 mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
 mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
+mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
 mysim.fly(save_states=True, graph=False)

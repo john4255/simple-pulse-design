@@ -144,6 +144,7 @@ class CGTS:
         self._evolve_Ti = True
         self._evolve_Te = True
 
+        self._nbar = None
         self._n_e = None
         self._T_i = None
         self._T_e = None
@@ -188,6 +189,9 @@ class CGTS:
 
     def set_z_eff(self, z_eff):
         self._z_eff = z_eff
+    
+    def set_nbar(self, nbar):
+        self._nbar = nbar
     
     def set_right_bc(self, ne_right_bc=None, Te_right_bc=None, Ti_right_bc=None):
         if ne_right_bc:
@@ -427,6 +431,9 @@ class CGTS:
         if self._n_e_ped:
             myconfig['pedestal']['n_e_ped_is_fGW'] = False
             myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        
+        if self._nbar:
+            myconfig['profile_conditions']['nbar'] = self._nbar
 
         if self._ne_right_bc:
             myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False

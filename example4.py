@@ -73,6 +73,7 @@ mysim.set_heating(nbi=nbi_powers, eccd=eccd_powers, eccd_loc=0.35)
 mysim.set_density({0: n_e_80s, 79: n_e_80s, 80: n_e_300s, 499: n_e_300s, 500: n_e_80s})
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
+mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
 mysim.set_Te({0: T_e_80s, 79: T_e_80s, 80: T_e_300s })
 mysim.set_Ti({0: T_i_80s, 79: T_i_80s, 80: T_i_300s })
