@@ -35,7 +35,7 @@ n_e =  {0: {0.0: 1.3, 1.0: 1.0}}
 mysim = CGTS(300, times, g_arr)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 mysim.set_ip(ip)
-mysim.set_heating(nbi=nbi_powers)
+mysim.set_heating(nbi=nbi_powers, nbi_loc=0.25)
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped)
 mysim.set_density(n_e)
 mysim.set_Te(T_e)

@@ -136,6 +136,7 @@ class CGTS:
         self._nbi_heating = {0: 0, t_final: 0}
         self._eccd_heating = {0: 0, t_final: 0}
         self._eccd_loc = 0.1
+        self._nbi_loc = 0.25
 
         self._z_eff = None
 
@@ -201,14 +202,15 @@ class CGTS:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, eccd=None, eccd_loc=None):
+    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None):
         r'''! Set heating sources for Torax.
         @param nbi NBI heating (dictionary of heating at times).
         @param eccd ECCD heating (dictionary of heating at times).
         @param eccd_loc Location of ECCD heating.
         '''
-        if nbi is not None:
+        if nbi is not None and nbi_loc is not None:
             self._nbi_heating = nbi
+            self._nbi_loc = nbi_loc
         if eccd is not None and eccd_loc is not None:
             self._eccd_heating = eccd
             self._eccd_loc = eccd_loc
@@ -421,7 +423,9 @@ class CGTS:
 
         nbi_times, nbi_pow = zip(*self._nbi_heating.items())
         myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
+        myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
         myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
+        myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
         if self._T_i_ped:
             myconfig['pedestal']['T_i_ped'] = self._T_i_ped
