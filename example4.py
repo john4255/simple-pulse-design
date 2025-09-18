@@ -3,6 +3,7 @@ import numpy as np
 from model import CGTS
 
 # Exact reproduciton of Capser (2014) (no density or temperature evolution)
+# https://iopscience.iop.org/article/10.1088/0029-5515/54/1/013005/meta
 
 # Set timesteps
 rampup_times = np.linspace(5.0, 80.0, 10)
