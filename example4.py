@@ -11,17 +11,17 @@ rampdown_times = np.linspace(500.0, 600.0, 10)
 times = np.r_[rampup_times, flattop_times, rampdown_times]
 
 # Load gEQDSK
-g_arr_rampup = ['ramp8/iter_i=0.eqdsk',
-                'ramp8/iter_i=1.eqdsk',
-                'ramp8/iter_i=2.eqdsk',
-                'ramp8/iter_i=3.eqdsk',
-                'ramp8/iter_i=4.eqdsk',
-                'ramp8/iter_i=5.eqdsk',
-                'ramp8/iter_i=6.eqdsk',
-                'ramp8/iter_i=7.eqdsk',
-                'ramp8/iter_i=8.eqdsk',
-                'ramp8/iter_i=9.eqdsk']
-g_arr_flattop = ['ramp8/Hmode.eqdsk'] * 10
+g_arr_rampup = ['eqdsk/iter_i=0.eqdsk',
+                'eqdsk/iter_i=1.eqdsk',
+                'eqdsk/iter_i=2.eqdsk',
+                'eqdsk/iter_i=3.eqdsk',
+                'eqdsk/iter_i=4.eqdsk',
+                'eqdsk/iter_i=5.eqdsk',
+                'eqdsk/iter_i=6.eqdsk',
+                'eqdsk/iter_i=7.eqdsk',
+                'eqdsk/iter_i=8.eqdsk',
+                'eqdsk/iter_i=9.eqdsk']
+g_arr_flattop = ['eqdsk/Hmode.eqdsk'] * 10
 g_arr_rampdown = g_arr_rampup[::-1]
 g_arr = np.r_[g_arr_rampup, g_arr_flattop, g_arr_rampdown]
 
