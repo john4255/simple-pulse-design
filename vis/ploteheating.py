@@ -20,7 +20,7 @@ ax[0,0].grid(True)
 ax[0,0].legend(fontsize=5, loc='upper right')
 
 ax[1,0].set_title('Q (Dimensionless)')
-ax[1,0].plot(res['Q']['x'], res['Q']['y'], label='Q')
+ax[1,0].plot(res['Q']['x'][5:], res['Q']['y'][5:], label='Q')
 ax[1,0].set_yticks([0, 10, 20, 30, 40, 50])
 ax[1,0].grid(True)
 

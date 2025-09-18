@@ -35,14 +35,17 @@ ne_flattop_sim = state['n_e']['10']
 fig, ax = plt.subplots(1,2)
 
 ax[0].set_title('Rampup')
-ax[0].plot(ne_rampup_casp[0], ne_rampup_casp[1], color='r', label='Casper')
-ax[0].plot(np.sqrt(ne_rampup_sim['x']), ne_rampup_sim['y'], color='g', label='Tokamaker-Torax')
+ax[0].plot(ne_rampup_casp[0], ne_rampup_casp[1], color='magenta', label='Casper')
+ax[0].plot(np.sqrt(ne_rampup_sim['x']), ne_rampup_sim['y'], color='lime', label='Tokamaker-Torax')
 ax[0].scatter(0.95, ne_rampup_ped, c='blue', label='Pedestal')
 
 ax[1].set_title('Flattop')
-ax[1].plot(ne_flattop_casp[0], ne_flattop_casp[1], color='r', label='Casper')
-ax[1].plot(np.sqrt(ne_flattop_sim['x']), ne_flattop_sim['y'], color='g', label='Tokamaker-Torax')
+ax[1].plot(ne_flattop_casp[0], ne_flattop_casp[1], color='magenta', label='Casper')
+ax[1].plot(np.sqrt(ne_flattop_sim['x']), ne_flattop_sim['y'], color='lime', label='Tokamaker-Torax')
 ax[1].scatter(0.95, ne_flattop_ped, c='blue', label='Pedestal')
+
+print(np.mean(list(ne_rampup_casp[1])))
+print(np.mean(list(ne_flattop_casp[1])))
 
 plt.legend()
 plt.show()
