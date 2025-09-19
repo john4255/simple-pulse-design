@@ -3,6 +3,7 @@
 Simple pulse design algorithm using [TokaMaker](https://github.com/OpenFUSIONToolkit/OpenFUSIONToolkit) and [Torax](https://github.com/google-deepmind/torax).
 
 To install:
+
 `python -m venv env`
 
 `source env/bin/activate`
@@ -12,6 +13,7 @@ To install:
 Then clone and install [OpenFUSIONTookit](https://github.com/OpenFUSIONToolkit/OpenFUSIONToolkit) using instructions in the OFT documentation.
 
 To run e.g. example 3:
+
 `mkdir tmp`
 
 `python example3.py`
