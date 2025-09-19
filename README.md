@@ -1,3 +1,5 @@
+# Pulse Design
+
 Simple pulse design algorithm using [TokaMaker](https://github.com/OpenFUSIONToolkit/OpenFUSIONToolkit) and [Torax](https://github.com/google-deepmind/torax).
 
 To install:
