@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import make_smoothing_spline
+import scipy.io as sio
+from scipy.interpolate import make_smoothing_spline, interp1d
 import torax
 import copy
 import json
@@ -10,7 +11,7 @@ import shutil
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
+from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_isoflux
 
 from baseconfig import BASE_CONFIG
 
@@ -28,7 +29,7 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_final, times, g_eqdsk_arr, config_overrides={}):
+    def __init__(self, t_final, times, g_eqdsk_arr, dt=1, config_overrides={}):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_final Total length of simulation (in seconds).
         @param times Time points of each gEQDSK file.
@@ -44,6 +45,7 @@ class CGTS:
         self._init_files = g_eqdsk_arr
         self._init_ip = None
         self._t_final = t_final
+        self._dt = dt
 
         self._config_overrides = config_overrides
 
@@ -74,6 +76,7 @@ class CGTS:
         self._state['n_e'] = {}
         self._state['n_i'] = {}
         self._state['Ptot'] = {}
+        # self._state['psi'] = {}
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -112,6 +115,7 @@ class CGTS:
             self._state['pax'][i] = g['pres'][0]
             self._state['q95'][i] = np.percentile(g['qpsi'], 95)
             self._state['Ip'][i] = abs(g['ip'])
+            self._state['psi_axis'][i] = abs(g['psimag'])
             self._state['psi_lcfs'][i] = abs(g['psibry'])
 
             # Default Profiles
@@ -121,6 +125,7 @@ class CGTS:
             pp_prof = np.interp(psi_sample, psi_eqdsk, g['pprime'])
             self._state['ffp_prof'][i] = {'x': psi_sample, 'y': ffp_prof, 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': psi_sample, 'y': pp_prof, 'type': 'linterp'}
+            # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
 
             # Normalize profiles
             self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
@@ -151,13 +156,15 @@ class CGTS:
         self._T_i = None
         self._T_e = None
 
-        self._T_i_ped = 1.0
-        self._T_e_ped = 1.0
+        self._T_i_ped = None
+        self._T_e_ped = None
         self._n_e_ped = None
 
         self._Te_right_bc = None
         self._Ti_right_bc = None
         self._ne_right_bc = None
+
+        self._targets = None
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -167,7 +174,7 @@ class CGTS:
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh(mesh)
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
-        self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
+        self._gs.setup(order = 2, F0 = 3)
 
         self._gs.settings.maxits = 500
 
@@ -175,7 +182,7 @@ class CGTS:
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
-        self._set_coil_reg(targets, weights=weights, weight_mult=0.1)
+        # self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
     def set_ip(self, ip):
         self._init_ip = ip
@@ -233,8 +240,16 @@ class CGTS:
         self._evolve_current = current
         self._evolve_Ti = Ti
         self._evolve_Te = Te
+    
+    def set_Bp(self, Bp):
+        for i in range(len(self._times)):
+            self._state['beta_pol'][i] = Bp[i]
 
-    def _set_coil_reg(self, targets, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
+    def set_Vloop(self, vloop):
+        for i in range(len(self._times)):
+            self._state['vloop'][i] = vloop[i]
+
+    def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
         @param weights Default weight for each coil.
@@ -243,28 +258,66 @@ class CGTS:
         @param weight_mult Factor by which to multiply target weights (reduce to allow for more flexibility).
         '''
         # Set regularization weights
-        coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
+        # coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
+        # self._gs.set_coil_bounds(coil_bounds)
+
+        coil_bounds = {key: [-1e8, 1e8] for key in self._gs.coil_sets}
+        for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
+            coil_bounds[key] = [0, 0] # turn off div coils, for now
         self._gs.set_coil_bounds(coil_bounds)
 
-        regularization_terms = []
-        if weights is None:
-            weights = {}
-            for name, coil in self._gs.coil_sets.items():
-                if name.startswith('CS'):
-                    weights[name] = 2.0E-2
-                else:
-                    weights[name] = 1.0E-2
+        if self._targets is None:
+            self._targets = targets
 
-        for name, coil in self._gs.coil_sets.items():
-            regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=weights[name] * weight_mult))
+        # regularization_terms = []
+        # if weights is None:
+        #     weights = {}
+        #     for name, coil in self._gs.coil_sets.items():
+        #         if name.startswith('CS'):
+        #             weights[name] = 2.0E-2
+        #         else:
+        #             weights[name] = 1.0E-2
 
-        # Disable VSC virtual coil
-        if disable_virtual_vsc:
-            regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
+        # for name, coil in self._gs.coil_sets.items():
+        #     regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=weights[name] * weight_mult))
+
+        # # Disable VSC virtual coil
+        # if disable_virtual_vsc:
+        #     regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
         
+        # # Pass regularization terms to TokaMaker
+        # self._gs.set_coil_reg(reg_terms=regularization_terms)
+        # self._gs.update_settings()
+
+        coil_mirrors = {}
+        coil_names = targets.keys()
+        for name in coil_names:
+            if 'U' in name:
+                coil_mirrors[name] = name.replace('U','L')
+
+        regularization_terms = []
+        
+        weight_factor = 1.0
+        for name, coil in self._gs.coil_sets.items():
+            if updownsym and name.find('L') >= 0: # We will set everything for upper coils
+                continue
+            if 'DIV' in name:
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E4))
+                continue
+            if 'PF' in name:
+                #target = 0
+                weight = 1.E-5
+            else:
+                weight = 1.E-1*weight_factor
+            
+            # Targets for normal coils and their mirror
+            target = np.interp(t, self._targets['time'], self._targets[name])
+            regularization_terms.append(self._gs.coil_reg_term({name: 1.0}, target=target, weight=weight))
+            if updownsym:
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0, name.replace('U','L'): -1.0}, target=0.0, weight=1.E1))
+
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
-        self._gs.update_settings()
 
     def _run_gs(self, step, graph=False):
         r'''! Run the GS solve across n timesteps using TokaMaker.
@@ -272,14 +325,17 @@ class CGTS:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
-        for i, _ in enumerate(self._times):
+        for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
             Ip_target = abs(self._state['Ip'][i])
             # P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
-            self._gs.set_targets(Ip=Ip_target, Ip_ratio = 0.05)
+            Ip_ratio = 0.05
+            if self._state['beta_pol'][i] != 0:
+                Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
+            self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
             # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
@@ -300,7 +356,7 @@ class CGTS:
                     my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_save, ffp_prof), pp_prof=mix_profiles(pp_prof_save, pp_prof))
-            
+
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
@@ -308,6 +364,18 @@ class CGTS:
             lcfs_psi_target = self._state['psi_lcfs'][i]
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+
+            # isoflux_pts = create_isoflux(20,
+            #                              self._state['R'][i],
+            #                              self._state['Z'][i],
+            #                              self._state['a'][i],
+            #                              self._state['kappa'][i],
+            #                              self._state['delta'][i])
+            # # x_points = np.zeros((2,2))
+            # x_points[0,:] = isoflux_pts[np.argmin(isoflux_pts[:,1]),:]
+            # x_points[1,:] = isoflux_pts[np.argmax(isoflux_pts[:,1]),:]
+            # x_weights = 1.E3*np.ones(2)
+            # self._gs.set_saddles(x_points, x_weights)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
                                          self._state['Z'][i],
@@ -333,15 +401,16 @@ class CGTS:
             self._gs.print_info()
             self._gs_update(i)
 
-            if i:
-                # Compute loop voltage
-                dt = self._times[i] - self._times[i-1]
-                dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
-                self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
+            # if i:
+            #     # Compute loop voltage
+            #     dt = self._times[i] - self._times[i-1]
+            #     dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
+            #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
             coils, _ = self._gs.get_coil_currents()
-            self._set_coil_reg(coils, weight_mult=0.1)
+            coil_targets = {**self._targets, **coils}
+            self.set_coil_reg(targets = coil_targets)
 
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         return consumed_flux
@@ -361,7 +430,7 @@ class CGTS:
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
-        self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        # self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -380,7 +449,7 @@ class CGTS:
         myconfig['numerics'] = {
             't_initial': 0.0,
             't_final': self._t_final,  # length of simulation time in seconds
-            'fixed_dt': 1.0, # fixed timestep
+            'fixed_dt': self._dt, # fixed timestep
             'evolve_ion_heat': self._evolve_Ti, # solve ion heat equation
             'evolve_electron_heat': self._evolve_Te, # solve electron heat equation
             'evolve_current': self._evolve_current, # solve current equation
@@ -390,11 +459,12 @@ class CGTS:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.90,  # TODO: tweak
+            'last_surface_factor': 0.95,  # TODO: tweak
+            # 'n_surfaces': 10,
             'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._times)
-            }
+            },
         }
         if step:
             myconfig['geometry']['geometry_configs'] = {
@@ -404,22 +474,29 @@ class CGTS:
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
+        myconfig['profile_conditions']['psi'] = {
+            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+        }
 
         # myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
         # myconfig['profile_conditions']['v_loop_lcfs'] = {
         #     t: self._state['vloop'][i] for i, t in enumerate(self._times)
         # }
 
+        # myconfig['profile_conditions']['psi'] = {
+        #     t: {np.sqrt(x / np.max(np.abs(self._state['psi'][i]))): x for x in self._state['psi'][i]} for i, t in enumerate(self._times)
+        # }
+
         if self._init_ip and step == 0:
              myconfig['profile_conditions']['Ip'] = self._init_ip
         
-        if self._n_e:
+        if self._n_e and step == 0:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
-        if self._T_e:
+        if self._T_e and step == 0:
             myconfig['profile_conditions']['T_e'] = self._T_e
         
-        if self._T_i:
+        if self._T_i and step == 0:
             myconfig['profile_conditions']['T_i'] = self._T_i
         
         if self._z_eff:
@@ -455,6 +532,7 @@ class CGTS:
         if self._Ti_right_bc:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
  
+        # print(myconfig)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
 
@@ -466,6 +544,7 @@ class CGTS:
         '''
         myconfig = self._get_torax_config(step)
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
+
         if hist.sim_error != torax.SimError.NO_ERROR:
             print(hist.sim_error)
             raise ValueError(f'TORAX failed to run the simulation.')
@@ -474,7 +553,7 @@ class CGTS:
         for i, t in enumerate(self._times):
             self._transport_update(step, i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') / (2.0 * np.pi)
-            self._state[''] = v_loops[i]
+            # self._state[''] = v_loops[i]
         
         if graph:
             for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
@@ -595,7 +674,7 @@ class CGTS:
         self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest') / (2.0 * np.pi)
 
         # Update sim results
-        self._results['vloop_torax'][step][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
+        # self._results['vloop_torax'][step][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
@@ -819,7 +898,7 @@ class CGTS:
         with open('tmp/res.json', 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=0.0E-5, save_states=False, graph=False, max_step=20):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=50):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
