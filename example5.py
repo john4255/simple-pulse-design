@@ -19,7 +19,7 @@ eq_times = np.array([float(eq['ttt']) for eq in psi_dist['a_equ']]) / 1e3
 
 tstep = np.arange(0.16, 5.06, 0.1)
 tstep = [np.round(t, 2) for t in tstep]
-eqdsk = [f'nsf_eq_2/TokaMaker_{t}.eqdsk' for t in tstep]
+eqdsk = [f'pulse_abs/TokaMaker_{t}.eqdsk' for t in tstep]
 
 mysim = CGTS(5.0, tstep, eqdsk, dt=1.0E-2)
 mysim.initialize_gs('nextstep/nextstep_mesh.h5')
@@ -91,13 +91,13 @@ mysim.set_Te(T_e)
 mysim.set_Ti(T_i)
 
 # Set pedestal
-T_i_ped = {time: np.interp(0.95, psi, [T_i[time][x] for x in rho]) for time in T_i.keys()}
-T_e_ped = {time: np.interp(0.95, psi, [T_e[time][x] for x in rho]) for time in T_e.keys()}
-n_e_ped = {time: np.interp(0.95, psi, [n_e[time][x] for x in rho]) for time in n_e.keys()}
+T_i_ped = {time: np.interp(0.95, rho, [T_i[time][x] for x in rho]) for time in T_i.keys()}
+T_e_ped = {time: np.interp(0.95, rho, [T_e[time][x] for x in rho]) for time in T_e.keys()}
+n_e_ped = {time: np.interp(0.95, rho, [n_e[time][x] for x in rho]) for time in n_e.keys()}
 
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 
-mysim.set_evolve(density=False,Te=False,Ti=False)
+# mysim.set_evolve(density=False,Te=False,Ti=False)
 
 # Function to load and reorganize .mat files into Python dictionaries
 def load_mat_as_dict(filepath):
@@ -149,33 +149,6 @@ coil_targets['time'] = data_currents['t_fc'] / 1e3
 for coil_name in coil_names:
     coil_targets[coil_name] = data_currents['fc'][:,coil_map[coil_name]-1] * 1e3
 mysim.set_coil_reg(coil_targets, t=tstep[0])
-
-# print('time')
-# print(times[0])
-# print('Ip')
-# print(Ip[times[0]])
-# print('nbar')
-# print(nbar[times[0]])
-# print('eccd')
-# print(eccd[times[0]])
-
-# print('n_e 0')
-# print(n_e[times[0]][0])
-# print('T_e 0')
-# print(T_e[times[0]][0])
-# print('T_i 0')
-# print(T_i[times[0]][0])
-
-# print('n_e bc')
-# print(n_e[times[0]][psi[-1]])
-# print('T_e bc')
-# print(T_e[times[0]][psi[-1]])
-# print('T_i bc')
-# print(T_i[times[0]][psi[-1]])
-
-# Ip = {t: curr + 1000 for t, curr in Ip.items()}
-# plt.plot(tstep, [Ip[t] for t in tstep])
-# plt.show()
 
 # Run the simulation
 mysim.fly(graph=False, save_states=True)
