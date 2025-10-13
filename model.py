@@ -174,17 +174,15 @@ class CGTS:
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh(mesh)
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
-        self._gs.setup(order = 2, F0 = 3)
+        self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
         self._gs.settings.maxits = 500
-
-        targets = {coil_name: 0.0 for coil_name in self._gs.coil_sets}
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
         # self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
-    def set_ip(self, ip):
+    def set_Ip(self, ip):
         self._init_ip = ip
     
     def set_density(self, n_e):
@@ -196,7 +194,7 @@ class CGTS:
     def set_Ti(self, T_i):
         self._T_i = T_i
 
-    def set_z_eff(self, z_eff):
+    def set_Zeff(self, z_eff):
         self._z_eff = z_eff
     
     def set_nbar(self, nbar):
@@ -261,7 +259,7 @@ class CGTS:
         # coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
         # self._gs.set_coil_bounds(coil_bounds)
 
-        coil_bounds = {key: [-1e8, 1e8] for key in self._gs.coil_sets}
+        coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
         for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
             coil_bounds[key] = [0, 0] # turn off div coils, for now
         self._gs.set_coil_bounds(coil_bounds)
@@ -288,9 +286,9 @@ class CGTS:
         # # Pass regularization terms to TokaMaker
         # self._gs.set_coil_reg(reg_terms=regularization_terms)
         # self._gs.update_settings()
-
+        
         coil_mirrors = {}
-        coil_names = targets.keys()
+        coil_names = self._targets.keys()
         for name in coil_names:
             if 'U' in name:
                 coil_mirrors[name] = name.replace('U','L')
@@ -408,9 +406,9 @@ class CGTS:
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
-            coils, _ = self._gs.get_coil_currents()
-            coil_targets = {**self._targets, **coils}
-            self.set_coil_reg(targets = coil_targets)
+            # coil_targets, _ = self._gs.get_coil_currents()
+            # coil_targets = {**self._targets, **coil_targets}
+            self.set_coil_reg(t=t)
 
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         return consumed_flux
@@ -424,6 +422,24 @@ class CGTS:
 
         self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
         self._state['psi_axis'][i] = self._gs.psi_bounds[1]
+
+        # lcfs = self._boundary[i]
+        # # print(lcfs[0])
+        # psi_eval = self._gs.get_field_eval('PSI')
+        # psi_lcfs = psi_eval.eval(lcfs[0])
+        # self._state['psi_lcfs'][i] = psi_lcfs[0]
+        # print(psi_lcfs)
+
+        psi = self._gs.get_psi(normalized=False)
+        # print('psi shape')
+        # print(psi.shape)
+        # plt.plot(psi)
+        # plt.show()
+
+        # psi_norm = np.linspace(0.0, 1.0, len(psi))
+        # psi_lcfs = np.interp(0.95, psi_norm, psi)
+        # print('hello world')
+        # print(psi_lcfs)
 
         if 'psi_lcfs_tmaker' not in self._results:
             self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
@@ -479,9 +495,9 @@ class CGTS:
         }
 
         # myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
-        # myconfig['profile_conditions']['v_loop_lcfs'] = {
-        #     t: self._state['vloop'][i] for i, t in enumerate(self._times)
-        # }
+        myconfig['profile_conditions']['v_loop_lcfs'] = {
+            t: self._state['vloop'][i] for i, t in enumerate(self._times)
+        }
 
         # myconfig['profile_conditions']['psi'] = {
         #     t: {np.sqrt(x / np.max(np.abs(self._state['psi'][i]))): x for x in self._state['psi'][i]} for i, t in enumerate(self._times)

@@ -31,13 +31,14 @@ f.close()
 
 zerod_sim = np.array(zerod['simul_m'])
 zerod_times = np.array([float(t) for t in zerod['time']]) / 1e3
+
 Ip_values = zerod_sim[:, 0] * 1e3
 Ip = {zerod_times[i]: Ip for i, Ip in enumerate(Ip_values)}
-mysim.set_ip(Ip)
+mysim.set_Ip(Ip)
 
-z_eff_values = zerod_sim[:, 9]
-z_eff = {zerod_times[i]: {0: zeff, 1: zeff} for i, zeff in enumerate(z_eff_values)}
-mysim.set_z_eff(z_eff)
+zeff_values = zerod_sim[:, 9]
+zeff = {zerod_times[i]: {0: zeff, 1: zeff} for i, zeff in enumerate(zeff_values)}
+mysim.set_Zeff(zeff)
 
 nbar_values = zerod_sim[:, 8] * 1e20
 nbar = {zerod_times[i]: nb for i, nb in enumerate(nbar_values)}
@@ -57,7 +58,7 @@ def boxcar_smooth(data, window_size):
     smoothed_data = np.convolve(data, window, mode='same')
     return smoothed_data
 
-vloop_values = boxcar_smooth(zerod_sim[:,12],100)
+vloop_values = boxcar_smooth(zerod_sim[:,12], 100)
 vloop = {zerod_times[i]: v for i, v in enumerate(vloop_values)}
 vloop_arr = [np.interp(t, zerod_times, vloop_values) for t in tstep]
 mysim.set_Vloop(vloop_arr)
@@ -148,7 +149,8 @@ coil_names = coil_map.keys()
 coil_targets['time'] = data_currents['t_fc'] / 1e3
 for coil_name in coil_names:
     coil_targets[coil_name] = data_currents['fc'][:,coil_map[coil_name]-1] * 1e3
-mysim.set_coil_reg(coil_targets, t=tstep[0])
+    # coil_targets[coil_name] = 0.0
+mysim.set_coil_reg(coil_targets, t=tstep[0], strict_limit=1.0E8)
 
 # Run the simulation
 mysim.fly(graph=False, save_states=True)
