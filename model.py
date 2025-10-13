@@ -143,6 +143,7 @@ class CGTS:
         self._eccd_heating = {0: 0, t_final: 0}
         self._eccd_loc = 0.1
         self._nbi_loc = 0.25
+        self._ohmic_power = None
 
         self._z_eff = None
 
@@ -208,7 +209,7 @@ class CGTS:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None):
+    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None):
         r'''! Set heating sources for Torax.
         @param nbi NBI heating (dictionary of heating at times).
         @param eccd ECCD heating (dictionary of heating at times).
@@ -220,6 +221,8 @@ class CGTS:
         if eccd is not None and eccd_loc is not None:
             self._eccd_heating = eccd
             self._eccd_loc = eccd_loc
+        if ohmic is not None:
+            self._ohmic_power = ohmic
 
     def set_pedestal(self, T_i_ped=None, T_e_ped=None, n_e_ped=None):
         r'''! Set pedestals for ion and electron temperatures.
@@ -246,7 +249,6 @@ class CGTS:
     def set_Vloop(self, vloop):
         for i in range(len(self._times)):
             self._state['vloop'][i] = vloop[i]
-
     def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
@@ -520,6 +522,10 @@ class CGTS:
         
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
+
+        if self._ohmic_power is not None:
+            myconfig['sources']['ohmic']['mode'] = 'PRESCRIBED'
+            myconfig['sources']['ohmic']['prescribed_values'] = self._ohmic_power
 
         nbi_times, nbi_pow = zip(*self._nbi_heating.items())
         myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)

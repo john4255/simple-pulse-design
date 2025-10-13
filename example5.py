@@ -46,7 +46,9 @@ mysim.set_nbar(nbar)
 
 P_ecrh_values = zerod_sim[:, 21] * 1e6
 eccd = {zerod_times[i]: heating for i, heating in enumerate(P_ecrh_values)}
-mysim.set_heating(eccd=eccd, eccd_loc=0.3)
+ohmic_values = zerod_sim[:, 22]
+ohmic = {zerod_times[i]: ohmic for i, ohmic in enumerate(ohmic_values)}
+mysim.set_heating(eccd=eccd, eccd_loc=0.3, ohmic=ohmic)
 
 Bp_values = zerod_sim[:, 1]
 Bp = {zerod_times[i]: bp for i, bp in enumerate(Bp_values)}
