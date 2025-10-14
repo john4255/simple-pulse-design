@@ -47,8 +47,13 @@ mysim.set_nbar(nbar)
 P_ecrh_values = zerod_sim[:, 21] * 1e6
 eccd = {zerod_times[i]: heating for i, heating in enumerate(P_ecrh_values)}
 ohmic_values = zerod_sim[:, 22]
-ohmic = {zerod_times[i]: ohmic for i, ohmic in enumerate(ohmic_values)}
-mysim.set_heating(eccd=eccd, eccd_loc=0.3, ohmic=ohmic)
+# rhon = np.linspace(0.0, 1.0, 100)
+# ohmic = np.zeros([len(zerod_times), len(rhon)])
+# for i in range(len(zerod_times)):
+#     for j in range(len(rhon)):
+#         ohmic[i][j] = ohmic_values[i]
+# ohmic = {t: {0.0: ohmic_values[i], 1.0: ohmic_values[i]} for i, t in enumerate(zerod_times)}
+mysim.set_heating(eccd=eccd, eccd_loc=0.3)
 
 Bp_values = zerod_sim[:, 1]
 Bp = {zerod_times[i]: bp for i, bp in enumerate(Bp_values)}
@@ -81,11 +86,12 @@ for n, prof in enumerate(profiles['te']):
 for n, prof in enumerate(profiles['ti']):
     T_i[n] = prof
 for n, t in enumerate(profiles['t']):
-    prof_t[n] = t
+    prof_t[n] = t / 1e3
 
 psi = np.linspace(0.0, 1.0, len(n_e[0]))
 rho = [np.sqrt(p) for p in psi]
 n_e = {prof_t[i]: {rho[j]: n_e[i][j] * 1e20 for j in range(len(rho))} for i in n_e.keys()}
+
 mysim.set_density(n_e)
 
 T_e = {prof_t[i]: {rho[j]: T_e[i][j] / 1e3 for j in range(len(rho))} for i in T_e.keys()}
@@ -100,7 +106,13 @@ n_e_ped = {time: np.interp(0.95, rho, [n_e[time][x] for x in rho]) for time in n
 
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 
-# mysim.set_evolve(density=False,Te=False,Ti=False)
+# Set edge conditions
+ne_right_bc = {t: n_e[t][rho[-1]] for t in n_e.keys()}
+Te_right_bc = {t: T_e[t][rho[-1]] for t in T_e.keys()}
+Ti_right_bc = {t: T_i[t][rho[-1]] for t in T_i.keys()}
+mysim.set_right_bc(ne_right_bc=ne_right_bc, Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc)
+
+# mysim.set_evolve(density=False)
 
 # Function to load and reorganize .mat files into Python dictionaries
 def load_mat_as_dict(filepath):

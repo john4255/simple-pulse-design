@@ -249,6 +249,7 @@ class CGTS:
     def set_Vloop(self, vloop):
         for i in range(len(self._times)):
             self._state['vloop'][i] = vloop[i]
+            
     def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
@@ -391,7 +392,8 @@ class CGTS:
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
                 ax.plot(self._boundary[i][:, 0], self._boundary[i][:, 1], color='r')
-                ax.set_title(f'i={i}')
+                # ax.set_title(f'i={i}')
+                ax.set_title(f't={self._times[i]}')
                 plt.savefig(f'rampdown_{i}.png')
                 plt.show()
 
@@ -425,24 +427,6 @@ class CGTS:
         self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
         self._state['psi_axis'][i] = self._gs.psi_bounds[1]
 
-        # lcfs = self._boundary[i]
-        # # print(lcfs[0])
-        # psi_eval = self._gs.get_field_eval('PSI')
-        # psi_lcfs = psi_eval.eval(lcfs[0])
-        # self._state['psi_lcfs'][i] = psi_lcfs[0]
-        # print(psi_lcfs)
-
-        psi = self._gs.get_psi(normalized=False)
-        # print('psi shape')
-        # print(psi.shape)
-        # plt.plot(psi)
-        # plt.show()
-
-        # psi_norm = np.linspace(0.0, 1.0, len(psi))
-        # psi_lcfs = np.interp(0.95, psi_norm, psi)
-        # print('hello world')
-        # print(psi_lcfs)
-
         if 'psi_lcfs_tmaker' not in self._results:
             self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
@@ -465,7 +449,7 @@ class CGTS:
         myconfig = copy.deepcopy(BASE_CONFIG)
 
         myconfig['numerics'] = {
-            't_initial': 0.0,
+            't_initial': self._times[0],
             't_final': self._t_final,  # length of simulation time in seconds
             'fixed_dt': self._dt, # fixed timestep
             'evolve_ion_heat': self._evolve_Ti, # solve ion heat equation
@@ -495,15 +479,6 @@ class CGTS:
         myconfig['profile_conditions']['psi'] = {
             t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
         }
-
-        # myconfig['profile_conditions']['use_v_loop_lcfs_boundary_condition'] = True
-        myconfig['profile_conditions']['v_loop_lcfs'] = {
-            t: self._state['vloop'][i] for i, t in enumerate(self._times)
-        }
-
-        # myconfig['profile_conditions']['psi'] = {
-        #     t: {np.sqrt(x / np.max(np.abs(self._state['psi'][i]))): x for x in self._state['psi'][i]} for i, t in enumerate(self._times)
-        # }
 
         if self._init_ip and step == 0:
              myconfig['profile_conditions']['Ip'] = self._init_ip
@@ -555,6 +530,8 @@ class CGTS:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
  
         # print(myconfig)
+        with open('torax_config.json', 'w') as json_file:
+            json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
 
