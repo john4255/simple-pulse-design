@@ -29,7 +29,7 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_final, times, g_eqdsk_arr, dt=1, config_overrides={}):
+    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, config_overrides={}):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_final Total length of simulation (in seconds).
         @param times Time points of each gEQDSK file.
@@ -44,6 +44,7 @@ class CGTS:
         self._results = {}
         self._init_files = g_eqdsk_arr
         self._init_ip = None
+        self._t_init = t_init
         self._t_final = t_final
         self._dt = dt
 
@@ -82,6 +83,10 @@ class CGTS:
         self._results['dpsi_lcfs_dt'] = {}
         self._results['vloop_tmaker'] = np.zeros([20, len(times)])
         self._results['vloop_torax'] = np.zeros([20, len(times)])
+        self._results['q'] = {}
+        self._results['jtot'] = {}
+        self._results['T_e'] = {}
+        self._results['T_i'] = {}
 
         for i, _ in enumerate(times):
             # Calculate geometry
@@ -139,8 +144,8 @@ class CGTS:
                 'type': 'linterp',
             }
         
-        self._nbi_heating = {0: 0, t_final: 0}
-        self._eccd_heating = {0: 0, t_final: 0}
+        self._nbi_heating = {t_init: 0, t_final: 0}
+        self._eccd_heating = {t_init: 0, t_final: 0}
         self._eccd_loc = 0.1
         self._nbi_loc = 0.25
         self._ohmic_power = None
@@ -263,8 +268,8 @@ class CGTS:
         # self._gs.set_coil_bounds(coil_bounds)
 
         coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
-        for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
-            coil_bounds[key] = [0, 0] # turn off div coils, for now
+        # for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
+        #     coil_bounds[key] = [0, 0] # turn off div coils, for now
         self._gs.set_coil_bounds(coil_bounds)
 
         if self._targets is None:
@@ -290,32 +295,43 @@ class CGTS:
         # self._gs.set_coil_reg(reg_terms=regularization_terms)
         # self._gs.update_settings()
         
-        coil_mirrors = {}
-        coil_names = self._targets.keys()
-        for name in coil_names:
-            if 'U' in name:
-                coil_mirrors[name] = name.replace('U','L')
+        # coil_mirrors = {}
+        # coil_names = self._targets.keys()
+        # for name in coil_names:
+        #     if 'U' in name:
+        #         coil_mirrors[name] = name.replace('U','L')
+
+        # regularization_terms = []
+        
+        # weight_factor = 1.0
+        # for name, coil in self._gs.coil_sets.items():
+        #     if updownsym and name.find('L') >= 0: # We will set everything for upper coils
+        #         continue
+        #     if 'DIV' in name:
+        #         regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E4))
+        #         continue
+        #     if 'PF' in name:
+        #         #target = 0
+        #         weight = 1.E-5
+        #     else:
+        #         weight = 1.E-1*weight_factor
+            
+        #     # Targets for normal coils and their mirror
+        #     target = np.interp(t, self._targets['time'], self._targets[name])
+        #     regularization_terms.append(self._gs.coil_reg_term({name: 1.0}, target=target, weight=weight))
+        #     if updownsym:
+        #         regularization_terms.append(self._gs.coil_reg_term({name: 1.0, name.replace('U','L'): -1.0}, target=0.0, weight=1.E1))
 
         regularization_terms = []
-        
-        weight_factor = 1.0
-        for name, coil in self._gs.coil_sets.items():
-            if updownsym and name.find('L') >= 0: # We will set everything for upper coils
-                continue
-            if 'DIV' in name:
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E4))
-                continue
-            if 'PF' in name:
-                #target = 0
-                weight = 1.E-5
-            else:
-                weight = 1.E-1*weight_factor
-            
-            # Targets for normal coils and their mirror
-            target = np.interp(t, self._targets['time'], self._targets[name])
-            regularization_terms.append(self._gs.coil_reg_term({name: 1.0}, target=target, weight=weight))
-            if updownsym:
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0, name.replace('U','L'): -1.0}, target=0.0, weight=1.E1))
+        for name, target_current in targets.items():
+            # Set specific target currents from input equilibrium and different weights depending on the coil set
+            if name.startswith('ECOIL'):
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
+            elif name.startswith('F'):
+                if name.startswith('F5'):
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
+                else:
+                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
 
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
@@ -410,11 +426,12 @@ class CGTS:
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
-            # coil_targets, _ = self._gs.get_coil_currents()
+            coil_targets, _ = self._gs.get_coil_currents()
             # coil_targets = {**self._targets, **coil_targets}
-            self.set_coil_reg(t=t)
+            self.set_coil_reg(targets=coil_targets)
 
-        consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
+        # consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
+        consumed_flux = np.trapezoid(self._times, self._state['vloop'])
         return consumed_flux
         
     def _gs_update(self, i):
@@ -432,7 +449,7 @@ class CGTS:
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
-        # self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -449,7 +466,7 @@ class CGTS:
         myconfig = copy.deepcopy(BASE_CONFIG)
 
         myconfig['numerics'] = {
-            't_initial': self._times[0],
+            't_initial': self._t_init,
             't_final': self._t_final,  # length of simulation time in seconds
             'fixed_dt': self._dt, # fixed timestep
             'evolve_ion_heat': self._evolve_Ti, # solve ion heat equation
@@ -480,16 +497,16 @@ class CGTS:
             t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
         }
 
-        if self._init_ip and step == 0:
+        if self._init_ip:
              myconfig['profile_conditions']['Ip'] = self._init_ip
         
-        if self._n_e and step == 0:
+        if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
-        if self._T_e and step == 0:
+        if self._T_e:
             myconfig['profile_conditions']['T_e'] = self._T_e
         
-        if self._T_i and step == 0:
+        if self._T_i:
             myconfig['profile_conditions']['T_i'] = self._T_i
         
         if self._z_eff:
@@ -554,13 +571,13 @@ class CGTS:
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') / (2.0 * np.pi)
             # self._state[''] = v_loops[i]
         
-        if graph:
-            for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
-                fig, ax = plt.subplots(1, len(self._times))
-                fig.suptitle(var)
-                for i, _ in enumerate(self._times):
-                    ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
-                plt.show()
+        # if graph:
+        #     for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
+        #         fig, ax = plt.subplots(1, len(self._times))
+        #         fig.suptitle(var)
+        #         for i, _ in enumerate(self._times):
+        #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
+        #         plt.show()
         
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         return consumed_flux
@@ -675,6 +692,8 @@ class CGTS:
         # Update sim results
         # self._results['vloop_torax'][step][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
 
+        self._results['times'] = self._times
+
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
             'y': data_tree.scalars.E_fusion.to_numpy()
@@ -695,6 +714,24 @@ class CGTS:
             'y': data_tree.scalars.B_0.to_numpy(),
         }
 
+        self._results['q'][i] = {
+            'x': list(data_tree.profiles.q.coords['rho_face_norm'].values),
+            'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
+        }
+
+        self._results['jtot'][i] = {
+            'x': list(data_tree.profiles.j_total.coords['rho_norm'].values),
+            'y': data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
+        }
+
+        self._results['T_e'][i] = {
+            'x': list(data_tree.profiles.T_e.coords['rho_norm'].values),
+            'y': data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
+        }
+        self._results['T_i'][i] = {
+            'x': list(data_tree.profiles.T_i.coords['rho_norm'].values),
+            'y': data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
+        }
         if self._t_final > 100:
             q_prof = data_tree.profiles.q.sel(time=100, method='nearest')
             self._results['q_100s'] = {
@@ -912,13 +949,13 @@ class CGTS:
         shutil.rmtree('./tmp')
         os.mkdir('./tmp')
 
-        if graph:
-            for var in ['ffp_prof', 'pp_prof']:
-                fig, ax = plt.subplots(1, len(self._times))
-                fig.suptitle(var)
-                for i, _ in enumerate(self._times):
-                    ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
-                plt.show()           
+        # if graph:
+        #     for var in ['ffp_prof', 'pp_prof']:
+        #         fig, ax = plt.subplots(1, len(self._times))
+        #         fig.suptitle(var)
+        #         for i, _ in enumerate(self._times):
+        #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
+        #         plt.show()           
 
         err = convergence_threshold + 1.0
         step = 0
