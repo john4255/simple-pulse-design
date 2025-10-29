@@ -18,7 +18,7 @@ for fname in eqdsk_names:
 
 # eqdsk1 = ['eqdsk/iter_i=0.eqdsk'] * len(eqdsk)
 
-mysim = CGTS(0.5, 5.0, times, eqdsk, dt=1.0E-2)
+mysim = CGTS(0.6, 5.0, times, eqdsk, dt=1.0E-2)
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {
@@ -138,8 +138,8 @@ startup_times = [t for t in prof_times if t <= times[0]]
 Te_init = {t: Te[t] for t in startup_times}
 Ti_init = {t: Ti[t] for t in startup_times}
 mysim.set_density(ne)
-mysim.set_Te(Te)
-mysim.set_Ti(Ti)
+mysim.set_Te(Te_init)
+mysim.set_Ti(Ti_init)
 mysim.set_evolve(density=False)
 
 mysim.fly(save_states=True, graph=False)
