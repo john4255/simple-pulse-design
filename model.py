@@ -182,7 +182,7 @@ class CGTS:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.settings.maxits = 500
+        self._gs.settings.maxits = 1000
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
@@ -347,13 +347,13 @@ class CGTS:
             self._gs.set_flux(None,None)
 
             Ip_target = abs(self._state['Ip'][i])
-            # P0_target = abs(self._state['pax'][i])
+            P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
-            Ip_ratio = 0.05
-            if self._state['beta_pol'][i] != 0:
-                Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
-            self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
-            # self._gs.set_targets(Ip=Ip_target, pax=P0_target)
+            # Ip_ratio = 0.05
+            # if self._state['beta_pol'][i] != 0:
+            #     Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
+            # self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
+            self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
