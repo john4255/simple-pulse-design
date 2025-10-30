@@ -97,7 +97,8 @@ BASE_CONFIG = {
     },
     'neoclassical': {
         'bootstrap_current': {
-            'bootstrap_multiplier': 1.0,
+        #   'model_name': 'zeros',
+            'bootstrap_multiplier': 0.5,
         },
     },
     'pedestal': {
