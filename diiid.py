@@ -18,7 +18,16 @@ for fname in eqdsk_names:
 
 # eqdsk1 = ['eqdsk/iter_i=0.eqdsk'] * len(eqdsk)
 
-mysim = CGTS(0.6, 5.0, times, eqdsk, dt=1.0E-2)
+prof_names = sorted(os.listdir('163303/profs'))
+t_res = []
+for fname in prof_names:
+    if 'OMFIT' in fname or 'DS_Store' in fname:
+        continue
+    _, t = fname.split('.')
+    t = float(t) / 1e3
+    t_res.append(t)
+
+mysim = CGTS(0.6, 5.0, times, eqdsk, dt=1.0E-2, t_res=t_res)
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {
@@ -56,7 +65,7 @@ ech = {t: ech['data'][i] for i, t in enumerate(ech['time'])}
 inj_f = open('163303/pinj.json')
 inj = json.load(inj_f)
 inj = {t: inj['data'][i] for i, t in enumerate(inj['time'])}
-mysim.set_heating(eccd=ech, eccd_loc=0.3, nbi=inj, nbi_loc=0.3)
+mysim.set_heating(eccd=ech, eccd_loc=0.1, nbi=inj, nbi_loc=0.1)
 
 def read_pfile(path):
     data = {}
@@ -132,14 +141,13 @@ mysim.set_nbar(nbar)
 mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped)
 mysim.set_right_bc(Te_right_bc=T_e_right_bc, Ti_right_bc=T_i_right_bc, ne_right_bc=n_e_right_bc)
 
-# print('hello world')
-# print(sorted(Te.keys()))
-startup_times = [t for t in prof_times if t <= times[0]]
-Te_init = {t: Te[t] for t in startup_times}
-Ti_init = {t: Ti[t] for t in startup_times}
-mysim.set_density(ne)
+Te_init = {1.02: Te[1.02]}
+Ti_init = {1.02: Ti[1.02]}
+ne_init = {1.02: ne[1.02]}
+# mysim.set_density(ne)
 mysim.set_Te(Te_init)
 mysim.set_Ti(Ti_init)
-mysim.set_evolve(density=False)
+mysim.set_density(ne_init)
+# mysim.set_evolve(density=False)
 
 mysim.fly(save_states=True, graph=False)

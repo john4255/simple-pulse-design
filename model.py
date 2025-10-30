@@ -29,7 +29,7 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, config_overrides={}):
+    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, t_res=None):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_final Total length of simulation (in seconds).
         @param times Time points of each gEQDSK file.
@@ -48,7 +48,10 @@ class CGTS:
         self._t_final = t_final
         self._dt = dt
 
-        self._config_overrides = config_overrides
+        if t_res is None:
+            self._t_res = times
+        else:
+            self._t_res = t_res
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -85,6 +88,7 @@ class CGTS:
         self._results['vloop_torax'] = np.zeros([20, len(times)])
         self._results['q'] = {}
         self._results['jtot'] = {}
+        self._results['n_e'] = {}
         self._results['T_e'] = {}
         self._results['T_i'] = {}
 
@@ -182,7 +186,7 @@ class CGTS:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.settings.maxits = 1000
+        self._gs.settings.maxits = 500
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
@@ -579,6 +583,8 @@ class CGTS:
         #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
         #         plt.show()
         
+        self._res_update(data_tree)
+
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         return consumed_flux
     
@@ -689,10 +695,23 @@ class CGTS:
         self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest') / (2.0 * np.pi)
         self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest') / (2.0 * np.pi)
 
-        # Update sim results
-        # self._results['vloop_torax'][step][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
+    def _res_update(self, data_tree):
 
-        self._results['times'] = self._times
+        self._results['t_res'] = self._t_res
+
+        for t in self._t_res:
+            self._results['T_e'][t] = {
+                'x': np.pow(list(data_tree.profiles.T_e.coords['rho_norm'].values), 2),
+                'y': data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
+            }
+            self._results['T_i'][t] = {
+                'x': np.pow(list(data_tree.profiles.T_i.coords['rho_norm'].values), 2),
+                'y': data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
+            }
+            self._results['n_e'][t] = {
+                'x': np.pow(list(data_tree.profiles.n_e.coords['rho_norm'].values), 2),
+                'y': data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
+            }
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
@@ -714,105 +733,15 @@ class CGTS:
             'y': data_tree.scalars.B_0.to_numpy(),
         }
 
-        self._results['q'][i] = {
-            'x': list(data_tree.profiles.q.coords['rho_face_norm'].values),
-            'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
-        }
+        # self._results['q'][i] = {
+        #     'x': list(data_tree.profiles.q.coords['rho_face_norm'].values),
+        #     'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
+        # }
 
-        self._results['jtot'][i] = {
-            'x': list(data_tree.profiles.j_total.coords['rho_norm'].values),
-            'y': data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
-        }
-
-        self._results['T_e'][i] = {
-            'x': list(data_tree.profiles.T_e.coords['rho_norm'].values),
-            'y': data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
-        }
-        self._results['T_i'][i] = {
-            'x': list(data_tree.profiles.T_i.coords['rho_norm'].values),
-            'y': data_tree.profiles.T_i.sel(time=t, method='nearest').to_numpy()
-        }
-        if self._t_final > 100:
-            q_prof = data_tree.profiles.q.sel(time=100, method='nearest')
-            self._results['q_100s'] = {
-                'x': list(q_prof.coords['rho_face_norm'].values),
-                'y': q_prof.to_numpy(),
-            }
-        
-        if self._t_final > 300:
-            # Density
-            n_i_prof = data_tree.profiles.n_i.sel(time=80, method='nearest')
-            self._results['n_i_80s'] = {
-                'x': list(n_i_prof.coords['rho_norm'].values),
-                'y': n_i_prof.to_numpy(),
-            }
-
-            n_e_prof = data_tree.profiles.n_e.sel(time=80, method='nearest')
-            self._results['n_e_80s'] = {
-                'x': list(n_e_prof.coords['rho_norm'].values),
-                'y': n_e_prof.to_numpy(),
-            }
-
-            n_e_prof = data_tree.profiles.n_e.sel(time=85, method='nearest')
-            self._results['n_e_85s'] = {
-                'x': list(n_e_prof.coords['rho_norm'].values),
-                'y': n_e_prof.to_numpy(),
-            }
-
-            n_e_prof = data_tree.profiles.n_e.sel(time=90, method='nearest')
-            self._results['n_e_90s'] = {
-                'x': list(n_e_prof.coords['rho_norm'].values),
-                'y': n_e_prof.to_numpy(),
-            }
-
-            n_i_prof = data_tree.profiles.n_i.sel(time=300, method='nearest')
-            self._results['n_i_300s'] = {
-                'x': list(n_i_prof.coords['rho_norm'].values),
-                'y': n_i_prof.to_numpy(),
-            }
-
-            n_e_prof = data_tree.profiles.n_e.sel(time=300, method='nearest')
-            self._results['n_e_300s'] = {
-                'x': list(n_e_prof.coords['rho_norm'].values),
-                'y': n_e_prof.to_numpy(),
-            }
-
-             # Temp
-            T_i_prof = data_tree.profiles.T_i.sel(time=80, method='nearest')
-            self._results['T_i_80s'] = {
-                'x': list(T_i_prof.coords['rho_norm'].values),
-                'y': T_i_prof.to_numpy(),
-            }
-
-            T_e_prof = data_tree.profiles.T_e.sel(time=80, method='nearest')
-            self._results['T_e_80s'] = {
-                'x': list(T_e_prof.coords['rho_norm'].values),
-                'y': T_e_prof.to_numpy(),
-            }
-            T_i_prof = data_tree.profiles.T_i.sel(time=300, method='nearest')
-            self._results['T_i_300s'] = {
-                'x': list(T_i_prof.coords['rho_norm'].values),
-                'y': T_i_prof.to_numpy(),
-            }
-
-            T_e_prof = data_tree.profiles.T_e.sel(time=300, method='nearest')
-            self._results['T_e_300s'] = {
-                'x': list(T_e_prof.coords['rho_norm'].values),
-                'y': T_e_prof.to_numpy(),
-            }
-
-            # Safety Factor
-            # q_prof = data_tree.profiles.q.sel(time=80, method='nearest')
-            # self._results['q_80s'] = {
-            #     'x': list(q_prof.coords['rho_norm'].values),
-            #     'y': q_prof.to_numpy(),
-            # }
-
-            # q_prof = data_tree.profiles.q.sel(time=300, method='nearest')
-            # self._results['q_300s'] = {
-            #     'x': list(q_prof.coords['rho_norm'].values),
-            #     'y': q_prof.to_numpy(),
-            # }
+        # self._results['jtot'][i] = {
+        #     'x': list(data_tree.profiles.j_total.coords['rho_norm'].values),
+        #     'y': data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
+        # }
 
         self._results['n_e_line_avg'] = {
             'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
