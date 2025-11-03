@@ -136,9 +136,9 @@ BASE_CONFIG = {
         'V_e_max': 10,  # minimum electron convection
         'smoothing_width': 0.1,
         'DV_effective': True,
-        'include_ITG': False,  # to toggle ITG modes on or off
-        'include_TEM': False,  # to toggle TEM modes on or off
-        'include_ETG': False,  # to toggle ETG modes on or off
+        'include_ITG': True,  # to toggle ITG modes on or off
+        'include_TEM': True,  # to toggle TEM modes on or off
+        'include_ETG': True,  # to toggle ETG modes on or off
         'avoid_big_negative_s': False,
     },
     'solver': {
