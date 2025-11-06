@@ -35,6 +35,7 @@ class CGTS:
         @param t_final End time (s).
         @param times Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
+        @param dt Time step (s).
         @param t_res Time points to sample output at.
         '''
         self._oftenv = OFT_env(nthreads=2)
@@ -178,6 +179,9 @@ class CGTS:
         self._gp_s = None
         self._gp_dl = None
 
+        self._chi_min = 0.05
+        self._chi_max = 100.0
+
         self._targets = None
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
@@ -197,21 +201,39 @@ class CGTS:
         # self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
     def set_Ip(self, ip):
+        r'''! Set plasma current (Amps).
+        @param ip Plasma current.
+        '''
         self._init_ip = ip
     
     def set_density(self, n_e):
+        r'''! Set density profiles.
+        @param n_e Electron density (m^-3).
+        '''
         self._n_e = n_e
 
     def set_Te(self, T_e):
+        r'''! Set electron temperature profiles (keV).
+        @param T_e Electron temperature.
+        '''
         self._T_e = T_e
             
     def set_Ti(self, T_i):
+        r'''! Set ion temperature profiles (keV).
+        @param T_i ion temperature.
+        '''
         self._T_i = T_i
 
     def set_Zeff(self, z_eff):
+        r'''! Set plasma effective charge.
+        @param z_eff Effective charge.
+        '''
         self._z_eff = z_eff
     
     def set_nbar(self, nbar):
+        r'''! Set line averaged density over time.
+        @param nbar Density (m^-3).
+        '''
         self._nbar = nbar
     
     def set_right_bc(self, ne_right_bc=None, Te_right_bc=None, Ti_right_bc=None):
@@ -250,6 +272,12 @@ class CGTS:
             self._n_e_ped = n_e_ped
 
     def set_evolve(self, density=True, Ti=True, Te=True, current=True):
+        r'''! Set variables as either prescribed (False) or evolved (True).
+        @param density Evolve density.
+        @param Ti Evolve ion temperature.
+        @param Te Evolve electron temperature.
+        @param current Evolve current.
+        '''
         self._evolve_density = density
         self._evolve_current = current
         self._evolve_Ti = Ti
@@ -264,8 +292,18 @@ class CGTS:
             self._state['vloop'][i] = vloop[i]
     
     def set_gaspuff(self, s=None, decay_length=None):
+        r'''! Set gas puff particle source.
+        @param s Particle source (particles/s).
+        @param decay_length Decay length from edge (normalized rho coordinates).
+        '''
         self._gp_s = s
         self._gp_dl = decay_length
+    
+    def set_chi(self, chi_min=None, chi_max=None):
+        if chi_min is not None:
+            self._chi_min = chi_min
+        if chi_max is not None:
+            self._chi_max = chi_max
             
     def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -563,6 +601,9 @@ class CGTS:
                 'S_total': self._gp_s,
                 'puff_decay_length': self._gp_dl,
             }
+
+        myconfig['transport']['chi_min'] = self._chi_min
+        myconfig['transport']['chi_max'] = self._chi_max
  
         # print(myconfig)
         with open('torax_config.json', 'w') as json_file:
