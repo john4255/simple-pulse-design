@@ -31,10 +31,11 @@ class CGTS:
 
     def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, t_res=None):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
-        @param t_final Total length of simulation (in seconds).
+        @param t_init Start time (s).
+        @param t_final End time (s).
         @param times Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
-        @param config_overrides Dictionary of values to override values from default torax config.
+        @param t_res Time points to sample output at.
         '''
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
@@ -174,6 +175,9 @@ class CGTS:
         self._Ti_right_bc = None
         self._ne_right_bc = None
 
+        self._gp_s = None
+        self._gp_dl = None
+
         self._targets = None
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
@@ -258,6 +262,10 @@ class CGTS:
     def set_Vloop(self, vloop):
         for i in range(len(self._times)):
             self._state['vloop'][i] = vloop[i]
+    
+    def set_gaspuff(self, s=None, decay_length=None):
+        self._gp_s = s
+        self._gp_dl = decay_length
             
     def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -549,6 +557,12 @@ class CGTS:
             myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
         if self._Ti_right_bc:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
+        
+        if self._gp_s is not None and self._gp_dl is not None:
+            myconfig['sources']['gas_puff'] = {
+                'S_total': self._gp_s,
+                'puff_decay_length': self._gp_dl,
+            }
  
         # print(myconfig)
         with open('torax_config.json', 'w') as json_file:
@@ -860,10 +874,10 @@ class CGTS:
     
     def save_res(self):
         r'''! Save simulation results to JSON.'''
-        with open('tmp/res.json', 'w') as f:
+        with open(self._fname_out, 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=50):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=50, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
@@ -877,6 +891,8 @@ class CGTS:
             pass
         shutil.rmtree('./tmp')
         os.mkdir('./tmp')
+
+        self._fname_out = out
 
         # if graph:
         #     for var in ['ffp_prof', 'pp_prof']:

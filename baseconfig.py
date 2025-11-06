@@ -17,7 +17,7 @@ nbi_cd = nbi_powers * _NBI_W_TO_MA
 
 # Gaussian prescription of "NBI" deposition profiles and fractional deposition
 r_nbi = 0.25
-w_nbi = 0.25
+w_nbi = 0.4
 el_heat_fraction = 0.66
 
 BASE_CONFIG = {
@@ -94,6 +94,14 @@ BASE_CONFIG = {
             'model_name': 'mavrin_fit',
             'radiation_multiplier': 0.0,
         },
+        # 'gas_puff': {
+        #   'S_total': 2.5e21,
+        #   'puff_decay_length': 0.2,
+        # },
+        # 'generic_particle': {
+        #   'deposition_location': 0.3,
+        #   'S_total': 5e20,
+        # },
     },
     'neoclassical': {
         'bootstrap_current': {
