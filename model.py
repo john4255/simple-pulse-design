@@ -29,7 +29,7 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, t_res=None):
+    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, t_res=None, prescribed_currents=False):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -49,6 +49,7 @@ class CGTS:
         self._t_init = t_init
         self._t_final = t_final
         self._dt = dt
+        self._prescribed_currents = prescribed_currents
 
         if t_res is None:
             self._t_res = times
@@ -176,11 +177,17 @@ class CGTS:
         self._Ti_right_bc = None
         self._ne_right_bc = None
 
+        self._ohmic = None
+
         self._gp_s = None
         self._gp_dl = None
 
         self._chi_min = 0.05
         self._chi_max = 100.0
+        self._De_min = 0.05
+        self._De_max = 50.0
+        self._Ve_min = -10.0
+        self._Ve_max = 10.0
 
         self._targets = None
         
@@ -304,8 +311,23 @@ class CGTS:
             self._chi_min = chi_min
         if chi_max is not None:
             self._chi_max = chi_max
+    
+    def set_De(self, De_min=None, De_max=None):
+        if De_min is not None:
+            self._De_min = De_min
+        if De_max is not None:
+            self._De_max = De_max
+        
+    def set_Ve(self, Ve_min=None, Ve_max=None):
+        if Ve_min is not None:
+            self._Ve_min = Ve_min
+        if Ve_max is not None:
+            self._Ve_max = Ve_max
+
+    def set_ohmic(self, times, rho, values):
+        self._ohmic = ((times), (rho), (values))
             
-    def set_coil_reg(self, targets=None, t=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
+    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
         @param weights Default weight for each coil.
@@ -322,66 +344,21 @@ class CGTS:
         #     coil_bounds[key] = [0, 0] # turn off div coils, for now
         self._gs.set_coil_bounds(coil_bounds)
 
-        if self._targets is None:
+        if self._prescribed_currents and targets:
             self._targets = targets
-
-        # regularization_terms = []
-        # if weights is None:
-        #     weights = {}
-        #     for name, coil in self._gs.coil_sets.items():
-        #         if name.startswith('CS'):
-        #             weights[name] = 2.0E-2
-        #         else:
-        #             weights[name] = 1.0E-2
-
-        # for name, coil in self._gs.coil_sets.items():
-        #     regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=targets[name],weight=weights[name] * weight_mult))
-
-        # # Disable VSC virtual coil
-        # if disable_virtual_vsc:
-        #     regularization_terms.append(self._gs.coil_reg_term({'#VSC': 1.0},target=0.0,weight=1.E2))
         
-        # # Pass regularization terms to TokaMaker
-        # self._gs.set_coil_reg(reg_terms=regularization_terms)
-        # self._gs.update_settings()
-        
-        # coil_mirrors = {}
-        # coil_names = self._targets.keys()
-        # for name in coil_names:
-        #     if 'U' in name:
-        #         coil_mirrors[name] = name.replace('U','L')
-
-        # regularization_terms = []
-        
-        # weight_factor = 1.0
-        # for name, coil in self._gs.coil_sets.items():
-        #     if updownsym and name.find('L') >= 0: # We will set everything for upper coils
-        #         continue
-        #     if 'DIV' in name:
-        #         regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=0.0,weight=1.E4))
-        #         continue
-        #     if 'PF' in name:
-        #         #target = 0
-        #         weight = 1.E-5
-        #     else:
-        #         weight = 1.E-1*weight_factor
-            
-        #     # Targets for normal coils and their mirror
-        #     target = np.interp(t, self._targets['time'], self._targets[name])
-        #     regularization_terms.append(self._gs.coil_reg_term({name: 1.0}, target=target, weight=weight))
-        #     if updownsym:
-        #         regularization_terms.append(self._gs.coil_reg_term({name: 1.0, name.replace('U','L'): -1.0}, target=0.0, weight=1.E1))
-
         regularization_terms = []
-        for name, target_current in targets.items():
-            # Set specific target currents from input equilibrium and different weights depending on the coil set
-            if name.startswith('ECOIL'):
+        if self._prescribed_currents:
+            for name, currents in self._targets.items():
+                if name == 'time':
+                    continue
+                t_current = np.interp(self._times[i], self._targets['time'], currents)
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=t_current,weight=1.0E-3))
+        else:
+            for name, target_current in targets.items():
+                if name == 'time':
+                    continue
                 regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
-            elif name.startswith('F'):
-                if name.startswith('F5'):
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
-                else:
-                    regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
 
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
@@ -476,9 +453,12 @@ class CGTS:
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
             self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
 
-            coil_targets, _ = self._gs.get_coil_currents()
-            # coil_targets = {**self._targets, **coil_targets}
-            self.set_coil_reg(targets=coil_targets)
+            if self._prescribed_currents:
+                if i < len(self._times):
+                    self.set_coil_reg(i=i+1)
+            else:
+                coil_targets, _ = self._gs.get_coil_currents()
+                self.set_coil_reg(targets=coil_targets)
 
         # consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         consumed_flux = np.trapezoid(self._times, self._state['vloop'])
@@ -565,7 +545,7 @@ class CGTS:
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
 
-        if self._ohmic_power is not None:
+        if self._ohmic_power:
             myconfig['sources']['ohmic']['mode'] = 'PRESCRIBED'
             myconfig['sources']['ohmic']['prescribed_values'] = self._ohmic_power
 
@@ -596,7 +576,13 @@ class CGTS:
         if self._Ti_right_bc:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
         
-        if self._gp_s is not None and self._gp_dl is not None:
+        # if self._ohmic:
+        #     myconfig['sources']['ohmic'] = {
+        #         'mode': 'PRESCRIBED',
+        #         'prescribed_values': self._ohmic,
+        #     }
+        
+        if self._gp_s and self._gp_dl:
             myconfig['sources']['gas_puff'] = {
                 'S_total': self._gp_s,
                 'puff_decay_length': self._gp_dl,
@@ -605,6 +591,12 @@ class CGTS:
         myconfig['transport']['chi_min'] = self._chi_min
         myconfig['transport']['chi_max'] = self._chi_max
  
+        myconfig['transport']['D_e_min'] = self._De_min
+        myconfig['transport']['D_e_max'] = self._De_max
+
+        myconfig['transport']['V_e_min'] = self._Ve_min
+        myconfig['transport']['V_e_max'] = self._Ve_max
+
         # print(myconfig)
         with open('torax_config.json', 'w') as json_file:
             json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
