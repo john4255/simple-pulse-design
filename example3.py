@@ -12,16 +12,8 @@ rampdown_times = np.linspace(500.0, 600.0, 10)
 times = np.r_[rampup_times, flattop_times, rampdown_times]
 
 # Load gEQDSK
-g_arr_rampup = ['eqdsk/iter_i=0.eqdsk',
-                'eqdsk/iter_i=1.eqdsk',
-                'eqdsk/iter_i=2.eqdsk',
-                'eqdsk/iter_i=3.eqdsk',
-                'eqdsk/iter_i=4.eqdsk',
-                'eqdsk/iter_i=5.eqdsk',
-                'eqdsk/iter_i=6.eqdsk',
-                'eqdsk/iter_i=7.eqdsk',
-                'eqdsk/iter_i=8.eqdsk',
-                'eqdsk/iter_i=9.eqdsk']
+# g_arr_rampup = [f'eqdsk/iter_i={i}.eqdsk' for i in range(10)]
+g_arr_rampup = [f'rampup/iter_i={i}.eqdsk' for i in range(10)]
 g_arr_flattop = ['eqdsk/Hmode.eqdsk'] * 10
 g_arr_rampdown = g_arr_rampup[::-1]
 g_arr = np.r_[g_arr_rampup, g_arr_flattop, g_arr_rampdown]
@@ -60,10 +52,14 @@ Te_right_bc = 0.01
 Ti_right_bc = 0.01
 
 # Run sim
-mysim = CGTS(600, times, g_arr)
+mysim = CGTS(0, 600, times, g_arr)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
-mysim.set_ip(ip)
-mysim.set_z_eff(1.8)
+coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'PF6']
+target_currents = {coil: 0.0 for coil in coil_names}
+mysim.set_coil_reg(targets=target_currents)
+
+mysim.set_Ip(ip)
+mysim.set_Zeff(1.8)
 mysim.set_heating(nbi=nbi_powers, nbi_loc=0.25, eccd=eccd_powers, eccd_loc=0.35)
 mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc=ne_right_bc)
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
