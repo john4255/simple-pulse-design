@@ -45,28 +45,29 @@ pp_prof = create_power_flux_fun(40,4.0,1.0)
 
 mygs.set_profiles(ffp_prof=ffp_prof,pp_prof=pp_prof)
 
+Ip_target = np.linspace(3.0E6, 15.0E6, n_eqdsk)
+P0_target = np.linspace(3.76E4, 6.4E5, n_eqdsk)
+
+R0 = np.linspace(6.599, 6.245, n_eqdsk)
+Z0 = 0.5
+a = np.linspace(1.762, 2.020, n_eqdsk)
+kappa = np.linspace(1.393, 1.520, n_eqdsk)
+delta = np.linspace(-0.0146, -0.097, n_eqdsk)
+
 for eq_idx in range(n_eqdsk):
-    Ip_target = np.linspace(5.0E6, 15.6E6, n_eqdsk)
-    P0_target = np.linspace(5.0E5, 6.2E5, n_eqdsk)
+    # Ip_ratio = 2.0
     mygs.set_targets(Ip=Ip_target[eq_idx], pax=P0_target[eq_idx])
 
-    R0 = np.linspace(5.1, 6.3, n_eqdsk)
-    Z0 = 0.5
-    a = np.linspace(1.0, 2.0, n_eqdsk)
-    kappa = 1.2
-    delta = 0.0
-
-    isoflux_pts = create_isoflux(20, R0[eq_idx], Z0, a[eq_idx], kappa, delta)
+    isoflux_pts = create_isoflux(20, R0[eq_idx], Z0, a[eq_idx], kappa[eq_idx], delta[eq_idx])
 
     mygs.set_isoflux(isoflux_pts)
 
-    mygs.init_psi(R0[eq_idx], Z0, a[eq_idx], kappa, delta)
+    mygs.init_psi(R0[eq_idx], Z0, a[eq_idx], kappa[eq_idx], delta[eq_idx])
     mygs.solve()
 
     fig, ax = plt.subplots(1,1)
     mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]',coil_symmap=True)
     mygs.plot_psi(fig,ax,plasma_nlevels=5,vacuum_nlevels=5)
-    # ax.scatter(R0, Z0, color='lime')
     psi_target = mygs.get_psi()
     mygs.plot_psi(fig,ax,psi_target,plasma_levels=[1.0,],plasma_color='red',vacuum_nlevels=0,plasma_linestyles='dashed')
 
