@@ -190,6 +190,13 @@ class CGTS:
         self._Ve_max = 10.0
 
         self._targets = None
+        self._baseconfig = None
+    
+    def load_config(self, config):
+        r'''! Load a base config for torax.
+        @param config Dictionary object to be converted to torax config.
+        '''
+        self._baseconfig = config
         
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
@@ -201,6 +208,7 @@ class CGTS:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
+        print(coil_dict.keys())
         self._gs.settings.maxits = 500
 
         if vsc is not None:
@@ -494,6 +502,8 @@ class CGTS:
         @return Torax config object.
         '''
         myconfig = copy.deepcopy(BASE_CONFIG)
+        if self._baseconfig:
+            myconfig = self._baseconfig.copy()
 
         myconfig['numerics'] = {
             't_initial': self._t_init,
@@ -508,7 +518,7 @@ class CGTS:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.95,  # TODO: tweak
+            'last_surface_factor': 0.9,  # TODO: tweak
             # 'n_surfaces': 10,
             'Ip_from_parameters': True,
             'geometry_configs': {
