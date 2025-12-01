@@ -220,7 +220,7 @@ for i, t in enumerate(timesteps):
     delta0 = np.interp(t, eqtimes, delta)
 
     lcfs = create_isoflux(20, R0, Z0, a0, kappa0, delta0)
-    mygs.set_isoflux(lcfs)    # Target shape
+    mygs.set_isoflux(lcfs, 1.0E2 * np.ones_like(lcfs[:, 0]))    # Target shape
     if psi_target != 0:
         mygs.set_flux(lcfs, psi_target*np.ones_like(lcfs[:,0])) # Target specific flux value
     # TODO: Set saddles?
@@ -232,13 +232,13 @@ for i, t in enumerate(timesteps):
     mygs.init_psi(R0, Z0, a0, kappa0, delta0)
     mygs.solve()
 
-    # fig, ax = plt.subplots(1,1)
-    # mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.0E-3,coil_clabel=r'$I_{coil}$ [kA]')
-    # mygs.plot_psi(fig,ax,xpoint_color='k',vacuum_nlevels=6,plasma_nlevels=6)
-    # mygs.plot_constraints(fig,ax,isoflux_color='tab:red',isoflux_marker='.')
-    # ax.set_ylabel('Z [m]')
-    # _ =ax.set_xlabel('R [m]')
-    # plt.show()
+    fig, ax = plt.subplots(1,1)
+    mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.0E-3,coil_clabel=r'$I_{coil}$ [kA]')
+    mygs.plot_psi(fig,ax,xpoint_color='k',vacuum_nlevels=6,plasma_nlevels=6)
+    mygs.plot_constraints(fig,ax,isoflux_color='tab:red',isoflux_marker='.')
+    ax.set_ylabel('Z [m]')
+    _ =ax.set_xlabel('R [m]')
+    plt.show()
 
     # Save coil currents and boundary flux
     coil_currents, _ = mygs.get_coil_currents()
