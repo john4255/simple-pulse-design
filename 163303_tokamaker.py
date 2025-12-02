@@ -292,7 +292,7 @@ for ax_tmp in ax:
     ax_tmp.set_xlim(left=0.0)
     ax_tmp.set_ylim(-2.5E6, 2.5E6)
     ax_tmp.set_ylabel('Coil Current [A]')
-    ax_tmp.legend(ncols=2,loc='center left',bbox_to_anchor=(1.05, 0.5))
+    ax_tmp.legend()
 _ = ax[-1].set_xlabel('Time [s]')
 plt.show()
 
