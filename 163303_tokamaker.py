@@ -151,20 +151,21 @@ Z = []
 a = []
 kappa = []
 delta = []
+lcfs = []
 for i, eqdsk in enumerate(eqdsks):
     t = eqtimes[i]
     g = read_eqdsk(eqdsks[i])
-    lcfs = g['rzout']
-    zmax = np.max(lcfs[:,1])
-    zmin = np.min(lcfs[:,1])
-    rmax = np.max(lcfs[:,0])
-    rmin = np.min(lcfs[:,0])
+    mylcfs = g['rzout']
+    zmax = np.max(mylcfs[:,1])
+    zmin = np.min(mylcfs[:,1])
+    rmax = np.max(mylcfs[:,0])
+    rmin = np.min(mylcfs[:,0])
     minor_radius = (rmax - rmin) / 2.0
     rgeo = (rmax + rmin) / 2.0
-    highest_pt_idx = np.argmax(lcfs[:,1])
-    lowest_pt_idx = np.argmin(lcfs[:,1])
-    rupper = lcfs[highest_pt_idx][0]
-    rlower = lcfs[lowest_pt_idx][0]
+    highest_pt_idx = np.argmax(mylcfs[:,1])
+    lowest_pt_idx = np.argmin(mylcfs[:,1])
+    rupper = mylcfs[highest_pt_idx][0]
+    rlower = mylcfs[lowest_pt_idx][0]
     delta_upper = (rgeo - rupper) / minor_radius
     delta_lower = (rgeo - rlower) / minor_radius
     mykappa = (zmax - zmin) / (2.0 * minor_radius)
@@ -176,6 +177,8 @@ for i, eqdsk in enumerate(eqdsks):
     kappa.append(mykappa)
     delta.append(mydelta)
 
+    lcfs.append(g['rzout'])
+
 frames = []
 coil_hist = []
 flux_hist = []
@@ -183,6 +186,7 @@ volt_hist = []
 Lcoils = mygs.get_coil_Lmat()
 
 psi_target = 0.0
+psi = 0.0
 loop_voltage = 0.0
 dt = 0.1
 timesteps = np.arange(0.1, 5.0, dt)
@@ -219,31 +223,37 @@ for i, t in enumerate(timesteps):
     kappa0 = np.interp(t, eqtimes, kappa)
     delta0 = np.interp(t, eqtimes, delta)
 
-    lcfs = create_isoflux(20, R0, Z0, a0, kappa0, delta0)
-    mygs.set_isoflux(lcfs, 1.0E2 * np.ones_like(lcfs[:, 0]))    # Target shape
-    if psi_target != 0:
-        mygs.set_flux(lcfs, psi_target*np.ones_like(lcfs[:,0])) # Target specific flux value
-    # TODO: Set saddles?
-
+    # lcfs = create_isoflux(20, R0, Z0, a0, kappa0, delta0)
+    mylcfs = interp_prof(t, eqtimes, lcfs)
+    if i == 0:
+        mygs.set_isoflux(mylcfs, 1.0E3 * np.ones_like(mylcfs[:, 0]))    # Target shape
     if i > 0:
         delta_psi = (loop_voltage * dt) / (2 * np.pi)
         psi_target -= delta_psi
+        mygs.set_flux(mylcfs, psi_target*np.ones_like(mylcfs[:,0]), weights=1.0E3 * np.ones_like(mylcfs[:, 0])) # Target specific flux value
+    # TODO: Set saddles?
 
     mygs.init_psi(R0, Z0, a0, kappa0, delta0)
+    if i > 0:
+        mygs.set_psi_dt(psi0,dt)
     mygs.solve()
 
-    fig, ax = plt.subplots(1,1)
-    mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.0E-3,coil_clabel=r'$I_{coil}$ [kA]')
-    mygs.plot_psi(fig,ax,xpoint_color='k',vacuum_nlevels=6,plasma_nlevels=6)
-    mygs.plot_constraints(fig,ax,isoflux_color='tab:red',isoflux_marker='.')
-    ax.set_ylabel('Z [m]')
-    _ =ax.set_xlabel('R [m]')
-    plt.show()
+    psi0 = mygs.get_psi(False)
+
+    # xpts, _ = mygs.get_xpoints()
+    # fig, ax = plt.subplots(1,1)
+    # mygs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.0E-3,coil_clabel=r'$I_{coil}$ [kA]')
+    # mygs.plot_psi(fig,ax,xpoint_color='k',vacuum_nlevels=6,plasma_nlevels=6)
+    # mygs.plot_constraints(fig,ax,isoflux_color='tab:red',isoflux_marker='.')
+    # ax.set_ylabel('Z [m]')
+    # _ =ax.set_xlabel('R [m]')
+    # ax.scatter(xpts[:, 0], xpts[:, 1], color='lime')
+    # plt.show()
 
     # Save coil currents and boundary flux
     coil_currents, _ = mygs.get_coil_currents()
     coil_hist.append(coil_vec2dict(mygs,coil_currents))
-    # flux_hist.append([psi_target,mygs.psi_bounds[0]])
+    flux_hist.append([psi_target,mygs.psi_bounds[0]])
     # volt_hist.append(np.dot(Lcoils[:-1,:-1],coil_vec2dict(mygs,coil_currents)-coil_vec2dict(mygs,prev_coils))/dt)
 
     # Update coil reg terms, loop voltage, and psi target
@@ -259,16 +269,16 @@ for i, t in enumerate(timesteps):
 
     set_coil_reg(mygs, coil_currents)
 
-# flux_hist = np.array(flux_hist)
-# fig, ax = plt.subplots(1,1)
-# ax.plot(timesteps*1.E3,flux_hist[:,0]*1.E3,'k',label=r'Target')
-# ax.plot(timesteps*1.E3,flux_hist[:,1]*1.E3,'--',color='tab:red',label=r'Actual')
-# ax.grid(True)
-# ax.set_xlim(left=0.0)
-# ax.set_xlabel('Time [ms]')
-# ax.set_ylabel(r'$\psi$ [mWb/rad]')
-# _ = ax.legend()
-# plt.show()
+flux_hist = np.array(flux_hist)
+fig, ax = plt.subplots(1,1)
+ax.plot(timesteps,flux_hist[:,0],'k',label=r'Target')
+ax.plot(timesteps,flux_hist[:,1],'--',color='tab:red',label=r'Actual')
+ax.grid(True)
+ax.set_xlim(left=0.0)
+ax.set_xlabel('Time [ms]')
+ax.set_ylabel(r'$\psi$ [mWb/rad]')
+_ = ax.legend()
+plt.show()
 
 coil_hist = np.array(coil_hist)
 fig, ax = plt.subplots(2,1,sharex=True)
@@ -280,7 +290,7 @@ for name, coil in mygs.coil_sets.items():
 for ax_tmp in ax:
     ax_tmp.grid(True)
     ax_tmp.set_xlim(left=0.0)
-    ax_tmp.set_ylim(-1.0E6, 1.0E6)
+    ax_tmp.set_ylim(-2.5E6, 2.5E6)
     ax_tmp.set_ylabel('Coil Current [A]')
     ax_tmp.legend(ncols=2,loc='center left',bbox_to_anchor=(1.05, 0.5))
 _ = ax[-1].set_xlabel('Time [s]')
