@@ -409,7 +409,7 @@ class CGTS:
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_save, ffp_prof), pp_prof=mix_profiles(pp_prof_save, pp_prof))
 
-            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+            # self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
@@ -487,7 +487,8 @@ class CGTS:
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
-        self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        # self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        self._state['vloop'][i] = 0.0
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
