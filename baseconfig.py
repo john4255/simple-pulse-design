@@ -39,9 +39,9 @@ BASE_CONFIG = {
         # 'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
         'normalize_n_e_to_nbar': False, # normalize initial n_e to nbar
         'n_e_nbar_is_fGW': False, # nbar is in units for greenwald fraction
-        'initial_psi_from_j': True, # initial psi from current formula # TODO: change?
-        'initial_j_is_total_current': True, # only ohmic current on init
-        'current_profile_nu': 2, # exponent in initial current formula
+        'initial_psi_from_j': False, # initial psi from current formula # TODO: change?
+        # 'initial_j_is_total_current': True, # only ohmic current on init
+        # 'current_profile_nu': 2, # exponent in initial current formula
     },
     'numerics': {
         # 't_initial': 145,
@@ -150,7 +150,7 @@ BASE_CONFIG = {
         'avoid_big_negative_s': False,
     },
     'solver': {
-        'solver_type': 'linear', # linear solver with picard iteration
+        'solver_type': 'newton_raphson', # linear solver with picard iteration
         'use_predictor_corrector': True, # for linear solver
         'n_corrector_steps': 10, # for linear solver
         'chi_pereverzev': 30,

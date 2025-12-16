@@ -208,7 +208,7 @@ class CGTS:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        print(coil_dict.keys())
+        # print(coil_dict.keys())
         self._gs.settings.maxits = 500
 
         if vsc is not None:
@@ -299,8 +299,10 @@ class CGTS:
         self._evolve_Te = Te
     
     def set_Bp(self, Bp):
-        for i in range(len(self._times)):
-            self._state['beta_pol'][i] = Bp[i]
+        Bp_times = sorted(Bp.keys())
+        Bp_values = [Bp[t] for t in Bp_times]
+        for i, t in enumerate(self._times):
+            self._state['beta_pol'][i] = np.interp(t, Bp_times, Bp_values)
 
     def set_Vloop(self, vloop):
         for i in range(len(self._times)):
@@ -385,10 +387,12 @@ class CGTS:
             P0_target = abs(self._state['pax'][i])
             # V0_target = self._state['V0'][i]
             # Ip_ratio = 0.05
-            # if self._state['beta_pol'][i] != 0:
-            #     Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
-            # self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
-            self._gs.set_targets(Ip=Ip_target, pax=P0_target)
+            if self._state['beta_pol'][i] != 0:
+                print('Using beta_p...')
+                Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
+                self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
+            else:
+                self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
             ffp_prof = self._state['ffp_prof'][i]
             pp_prof = self._state['pp_prof'][i]
@@ -409,7 +413,7 @@ class CGTS:
 
             self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_save, ffp_prof), pp_prof=mix_profiles(pp_prof_save, pp_prof))
 
-            # self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._boundary[i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
@@ -469,7 +473,7 @@ class CGTS:
                 self.set_coil_reg(targets=coil_targets)
 
         # consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
-        consumed_flux = np.trapezoid(self._times, self._state['vloop'])
+        consumed_flux = np.trapezoid(self._state['vloop'], self._times)
         return consumed_flux
         
     def _gs_update(self, i):
@@ -487,8 +491,7 @@ class CGTS:
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
-        # self._state['vloop'][i] = self._gs.calc_loopvoltage()
-        self._state['vloop'][i] = 0.0
+        self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -770,6 +773,11 @@ class CGTS:
                 'x': np.pow(list(data_tree.profiles.n_e.coords['rho_norm'].values), 2),
                 'y': data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
             }
+            self._results['q'][t] = {
+                'x': np.pow(list(data_tree.profiles.q.coords['rho_face_norm'].values), 2),
+                'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
+            }
+
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),

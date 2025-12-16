@@ -27,7 +27,7 @@ for fname in prof_names:
     t = float(t) / 1e3
     t_res.append(t)
 
-mysim = CGTS(0.0, 5.5, times, eqdsk, dt=1.0E-2, t_res=t_res)
+mysim = CGTS(0.5, 5.5, times, eqdsk, dt=1.0E-2, t_res=t_res)
 mysim.initialize_gs('174657/DIIID_mesh.h5')
 
 target_currents = {
@@ -65,8 +65,10 @@ ech = {t / 1e3: ech['data'][i] for i, t in enumerate(ech['time'])}
 # ech = {t: 1e5 for i, t in enumerate(ech['time'])}
 inj_f = open('174657/pinj.json')
 inj = json.load(inj_f)
-inj = {t / 1e3: inj['data'][i] for i, t in enumerate(inj['time'])}
-mysim.set_heating(eccd=ech, eccd_loc=0.2, nbi=inj, nbi_loc=0.2)
+inj = {t / 1e3: 1e3 * inj['data'][i] for i, t in enumerate(inj['time'])}
+mysim.set_heating(eccd=ech, eccd_loc=0.2, nbi=inj, nbi_loc=0.2) # TODO: fix
+
+# print(inj)
 
 def read_pfile(path):
     data = {}
@@ -178,6 +180,6 @@ mysim.set_density(ne_init)
 
 # gaspuff_s = {0.0: 1.0e25, 0.5: 0.0}
 # gaspuff_s = {0.0: 5.0e22, 1.0: 0}
-mysim.set_gaspuff(s=2.5e21, decay_length=0.2)
+mysim.set_gaspuff(s=2.5e21, decay_length=0.2) # TODO: tweak
 
 mysim.fly(graph=False)
