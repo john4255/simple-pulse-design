@@ -29,32 +29,30 @@ class MyEncoder(json.JSONEncoder):
 class CGTS:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_init, t_final, times, g_eqdsk_arr, dt=1, t_res=None, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=1, times=None, prescribed_currents=False):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_init Start time (s).
         @param t_final End time (s).
-        @param times Time points of each gEQDSK file.
+        @param eqtimes Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
         @param dt Time step (s).
-        @param t_res Time points to sample output at.
+        @param times Time points to sample output at.
         '''
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
         self._state = {}
-        self._times = times
-        self._boundary = {}
+        self._eqtimes = eqtimes
         self._results = {}
         self._init_files = g_eqdsk_arr
-        self._init_ip = None
         self._t_init = t_init
         self._t_final = t_final
         self._dt = dt
         self._prescribed_currents = prescribed_currents
 
-        if t_res is None:
-            self._t_res = times
+        if times is None:
+            self._times = eqtimes
         else:
-            self._t_res = t_res
+            self._times = times
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -73,6 +71,7 @@ class CGTS:
         self._state['psi_lcfs'] = np.zeros(len(times))
         self._state['psi_axis'] = np.zeros(len(times))
 
+        self._state['lcfs'] = {}
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
         self._state['ffp_prof_save'] = {}
@@ -95,48 +94,80 @@ class CGTS:
         self._results['T_e'] = {}
         self._results['T_i'] = {}
 
-        for i, _ in enumerate(times):
-            # Calculate geometry
-            g = read_eqdsk(g_eqdsk_arr[i])
+        R = []
+        Z = []
+        a = []
+        kappa = []
+        delta = []
+        B0 = []
+        pax = []
+        Ip = []
+        lcfs = []
+        ffp_prof = []
+        pp_prof = []
 
-            self._boundary[i] = g['rzout'].copy()
-            self._results['lcfs'][i] = g['rzout'].copy()
-            zmax = np.max(self._boundary[i][:,1])
-            zmin = np.min(self._boundary[i][:,1])
-            rmax = np.max(self._boundary[i][:,0])
-            rmin = np.min(self._boundary[i][:,0])
+        for i, t in enumerate(self._eqtimes):
+            g = read_eqdsk(g_eqdsk_arr[i])
+            zmax = np.max(g['rzout'][:,1])
+            zmin = np.min(g['rzout'][:,1])
+            rmax = np.max(g['rzout'][:,0])
+            rmin = np.min(g['rzout'][:,0])
             minor_radius = (rmax - rmin) / 2.0
             rgeo = (rmax + rmin) / 2.0
-            highest_pt_idx = np.argmax(self._boundary[i][:,1])
-            lowest_pt_idx = np.argmin(self._boundary[i][:,1])
-            rupper = self._boundary[i][highest_pt_idx][0]
-            rlower = self._boundary[i][lowest_pt_idx][0]
+            highest_pt_idx = np.argmax(g['rzout'][:,1])
+            lowest_pt_idx = np.argmin(g['rzout'][:,1])
+            rupper = g['rzout'][highest_pt_idx][0]
+            rlower = g['rzout'][lowest_pt_idx][0]
             delta_upper = (rgeo - rupper) / minor_radius
             delta_lower = (rgeo - rlower) / minor_radius
 
+            R.append(g['rcentr'])
+            Z.append(g['zmid'])
+            a.append(minor_radius)
+            kappa.append((zmax - zmin) / (2.0 * minor_radius))
+            delta.append((delta_upper + delta_lower) / 2.0)
+            
+            B0.append(g['bcentr'])
+            pax.append(g['pres'][0])
+            Ip.append(abs(g['ip']))
+
+            lcfs.append(g['rzout'])
+
+            psi_sample = np.linspace(0.0, 1.0, N_PSI)
+            psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])            
+            ffp = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
+            pp = np.interp(psi_sample, psi_eqdsk, g['pprime'])
+            ffp_prof.append(ffp)
+            pp_prof.append(pp)
+
+        def interp_prof(profs, time):
+            for i in range(1, len(self._eqtimes)):
+                if time <= self._eqtimes[i-1]:
+                    return profs[i-1]
+                if time > self._eqtimes[i-1] and time < self._eqtimes[i]:
+                    dt = self._eqtimes[i] - self._eqtimes[i-1]
+                    alpha = (self._eqtimes[i] - time) / dt
+                    return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
+            return profs[-1]
+
+        for i, t in enumerate(self._times):
             # Default Scalars
-            self._state['R'][i] = g['rcentr']
-            self._state['Z'][i] = g['zmid']
-            self._state['a'][i] = minor_radius
-            self._state['kappa'][i] = (zmax - zmin) / (2.0 * minor_radius)
-            self._state['delta'][i] = (delta_upper + delta_lower) / 2.0
-            self._state['deltaU'][i] = delta_upper
-            self._state['deltaL'][i] = delta_lower
-            self._state['B0'][i] = g['bcentr']
-            self._state['V0'][i] = g['zaxis']
-            self._state['pax'][i] = g['pres'][0]
-            self._state['q95'][i] = np.percentile(g['qpsi'], 95)
-            self._state['Ip'][i] = abs(g['ip'])
-            self._state['psi_axis'][i] = abs(g['psimag'])
-            self._state['psi_lcfs'][i] = abs(g['psibry'])
+            self._state['R'][i] = np.interp(t, self._eqtimes, R)
+            self._state['Z'][i] = np.interp(t, self._eqtimes, Z)
+            self._state['a'][i] = np.interp(t, self._eqtimes, a)
+            self._state['kappa'][i] = np.interp(t, self._eqtimes, kappa)
+            self._state['delta'][i] = np.interp(t, self._eqtimes, delta)
+            self._state['B0'][i] = np.interp(t, self._eqtimes, B0)
+            self._state['pax'][i] = np.interp(t, self._eqtimes, pax)
+            self._state['Ip'][i] = np.interp(t, self._eqtimes, Ip)
+            # self._state['psi_axis'][i] = abs(g['psimag'])
+            # self._state['psi_lcfs'][i] = abs(g['psibry'])
 
             # Default Profiles
+            self._state['lcfs'][i] = interp_prof(lcfs, t)
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
-            psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])
-            ffp_prof = np.interp(psi_sample, psi_eqdsk, g['ffprim'])
-            pp_prof = np.interp(psi_sample, psi_eqdsk, g['pprime'])
-            self._state['ffp_prof'][i] = {'x': psi_sample, 'y': ffp_prof, 'type': 'linterp'}
-            self._state['pp_prof'][i] = {'x': psi_sample, 'y': pp_prof, 'type': 'linterp'}
+            self._state['ffp_prof'][i] = {'x': psi_sample, 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
+            self._state['pp_prof'][i] = {'x': psi_sample, 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
 
             # Normalize profiles
@@ -151,13 +182,14 @@ class CGTS:
                 'type': 'linterp',
             }
         
+        self._Ip = None
+        self._Zeff = None
+
         self._nbi_heating = {t_init: 0, t_final: 0}
         self._eccd_heating = {t_init: 0, t_final: 0}
         self._eccd_loc = 0.1
         self._nbi_loc = 0.25
         self._ohmic_power = None
-
-        self._z_eff = None
 
         self._evolve_density = True
         self._evolve_current = True
@@ -208,7 +240,6 @@ class CGTS:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        # print(coil_dict.keys())
         self._gs.settings.maxits = 500
 
         if vsc is not None:
@@ -219,7 +250,7 @@ class CGTS:
         r'''! Set plasma current (Amps).
         @param ip Plasma current.
         '''
-        self._init_ip = ip
+        self._Ip = ip
     
     def set_density(self, n_e):
         r'''! Set density profiles.
@@ -239,11 +270,11 @@ class CGTS:
         '''
         self._T_i = T_i
 
-    def set_Zeff(self, z_eff):
+    def set_Zeff(self, Zeff):
         r'''! Set plasma effective charge.
         @param z_eff Effective charge.
         '''
-        self._z_eff = z_eff
+        self._Zeff = Zeff
     
     def set_nbar(self, nbar):
         r'''! Set line averaged density over time.
@@ -299,10 +330,10 @@ class CGTS:
         self._evolve_Te = Te
     
     def set_Bp(self, Bp):
-        Bp_times = sorted(Bp.keys())
-        Bp_values = [Bp[t] for t in Bp_times]
+        Bp_t = sorted(Bp.keys())
+        Bp_list = [Bp[t] for t in Bp_t]
         for i, t in enumerate(self._times):
-            self._state['beta_pol'][i] = np.interp(t, Bp_times, Bp_values)
+            self._state['beta_pol'][i] = np.interp(t, Bp_t, Bp_list)
 
     def set_Vloop(self, vloop):
         for i in range(len(self._times)):
@@ -385,12 +416,10 @@ class CGTS:
 
             Ip_target = abs(self._state['Ip'][i])
             P0_target = abs(self._state['pax'][i])
-            # V0_target = self._state['V0'][i]
-            # Ip_ratio = 0.05
             if self._state['beta_pol'][i] != 0:
                 print('Using beta_p...')
                 Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
-                self._gs.set_targets(Ip=Ip_target, Ip_ratio = Ip_ratio)
+                self._gs.set_targets(Ip=Ip_target, Ip_ratio=Ip_ratio)
             else:
                 self._gs.set_targets(Ip=Ip_target, pax=P0_target)
 
@@ -398,13 +427,6 @@ class CGTS:
             pp_prof = self._state['pp_prof'][i]
             ffp_prof_save = self._state['ffp_prof_save'][i]
             pp_prof_save = self._state['pp_prof_save'][i]
-            # ffp_prof_save = self._state['ffp_prof'][i]
-            # pp_prof_save = self._state['pp_prof'][i]
-            # if i > 0:
-            #     ffp_prof_save = self._state['ffp_prof_save'][i-1]
-            #     pp_prof_save = self._state['pp_prof_save'][i-1]
-
-
             def mix_profiles(tmp, curr):
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
                 for i, x in enumerate(curr['x']):
@@ -415,23 +437,11 @@ class CGTS:
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
-            lcfs = self._boundary[i]
+            lcfs = self._state['lcfs'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs'][i]
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
-
-            # isoflux_pts = create_isoflux(20,
-            #                              self._state['R'][i],
-            #                              self._state['Z'][i],
-            #                              self._state['a'][i],
-            #                              self._state['kappa'][i],
-            #                              self._state['delta'][i])
-            # # x_points = np.zeros((2,2))
-            # x_points[0,:] = isoflux_pts[np.argmin(isoflux_pts[:,1]),:]
-            # x_points[1,:] = isoflux_pts[np.argmax(isoflux_pts[:,1]),:]
-            # x_weights = 1.E3*np.ones(2)
-            # self._gs.set_saddles(x_points, x_weights)
 
             err_flag = self._gs.init_psi(self._state['R'][i],
                                          self._state['Z'][i],
@@ -446,7 +456,7 @@ class CGTS:
                 fig, ax = plt.subplots(1,1)
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-                ax.plot(self._boundary[i][:, 0], self._boundary[i][:, 1], color='r')
+                ax.plot(self._state['lcfs'][i][:, 0], self._state['lcfs'][i][:, 1], color='r')
                 # ax.set_title(f'i={i}')
                 ax.set_title(f't={self._times[i]}')
                 plt.savefig(f'rampdown_{i}.png')
@@ -473,7 +483,7 @@ class CGTS:
                 self.set_coil_reg(targets=coil_targets)
 
         # consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
-        consumed_flux = np.trapezoid(self._state['vloop'], self._times)
+        consumed_flux = np.trapezoid(self._times, self._state['vloop'])
         return consumed_flux
         
     def _gs_update(self, i):
@@ -486,12 +496,13 @@ class CGTS:
         self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
         self._state['psi_axis'][i] = self._gs.psi_bounds[1]
 
-        if 'psi_lcfs_tmaker' not in self._results:
-            self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
-        self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
-        self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
+        # if 'psi_lcfs_tmaker' not in self._results:
+        #     self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._eqtimes)), 'y': np.zeros(len(self._eqtimes))}
+        # self._results['psi_lcfs_tmaker']['x'][i] = self._eqtimes[i]
+        # self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
         self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        # self._state['vloop'][i] = 0.0
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -523,10 +534,10 @@ class CGTS:
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
             'last_surface_factor': 0.9,  # TODO: tweak
-            # 'n_surfaces': 10,
+            'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
-                t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._times)
+                t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._eqtimes)
             },
         }
         if step:
@@ -537,12 +548,12 @@ class CGTS:
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
-        myconfig['profile_conditions']['psi'] = {
-            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
-        }
+        # myconfig['profile_conditions']['psi'] = {
+        #     t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+        # }
 
-        if self._init_ip:
-             myconfig['profile_conditions']['Ip'] = self._init_ip
+        if self._Ip:
+             myconfig['profile_conditions']['Ip'] = self._Ip
         
         if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
@@ -553,8 +564,8 @@ class CGTS:
         if self._T_i:
             myconfig['profile_conditions']['T_i'] = self._T_i
         
-        if self._z_eff:
-            myconfig['plasma_composition']['Z_eff'] = self._z_eff
+        if self._Zeff:
+            myconfig['plasma_composition']['Z_eff'] = self._Zeff
         
         myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
         myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
@@ -638,9 +649,9 @@ class CGTS:
         
         # if graph:
         #     for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
-        #         fig, ax = plt.subplots(1, len(self._times))
+        #         fig, ax = plt.subplots(1, len(self._eqtimes))
         #         fig.suptitle(var)
-        #         for i, _ in enumerate(self._times):
+        #         for i, _ in enumerate(self._eqtimes):
         #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
         #         plt.show()
         
@@ -758,9 +769,9 @@ class CGTS:
 
     def _res_update(self, data_tree):
 
-        self._results['t_res'] = self._t_res
+        self._results['t_res'] = self._times
 
-        for t in self._t_res:
+        for t in self._times:
             self._results['T_e'][t] = {
                 'x': np.pow(list(data_tree.profiles.T_e.coords['rho_norm'].values), 2),
                 'y': data_tree.profiles.T_e.sel(time=t, method='nearest').to_numpy()
@@ -773,11 +784,11 @@ class CGTS:
                 'x': np.pow(list(data_tree.profiles.n_e.coords['rho_norm'].values), 2),
                 'y': data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
             }
+
             self._results['q'][t] = {
                 'x': np.pow(list(data_tree.profiles.q.coords['rho_face_norm'].values), 2),
                 'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
             }
-
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
@@ -948,9 +959,9 @@ class CGTS:
 
         # if graph:
         #     for var in ['ffp_prof', 'pp_prof']:
-        #         fig, ax = plt.subplots(1, len(self._times))
+        #         fig, ax = plt.subplots(1, len(self._eqtimes))
         #         fig.suptitle(var)
-        #         for i, _ in enumerate(self._times):
+        #         for i, _ in enumerate(self._eqtimes):
         #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
         #         plt.show()           
 
