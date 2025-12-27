@@ -2,7 +2,7 @@ import os
 import json
 
 import numpy as np
-from model import CGTS
+from model import DISMAL
 
 eqdsk_names = sorted(os.listdir('174657/eqs_safe'))
 eqdsk = []
@@ -16,19 +16,19 @@ for fname in eqdsk_names:
     eqtimes.append(t)
     eqdsk.append(f'174657/eqs_safe/{fname}')
 
-print(eqdsk[0])
-
 prof_names = sorted(os.listdir('174657/profs'))
-t_prof = []
+prof_t = []
 for fname in prof_names:
     if 'OMFIT' in fname or 'DS_Store' in fname:
         continue
     t = fname.split('.')[1]
     t = float(t) / 1e3
     if t >= 0.5:
-        t_prof.append(t)
+        prof_t.append(t)
 
-mysim = CGTS(0.5, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=eqtimes) # t_prof[::10]
+prof_t = sorted(prof_t)
+
+mysim = DISMAL(0.5, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=prof_t[::10])
 mysim.initialize_gs('174657/DIIID_mesh.h5')
 
 target_currents = {
@@ -121,19 +121,19 @@ for fname in prof_names:
     rho_space = [np.sqrt(psi) for psi in psi_space]
     te_space = [data['te(KeV)'][psi] for psi in psi_space]
     Te[t] = {rho: te_space[i] for i, rho in enumerate(rho_space)}
-    te_ped = np.interp(0.95, rho_space, te_space)
+    te_ped = np.interp(0.85, rho_space, te_space)
 
     psi_space = sorted(data['ti(KeV)'].keys())
     rho_space = [np.sqrt(psi) for psi in psi_space]
     ti_space = [data['ti(KeV)'][psi] for psi in psi_space]
     Ti[t] = {rho: ti_space[i] for i, rho in enumerate(rho_space)}
-    ti_ped = np.interp(0.95, rho_space, ti_space)
+    ti_ped = np.interp(0.85, rho_space, ti_space)
 
     psi_space = sorted(data['ne(10^20/m^3)'].keys())
     rho_space = [np.sqrt(psi) for psi in psi_space]
     ne_space = [data['ne(10^20/m^3)'][psi] * 1e20 for psi in psi_space]
     ne[t] = {rho: ne_space[i] for i, rho in enumerate(rho_space)} # Use rho coords
-    ne_ped = np.interp(0.95, rho_space, ne_space)
+    ne_ped = np.interp(0.85, rho_space, ne_space)
     nbar[t] = np.mean(ne_space)
 
     T_e_ped[t] = te_ped
@@ -168,10 +168,13 @@ for t in t_inc:
     nbar[t] = np.interp(t, prof_times, nbar_list)
 
 mysim.set_nbar({0.56: nbar[0.56]})
-mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped)
+mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped, ped_top=0.85)
 # mysim.set_right_bc(Te_right_bc={0.56: T_e_right_bc[0.56]},
 #                    Ti_right_bc={0.56: T_i_right_bc[0.56]},
 #                    ne_right_bc={0.56: n_e_right_bc[0.56]})
+# mysim.set_right_bc(Te_right_bc=T_e_right_bc[0.56],
+#                    Ti_right_bc=T_i_right_bc[0.56],
+#                    ne_right_bc=n_e_right_bc[0.56])
 
 Te_init = {0.56: Te[0.56]}
 Ti_init = {0.56: Ti[0.56]}
@@ -183,7 +186,7 @@ mysim.set_density(ne_init)
 # mysim.set_evolve(density=False)
 
 # gaspuff_s = {0.0: 0.0, 2.0: 5.0e21}
-gaspuff_s = {0.0: 0.0, 0.5: 1.0e21, 2.0: 5.0e21}
-mysim.set_gaspuff(s=gaspuff_s, decay_length=0.2) # TODO: tweak
+# gaspuff_s = {0.0: 0.0, 0.5: 1.0e21, 0.8: 1.0e22, 1.0: 2.5e22}
+mysim.set_gaspuff(s=2.5e21, decay_length=0.2)
 
 mysim.fly(graph=False)

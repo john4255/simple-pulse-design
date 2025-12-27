@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.io as sio
-from scipy.interpolate import make_smoothing_spline, interp1d
+from scipy.interpolate import make_smoothing_spline
 import torax
 import copy
 import json
@@ -11,9 +11,11 @@ import shutil
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_isoflux
+from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
 from baseconfig import BASE_CONFIG
+
+import warnings
 
 LCFS_WEIGHT = 100.0
 N_PSI = 100
@@ -26,10 +28,10 @@ class MyEncoder(json.JSONEncoder):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
 
-class CGTS:
+class DISMAL:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=1, times=None, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, prescribed_currents=False):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -40,6 +42,8 @@ class CGTS:
         '''
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
+        warnings.filterwarnings('ignore')
+
         self._state = {}
         self._eqtimes = eqtimes
         self._results = {}
@@ -52,7 +56,7 @@ class CGTS:
         if times is None:
             self._times = eqtimes
         else:
-            self._times = times
+            self._times = sorted(times)
 
         self._state['R'] = np.zeros(len(times))
         self._state['Z'] = np.zeros(len(times))
@@ -105,6 +109,8 @@ class CGTS:
         lcfs = []
         ffp_prof = []
         pp_prof = []
+        psi_axis = []
+        psi_lcfs = []
 
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
@@ -131,6 +137,9 @@ class CGTS:
             pax.append(g['pres'][0])
             Ip.append(abs(g['ip']))
 
+            psi_axis.append(abs(g['psimag']))
+            psi_lcfs.append(abs(g['psibry']))
+
             lcfs.append(g['rzout'])
 
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
@@ -141,12 +150,12 @@ class CGTS:
             pp_prof.append(pp)
 
         def interp_prof(profs, time):
+            if time <= self._eqtimes[0]:
+                return profs[0]
             for i in range(1, len(self._eqtimes)):
-                if time <= self._eqtimes[i-1]:
-                    return profs[i-1]
                 if time > self._eqtimes[i-1] and time < self._eqtimes[i]:
                     dt = self._eqtimes[i] - self._eqtimes[i-1]
-                    alpha = (self._eqtimes[i] - time) / dt
+                    alpha = (time - self._eqtimes[i-1]) / dt
                     return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
             return profs[-1]
 
@@ -160,14 +169,14 @@ class CGTS:
             self._state['B0'][i] = np.interp(t, self._eqtimes, B0)
             self._state['pax'][i] = np.interp(t, self._eqtimes, pax)
             self._state['Ip'][i] = np.interp(t, self._eqtimes, Ip)
-            # self._state['psi_axis'][i] = abs(g['psimag'])
-            # self._state['psi_lcfs'][i] = abs(g['psibry'])
+            self._state['psi_axis'][i] = np.interp(t, self._eqtimes, psi_axis)
+            self._state['psi_lcfs'][i] = np.interp(t, self._eqtimes, psi_lcfs)
 
             # Default Profiles
             self._state['lcfs'][i] = interp_prof(lcfs, t)
             psi_sample = np.linspace(0.0, 1.0, N_PSI)
-            self._state['ffp_prof'][i] = {'x': psi_sample, 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
-            self._state['pp_prof'][i] = {'x': psi_sample, 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
+            self._state['ffp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
+            self._state['pp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
 
             # Normalize profiles
@@ -204,6 +213,7 @@ class CGTS:
         self._T_i_ped = None
         self._T_e_ped = None
         self._n_e_ped = None
+        self._ped_top = 0.95
 
         self._Te_right_bc = None
         self._Ti_right_bc = None
@@ -241,6 +251,7 @@ class CGTS:
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
         self._gs.settings.maxits = 500
+        self._gs.pm = False
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
@@ -305,7 +316,7 @@ class CGTS:
         if ohmic is not None:
             self._ohmic_power = ohmic
 
-    def set_pedestal(self, T_i_ped=None, T_e_ped=None, n_e_ped=None):
+    def set_pedestal(self, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
         @pararm T_i_ped Ion temperature pedestal (dictionary of temperature at times).
         @pararm T_e_ped Electron temperature pedestal (dictionary of temperature at times).
@@ -316,6 +327,8 @@ class CGTS:
             self._T_e_ped = T_e_ped
         if n_e_ped:
             self._n_e_ped = n_e_ped
+
+        self._ped_top = ped_top
 
     def set_evolve(self, density=True, Ti=True, Te=True, current=True):
         r'''! Set variables as either prescribed (False) or evolved (True).
@@ -410,7 +423,7 @@ class CGTS:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
-        for i, t in enumerate(self._times):
+        for i, _ in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
@@ -548,9 +561,9 @@ class CGTS:
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
-        # myconfig['profile_conditions']['psi'] = {
-        #     t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
-        # }
+        myconfig['profile_conditions']['psi'] = {
+            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+        }
 
         if self._Ip:
              myconfig['profile_conditions']['Ip'] = self._Ip
@@ -588,6 +601,8 @@ class CGTS:
         if self._n_e_ped:
             myconfig['pedestal']['n_e_ped_is_fGW'] = False
             myconfig['pedestal']['n_e_ped'] = self._n_e_ped
+        
+        myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
         
         if self._nbar:
             myconfig['profile_conditions']['nbar'] = self._nbar

@@ -27,7 +27,7 @@ BASE_CONFIG = {
         'Z_eff': {0.0: {0.0: 2.0, 1.0: 2.0}},  # sets impurity densities
     },
     'profile_conditions': {
-        'Ip': {0: 3e6, 100: 12.5e6},  # total plasma current in MA
+        # 'Ip': {0: 3e6, 100: 12.5e6},  # total plasma current in MA
         # 'T_i': {0.0: {0.0: 6.0, 1.0: 0.2}}, # T_i initial condition
         # 'T_i_right_bc': 0.2, # T_i boundary condition
         # 'T_e': {0.0: {0.0: 6.0, 1.0: 0.2}},  # T_e initial condition
@@ -35,7 +35,7 @@ BASE_CONFIG = {
         # 'n_e_right_bc_is_fGW': False,
         # 'n_e_right_bc': {0: 0.5E18, 100: 0.3585E20}, # n_e boundary condition
         # set initial condition density according to Greenwald fraction.
-        'nbar': {0: 0.326E20, 80: .905E20},# line average density for initial condition
+        # 'nbar': {0: 0.326E20, 80: .905E20},# line average density for initial condition
         # 'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
         'normalize_n_e_to_nbar': False, # normalize initial n_e to nbar
         'n_e_nbar_is_fGW': False, # nbar is in units for greenwald fraction

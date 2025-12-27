@@ -2,7 +2,7 @@ import os
 import json
 
 import numpy as np
-from model import CGTS
+from model import DISMAL
 
 eqdsk_names = sorted(os.listdir('163303/eqs_safe'))
 eqdsk = []
@@ -17,15 +17,15 @@ for fname in eqdsk_names:
     eqdsk.append(f'163303/eqs_safe/{fname}')
 
 prof_names = sorted(os.listdir('163303/profs'))
-t_res = []
+prof_t = []
 for fname in prof_names:
     if 'OMFIT' in fname or 'DS_Store' in fname:
         continue
     _, t = fname.split('.')
     t = float(t) / 1e3
-    t_res.append(t)
+    prof_t.append(t)
 
-mysim = CGTS(0.1, 5.0, eqtimes, eqdsk, dt=1.0E-2, times=eqtimes)
+mysim = DISMAL(0.1, 5.0, eqtimes, eqdsk, dt=1.0E-2, times=prof_t[::10])
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {
