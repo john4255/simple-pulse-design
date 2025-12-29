@@ -123,8 +123,8 @@ BASE_CONFIG = {
         'model_name': 'qlknn',  # Using QLKNN_7_11 default
         # set inner core transport coefficients (ad-hoc MHD/EM transport)
         'apply_inner_patch': True, # TODO: scan chi?
-        'D_e_inner': 0.15,
-        'V_e_inner': 0.0,
+        # 'D_e_inner': 0.15,
+        # 'V_e_inner': 0.0,
         # 'chi_i_inner': 0.1,
         # 'chi_e_inner': 0.1,
         'rho_inner': 0.1,  # radius below which patch transport is applied
@@ -142,7 +142,7 @@ BASE_CONFIG = {
         'D_e_max': 50,  # maximum electron diffusivity
         'V_e_min': -10,  # minimum electron convection
         'V_e_max': 10,  # minimum electron convection
-        'smoothing_width': 0.1,
+        'smoothing_width': 0.3,
         'DV_effective': True,
         'include_ITG': True,  # to toggle ITG modes on or off
         'include_TEM': True,  # to toggle TEM modes on or off
