@@ -7,6 +7,7 @@ import copy
 import json
 import os
 import shutil
+import warnings
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -14,8 +15,6 @@ from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
 from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
 from baseconfig import BASE_CONFIG
-
-import warnings
 
 LCFS_WEIGHT = 100.0
 N_PSI = 100
@@ -42,7 +41,6 @@ class DISMAL:
         '''
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
-        warnings.filterwarnings('ignore')
 
         self._state = {}
         self._eqtimes = eqtimes
@@ -251,7 +249,7 @@ class DISMAL:
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
         self._gs.settings.maxits = 500
-        self._gs.pm = False
+        # self._gs.pm = False
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
@@ -524,6 +522,21 @@ class DISMAL:
         for coil, current in coils.items():
             self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
 
+    def _test_eqdsk(self, eqdsk):
+            myconfig = copy.deepcopy(BASE_CONFIG)
+            myconfig['geometry'] = {
+                'geometry_type': 'eqdsk',
+                'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
+                'last_surface_factor': 0.95,  # TODO: tweak
+                'Ip_from_parameters': False,
+                'geometry_file': eqdsk,
+            }
+            try:
+                torax_config = torax.ToraxConfig.from_dict(myconfig)
+                return True
+            except:
+                return False
+
     def _get_torax_config(self, step):
         r'''! Generate config object for Torax simulation. Modifies BASE_CONFIG based on current simulation state.
         @param step Iteration number of the Torax-Tokamaker simulation loop.
@@ -546,7 +559,7 @@ class DISMAL:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.9,  # TODO: tweak
+            'last_surface_factor': 0.95,  # TODO: tweak
             'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
@@ -554,8 +567,17 @@ class DISMAL:
             },
         }
         if step:
+            safe_times = []
+            safe_eqdsk = []
+            for i, t in enumerate(self._times):
+                eqdsk = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
+                if self._test_eqdsk(eqdsk):
+                    safe_times.append(t)
+                    safe_eqdsk.append(eqdsk)
+                else:
+                    warnings.warn('Deleting invalid eqdsk file.')
             myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': 'tmp/{:03}.{:03}.eqdsk'.format(step, i)} for i, t in enumerate(self._times)
+                t: {'geometry_file': safe_eqdsk[i]} for i, t in enumerate(safe_times)
             }
 
         myconfig['profile_conditions']['Ip'] = {
