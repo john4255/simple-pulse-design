@@ -15,6 +15,7 @@ for fname in eqdsk_names:
     t = float(t) / 1e3
     eqtimes.append(t)
     eqdsk.append(f'163303/eqs_safe/{fname}')
+eqtimes_1 = eqtimes.copy()
 
 prof_names = sorted(os.listdir('163303/profs'))
 prof_t = []
@@ -23,9 +24,20 @@ for fname in prof_names:
         continue
     _, t = fname.split('.')
     t = float(t) / 1e3
-    prof_t.append(t)
+    if t <= 1.0:
+        prof_t.append(t)
 
-mysim = DISMAL(0.1, 5.0, eqtimes, eqdsk, dt=1.0E-2, times=prof_t[::10])
+extra_eq_names = sorted(os.listdir('163303/eqs_cocos2'))
+for fname in extra_eq_names:
+    if 'OMFIT' in fname or 'DS_Store' in fname:
+        continue
+    tag, _ = fname.split('.')
+    _, t = tag.split('-')
+    t = float(t) / 1e3
+    eqtimes.append(t)
+alltimes = np.append(prof_t[::10], eqtimes)
+
+mysim = DISMAL(0.1, 5.0, eqtimes_1, eqdsk, dt=1.0E-2, times=alltimes)
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {

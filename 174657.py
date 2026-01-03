@@ -28,7 +28,11 @@ for fname in prof_names:
 
 prof_t = sorted(prof_t)
 
-mysim = DISMAL(0.5, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=prof_t[::10])
+print(f'profs t = {prof_t[0]}')
+
+# alltimes = np.append(prof_t[::10], eqtimes)
+
+mysim = DISMAL(0.0, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=eqtimes)
 mysim.initialize_gs('174657/DIIID_mesh.h5')
 
 target_currents = {
@@ -121,19 +125,19 @@ for fname in prof_names:
     rho_space = [np.sqrt(psi) for psi in psi_space]
     te_space = [data['te(KeV)'][psi] for psi in psi_space]
     Te[t] = {rho: te_space[i] for i, rho in enumerate(rho_space)}
-    te_ped = np.interp(0.85, rho_space, te_space)
+    te_ped = np.interp(0.95, rho_space, te_space)
 
     psi_space = sorted(data['ti(KeV)'].keys())
     rho_space = [np.sqrt(psi) for psi in psi_space]
     ti_space = [data['ti(KeV)'][psi] for psi in psi_space]
     Ti[t] = {rho: ti_space[i] for i, rho in enumerate(rho_space)}
-    ti_ped = np.interp(0.85, rho_space, ti_space)
+    ti_ped = np.interp(0.95, rho_space, ti_space)
 
     psi_space = sorted(data['ne(10^20/m^3)'].keys())
     rho_space = [np.sqrt(psi) for psi in psi_space]
     ne_space = [data['ne(10^20/m^3)'][psi] * 1e20 for psi in psi_space]
     ne[t] = {rho: ne_space[i] for i, rho in enumerate(rho_space)} # Use rho coords
-    ne_ped = np.interp(0.85, rho_space, ne_space)
+    ne_ped = np.interp(0.95, rho_space, ne_space)
     nbar[t] = np.mean(ne_space)
 
     T_e_ped[t] = te_ped
@@ -168,7 +172,7 @@ for t in t_inc:
     nbar[t] = np.interp(t, prof_times, nbar_list)
 
 mysim.set_nbar({0.56: nbar[0.56]})
-mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped, ped_top=0.85)
+mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped, ped_top=0.95)
 # mysim.set_right_bc(Te_right_bc={0.56: T_e_right_bc[0.56]},
 #                    Ti_right_bc={0.56: T_i_right_bc[0.56]},
 #                    ne_right_bc={0.56: n_e_right_bc[0.56]})
@@ -176,9 +180,9 @@ mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped, ped_top=0.
 #                    Ti_right_bc=T_i_right_bc[0.56],
 #                    ne_right_bc=n_e_right_bc[0.56])
 
-Te_init = {0.56: Te[0.56]}
-Ti_init = {0.56: Ti[0.56]}
-ne_init = {0.56: ne[0.56]}
+Te_init = {0.5: Te[0.5]}
+Ti_init = {0.5: Ti[0.5]}
+ne_init = {0.5: ne[0.5]}
 # mysim.set_density(ne)
 mysim.set_Te(Te_init)
 mysim.set_Ti(Ti_init)
@@ -186,7 +190,7 @@ mysim.set_density(ne_init)
 # mysim.set_evolve(density=False)
 
 # gaspuff_s = {0.0: 0.0, 2.0: 5.0e21}
-# gaspuff_s = {0.0: 0.0, 0.5: 1.0e21, 0.8: 1.0e22, 1.0: 2.5e22}
-mysim.set_gaspuff(s=2.5e21, decay_length=0.2)
+gaspuff_s = {0.5: 0.0, 1.0: 1.0e21, 0.8: 1.0e22, 1.5: 1.0e22}
+mysim.set_gaspuff(s=gaspuff_s, decay_length=0.2) # 1.0e22
 
 mysim.fly(graph=False)
