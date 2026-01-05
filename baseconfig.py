@@ -123,9 +123,9 @@ BASE_CONFIG = {
         'model_name': 'qlknn',  # Using QLKNN_7_11 default
         # set inner core transport coefficients (ad-hoc MHD/EM transport)
         'apply_inner_patch': True, # TODO: scan chi?
-        # 'D_e_inner': 0.15,
+        # 'D_e_inner': 0.1,
         # 'V_e_inner': 0.0,
-        # 'chi_i_inner': 0.1,
+        'chi_i_inner': 0.1,
         # 'chi_e_inner': 0.1,
         'rho_inner': 0.1,  # radius below which patch transport is applied
         # set outer core transport coefficients (L-mode near edge region)
