@@ -30,9 +30,9 @@ prof_t = sorted(prof_t)
 
 print(f'profs t = {prof_t[0]}')
 
-# alltimes = np.append(prof_t[::10], eqtimes)
+alltimes = np.append(prof_t[::5], eqtimes)
 
-mysim = DISMAL(0.0, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=eqtimes)
+mysim = DISMAL(0.0, 5.5, eqtimes, eqdsk, dt=1.0E-2, times=alltimes)
 mysim.initialize_gs('174657/DIIID_mesh.h5')
 
 target_currents = {
@@ -171,7 +171,7 @@ for t in t_inc:
 
     nbar[t] = np.interp(t, prof_times, nbar_list)
 
-mysim.set_nbar({0.56: nbar[0.56]})
+mysim.set_nbar({0.5: nbar[0.5]})
 mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped, ped_top=0.95)
 # mysim.set_right_bc(Te_right_bc={0.56: T_e_right_bc[0.56]},
 #                    Ti_right_bc={0.56: T_i_right_bc[0.56]},
@@ -190,7 +190,7 @@ mysim.set_density(ne_init)
 # mysim.set_evolve(density=False)
 
 # gaspuff_s = {0.0: 0.0, 2.0: 5.0e21}
-gaspuff_s = {0.5: 0.0, 1.0: 1.0e21, 0.8: 1.0e22, 1.5: 1.0e22}
-mysim.set_gaspuff(s=gaspuff_s, decay_length=0.2) # 1.0e22
+# gaspuff_s = {0.5: 0.0, 1.0: 1.0e21, 0.8: 1.0e22, 1.5: 1.0e22}
+mysim.set_gaspuff(s={0.0: 0.0, 1.5: 1.0e22}, decay_length=0.2) # 1.0e22
 
 mysim.fly(graph=False)
