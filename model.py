@@ -379,6 +379,9 @@ class DISMAL:
 
     def set_ohmic(self, times, rho, values):
         self._ohmic = ((times), (rho), (values))
+    
+    def set_validation_density(self, ne):
+        self._validation_ne = ne
             
     def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -445,7 +448,11 @@ class DISMAL:
                     my_prof['x'][i] = x
                     my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
-            self._gs.set_profiles(ffp_prof=mix_profiles(ffp_prof_save, ffp_prof), pp_prof=mix_profiles(pp_prof_save, pp_prof))
+            self._gs.set_profiles(
+                ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
+                pp_prof=mix_profiles(pp_prof_save, pp_prof),
+                # ffp_NI_prof=???,
+            )
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
@@ -968,6 +975,17 @@ class DISMAL:
             'x': list(data_tree.scalars.P_SOL_total.coords['time'].values),
             'y': -1.0 * data_tree.scalars.P_SOL_total.to_numpy(),
         }
+
+        # Update accuracy metrics
+        self._results['n_e_diff'] = 0.0
+        for _, t in enumerate(self._times):
+            rho_real = sorted(self._validation_ne[t].keys())
+            ne_real = [self._validation_ne[t][rho] for rho in rho_real]
+            for j, rho_norm in enumerate(self._results['n_e'][t]['x']):
+                volume = data_tree.profiles.volume.sel(time=t, rho_norm=rho_norm, method='nearest').to_numpy()
+                diff = self._results['n_e'][t]['y'][j] - np.interp(rho_norm, rho_real, ne_real)
+                self._results['n_e_diff'] += volume * abs(diff)
+        self._results['n_e_diff'] /= len(self._times)
 
     def save_state(self, fname):
         r'''! Save intermediate simulation state to JSON.

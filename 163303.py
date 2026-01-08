@@ -192,6 +192,9 @@ mysim.set_density(ne_init)
 # mysim.set_density(ne)
 # mysim.set_evolve(density=False)
 
+# Validation
+mysim.set_validation_density(ne)
+
 # gaspuff_s = {0.0: 0.0, 1.1: 5.0e21, 2.5: 0.0}
 mysim.set_gaspuff(s=2.5e21, decay_length=0.2)
 
