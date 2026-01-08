@@ -492,8 +492,9 @@ class DISMAL:
             #     dt = self._times[i] - self._times[i-1]
             #     dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
-            # self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
-            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.00001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
+            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),
+                                lcfs_pad=0.001,run_info='TokaMaker EQDSK',
+                                cocos=2)
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -503,7 +504,7 @@ class DISMAL:
                 self.set_coil_reg(targets=coil_targets)
 
         # consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
-        consumed_flux = np.trapezoid(self._times, self._state['vloop'])
+        consumed_flux = np.trapezoid(self._state['vloop'], self._times)
         return consumed_flux
         
     def _gs_update(self, i):
@@ -522,7 +523,6 @@ class DISMAL:
         # self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
         self._state['vloop'][i] = self._gs.calc_loopvoltage()
-        # self._state['vloop'][i] = 0.0
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -536,12 +536,12 @@ class DISMAL:
             myconfig['geometry'] = {
                 'geometry_type': 'eqdsk',
                 'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-                'last_surface_factor': self._last_surface_factor,  # TODO: tweak
+                'last_surface_factor': self._last_surface_factor,
                 'Ip_from_parameters': False,
                 'geometry_file': eqdsk,
             }
             try:
-                torax_config = torax.ToraxConfig.from_dict(myconfig)
+                _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except:
                 return False
@@ -568,7 +568,7 @@ class DISMAL:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': self._last_surface_factor,  # TODO: tweak
+            'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
@@ -999,7 +999,7 @@ class DISMAL:
         with open(self._fname_out, 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=50, out='res.json'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=10, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
