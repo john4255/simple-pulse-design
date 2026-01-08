@@ -484,7 +484,7 @@ class DISMAL:
             #     dt = self._times[i] - self._times[i-1]
             #     dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
-            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2)
+            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
 
             if self._prescribed_currents:
                 if i < len(self._times):
