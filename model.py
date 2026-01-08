@@ -56,22 +56,22 @@ class DISMAL:
         else:
             self._times = sorted(times)
 
-        self._state['R'] = np.zeros(len(times))
-        self._state['Z'] = np.zeros(len(times))
-        self._state['a'] = np.zeros(len(times))
-        self._state['kappa'] = np.zeros(len(times))
-        self._state['delta'] = np.zeros(len(times))    
-        self._state['deltaU'] = np.zeros(len(times))    
-        self._state['deltaL'] = np.zeros(len(times))    
-        self._state['B0'] = np.zeros(len(times))
-        self._state['V0'] = np.zeros(len(times))
-        self._state['Ip'] = np.zeros(len(times))
-        self._state['pax'] = np.zeros(len(times))
-        self._state['beta_pol'] = np.zeros(len(times))
-        self._state['vloop'] = np.zeros(len(times))
-        self._state['q95'] = np.zeros(len(times))
-        self._state['psi_lcfs'] = np.zeros(len(times))
-        self._state['psi_axis'] = np.zeros(len(times))
+        self._state['R'] = np.zeros(len(self._times))
+        self._state['Z'] = np.zeros(len(self._times))
+        self._state['a'] = np.zeros(len(self._times))
+        self._state['kappa'] = np.zeros(len(self._times))
+        self._state['delta'] = np.zeros(len(self._times))    
+        self._state['deltaU'] = np.zeros(len(self._times))    
+        self._state['deltaL'] = np.zeros(len(self._times))    
+        self._state['B0'] = np.zeros(len(self._times))
+        self._state['V0'] = np.zeros(len(self._times))
+        self._state['Ip'] = np.zeros(len(self._times))
+        self._state['pax'] = np.zeros(len(self._times))
+        self._state['beta_pol'] = np.zeros(len(self._times))
+        self._state['vloop'] = np.zeros(len(self._times))
+        self._state['q95'] = np.zeros(len(self._times))
+        self._state['psi_lcfs'] = np.zeros(len(self._times))
+        self._state['psi_axis'] = np.zeros(len(self._times))
 
         self._state['lcfs'] = {}
         self._state['ffp_prof'] = {}
@@ -88,8 +88,8 @@ class DISMAL:
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
-        self._results['vloop_tmaker'] = np.zeros([20, len(times)])
-        self._results['vloop_torax'] = np.zeros([20, len(times)])
+        self._results['vloop_tmaker'] = np.zeros([20, len(self._times)])
+        self._results['vloop_torax'] = np.zeros([20, len(self._times)])
         self._results['q'] = {}
         self._results['jtot'] = {}
         self._results['n_e'] = {}
@@ -484,7 +484,8 @@ class DISMAL:
             #     dt = self._times[i] - self._times[i-1]
             #     dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
             #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
-            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
+            # self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
+            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),lcfs_pad=0.00001,run_info='TokaMaker EQDSK', cocos=2) # TODO: scan lcfs_pad 0.1-->0.00001
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -559,7 +560,7 @@ class DISMAL:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.95,  # TODO: tweak
+            'last_surface_factor': 0.9,  # TODO: tweak
             'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
