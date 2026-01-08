@@ -1,6 +1,6 @@
 import numpy as np
 
-from model import CGTS
+from model import DISMAL
 
 # Reproduciton of Capser (2014) with density evolution
 # https://iopscience.iop.org/article/10.1088/0029-5515/54/1/013005/meta
@@ -52,7 +52,8 @@ Te_right_bc = 0.01
 Ti_right_bc = 0.01
 
 # Run sim
-mysim = CGTS(0, 600, times, g_arr)
+t_res = np.arange(0.0, 600.0, 20.0)
+mysim = DISMAL(0, 600, times, g_arr, times=t_res, dt=1.0, last_surface_factor=0.9)
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'PF6']
 target_currents = {coil: 0.0 for coil in coil_names}

@@ -30,7 +30,7 @@ class MyEncoder(json.JSONEncoder):
 class DISMAL:
     '''! Coupled Grad-Shafranov/Transport Solver Object.'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, prescribed_currents=False):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -50,6 +50,7 @@ class DISMAL:
         self._t_final = t_final
         self._dt = dt
         self._prescribed_currents = prescribed_currents
+        self._last_surface_factor = last_surface_factor
 
         if times is None:
             self._times = eqtimes
@@ -379,7 +380,7 @@ class DISMAL:
     def set_ohmic(self, times, rho, values):
         self._ohmic = ((times), (rho), (values))
             
-    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
+    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=1.0E8, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
         @param weights Default weight for each coil.
@@ -528,7 +529,7 @@ class DISMAL:
             myconfig['geometry'] = {
                 'geometry_type': 'eqdsk',
                 'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-                'last_surface_factor': 0.95,  # TODO: tweak
+                'last_surface_factor': self._last_surface_factor,  # TODO: tweak
                 'Ip_from_parameters': False,
                 'geometry_file': eqdsk,
             }
@@ -560,7 +561,7 @@ class DISMAL:
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': '/Users/johnl/Desktop/discharge-model', 
-            'last_surface_factor': 0.9,  # TODO: tweak
+            'last_surface_factor': self._last_surface_factor,  # TODO: tweak
             'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
