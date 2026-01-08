@@ -125,7 +125,7 @@ BASE_CONFIG = {
         'apply_inner_patch': True, # TODO: scan chi?
         # 'D_e_inner': 0.1,
         # 'V_e_inner': 0.0,
-        'chi_i_inner': 0.1,
+        # 'chi_i_inner': 0.1,
         # 'chi_e_inner': 0.1,
         'rho_inner': 0.1,  # radius below which patch transport is applied
         # set outer core transport coefficients (L-mode near edge region)
@@ -148,6 +148,8 @@ BASE_CONFIG = {
         'include_TEM': True,  # to toggle TEM modes on or off
         'include_ETG': True,  # to toggle ETG modes on or off
         'avoid_big_negative_s': False,
+        # 'rotation_multiplier': 1.0,
+        # 'rotation_mode': 'half_radius',
     },
     'solver': {
         'solver_type': 'newton_raphson', # linear solver with picard iteration

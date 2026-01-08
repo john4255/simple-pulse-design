@@ -249,17 +249,17 @@ class DISMAL:
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
         self._gs.settings.maxits = 500
-        # self._gs.pm = False
+        # self._gs.settings.pm = False
 
         if vsc is not None:
             self._gs.set_coil_vsc({vsc: 1.0})
         # self.set_coil_reg(targets, weights=weights, weight_mult=0.1)
 
-    def set_Ip(self, ip):
+    def set_Ip(self, Ip):
         r'''! Set plasma current (Amps).
         @param ip Plasma current.
         '''
-        self._Ip = ip
+        self._Ip = Ip
     
     def set_density(self, n_e):
         r'''! Set density profiles.
@@ -476,7 +476,7 @@ class DISMAL:
             self._gs.update_settings()
             err_flag = self._gs.solve()
 
-            self._gs.print_info()
+            # self._gs.print_info()
             self._gs_update(i)
 
             # if i:
@@ -822,9 +822,11 @@ class DISMAL:
                 'y': data_tree.profiles.n_e.sel(time=t, method='nearest').to_numpy()
             }
 
+            psi_norm = data_tree.profiles.psi_norm.sel(time=t, method='nearest')
+            q = data_tree.profiles.q.sel(time=t, method='nearest')
             self._results['q'][t] = {
-                'x': np.pow(list(data_tree.profiles.q.coords['rho_face_norm'].values), 2),
-                'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
+                'x': [psi_norm.sel(rho_face_norm=rfn, method='nearest').to_numpy() for rfn in q.coords['rho_face_norm'].values],
+                'y': q.to_numpy()
             }
 
         self._results['E_fusion'] = {
