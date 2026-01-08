@@ -380,7 +380,7 @@ class DISMAL:
     def set_ohmic(self, times, rho, values):
         self._ohmic = ((times), (rho), (values))
             
-    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=1.0E8, disable_virtual_vsc=True, weight_mult=1.0):
+    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
         @param targets Target values for each coil.
         @param weights Default weight for each coil.

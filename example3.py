@@ -57,7 +57,7 @@ mysim = DISMAL(0, 600, times, g_arr, times=t_res, dt=1.0, last_surface_factor=0.
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'PF6']
 target_currents = {coil: 0.0 for coil in coil_names}
-mysim.set_coil_reg(targets=target_currents)
+mysim.set_coil_reg(targets=target_currents, strict_limit=1.0E8)
 
 mysim.set_Ip(ip)
 mysim.set_Zeff(1.8)
