@@ -8,7 +8,7 @@ To install:
 
 `source env/bin/activate`
 
-`pip install torax`
+`pip install torax==1.0.3`
 
 Then clone and install [OpenFUSIONTookit](https://github.com/OpenFUSIONToolkit/OpenFUSIONToolkit) using instructions in the OFT documentation.
 
