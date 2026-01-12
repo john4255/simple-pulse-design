@@ -28,7 +28,7 @@ class MyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 class DISMAL:
-    '''! Coupled Grad-Shafranov/Transport Solver Object.'''
+    '''! Discharge Modeling Algorithm.'''
 
     def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, prescribed_currents=False):
         r'''! Initialize the Coupled Grad-Shafranov/Transport Solver Object.
@@ -38,6 +38,8 @@ class DISMAL:
         @param g_eqdsk_arr Filenames of each gEQDSK file.
         @param dt Time step (s).
         @param times Time points to sample output at.
+        @param last_surface_factor Last surface factor for Torax.
+        @param prescribed_currents Use prescribed coil currents or solve inverse problem to calcluate currents.
         '''
         self._oftenv = OFT_env(nthreads=2)
         self._gs = TokaMaker(self._oftenv)
@@ -85,7 +87,7 @@ class DISMAL:
         self._state['n_e'] = {}
         self._state['n_i'] = {}
         self._state['Ptot'] = {}
-        # self._state['psi'] = {}
+        self._state['ffpni'] = {}
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -177,6 +179,7 @@ class DISMAL:
             self._state['ffp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
+            self._state['ffpni'][i] = {'x': np.zeros(N_PSI), 'y': np.zeros(N_PSI), 'type': 'linterp'}
 
             # Normalize profiles
             self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
@@ -448,11 +451,19 @@ class DISMAL:
                     my_prof['x'][i] = x
                     my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
-            self._gs.set_profiles(
-                ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
-                pp_prof=mix_profiles(pp_prof_save, pp_prof),
-                # ffp_NI_prof=???,
-            )
+            # ffp_NI = self.state['Ip']
+            if step:
+                # print(self._state['ffpni'][i])
+                self._gs.set_profiles(
+                    ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
+                    pp_prof=mix_profiles(pp_prof_save, pp_prof),
+                    ffp_NI_prof=self._state['ffpni'][i],
+                )
+            else:
+                self._gs.set_profiles(
+                    ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
+                    pp_prof=mix_profiles(pp_prof_save, pp_prof)
+                )
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
@@ -646,13 +657,7 @@ class DISMAL:
             myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
         if self._Ti_right_bc:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
-        
-        # if self._ohmic:
-        #     myconfig['sources']['ohmic'] = {
-        #         'mode': 'PRESCRIBED',
-        #         'prescribed_values': self._ohmic,
-        #     }
-        
+                
         if self._gp_s and self._gp_dl:
             myconfig['sources']['gas_puff'] = {
                 'S_total': self._gp_s,
@@ -693,14 +698,6 @@ class DISMAL:
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') / (2.0 * np.pi)
             # self._state[''] = v_loops[i]
         
-        # if graph:
-        #     for var in ['ffp_prof', 'pp_prof', 'eta_prof']:
-        #         fig, ax = plt.subplots(1, len(self._eqtimes))
-        #         fig.suptitle(var)
-        #         for i, _ in enumerate(self._eqtimes):
-        #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
-        #         plt.show()
-        
         self._res_update(data_tree)
 
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
@@ -714,12 +711,31 @@ class DISMAL:
         '''
         t = self._times[i]
 
-        # print('test v loop')
-        # print(data_tree.profiles.v_loop.sel(time=t, rho_norm=1.0, method='nearest').to_numpy())
-        # psi_lcfs1 = data_tree.profiles.psi.sel(time=t-1.0, rho_norm=1.0, method='nearest').to_numpy()
-        # psi_lcfs2 = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').to_numpy()
-        # dpsi_lcfs_dt = (psi_lcfs2 - psi_lcfs1) / 1.0
-        # print(dpsi_lcfs_dt)
+        ### Non-Inductive Current
+        j_ext = data_tree.profiles.j_external.sel(time=t, method='nearest')
+        j_bootstrap = data_tree.profiles.j_bootstrap.sel(time=t, method='nearest')
+        j_ohmic = data_tree.profiles.j_ohmic.sel(time=t, method='nearest')
+
+        rho_sample = np.linspace(0.0, 1.0, N_PSI)
+        dpsi = rho_sample[1] - rho_sample[0]
+        area = data_tree.profiles.area.sel(time=t, method='nearest')
+        prev_area = 0.0
+        prev_F = 0.0
+        j_tot = 0.0
+
+        for j, rho_norm in enumerate(rho_sample):
+            dA = area.sel(rho_norm=rho_norm, method='nearest').to_numpy() - prev_area
+            j_ni = j_ext.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy() + \
+                    j_bootstrap.sel(rho_norm=rho_norm, method='nearest').to_numpy() + \
+                    j_ohmic.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy()
+            self._state['ffpni'][i]['x'][j] = rho_norm ** 2
+            j_tot += j_ni * dA
+            F = 1.2566e-6 * j_tot / (2.0 * np.pi)
+            ffpni = (F ** 2 - prev_F ** 2) / dpsi
+            self._state['ffpni'][i]['y'][j] = ffpni
+            prev_area = area.sel(rho_norm=rho_norm, method='nearest').to_numpy()
+            prev_F = F
+        plt.plot(self._state['ffpni'][i]['x'], self._state['ffpni'][i]['y'])
         
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['pax'][i] = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest')
@@ -739,6 +755,9 @@ class DISMAL:
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
+
+        plt.plot(self._state['ffp_prof'][i]['x'], -self._state['ffp_prof'][i]['y'])
+        plt.show()
 
         psi_sample = np.linspace(0.0, 1.0, N_PSI)
         ffp_sample = np.interp(psi_sample, self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
@@ -813,6 +832,17 @@ class DISMAL:
         self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest') / (2.0 * np.pi)
         self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest') / (2.0 * np.pi)
 
+        # areas = data_tree.profiles.area.sel(time=t, method='nearest')
+        # rho_sample = areas.coords['rho_norm'].values
+        # self._state['ffpni'][i] = {
+        #     'x': np.pow(rho_sample, 2),
+        #     'y': np.zeros_like(rho_sample),
+        #     'type': 'linterp',
+        # }
+        # for i, rho_norm in enumerate(rho_sample):
+        #     area = areas.sel(rho_norm=rho_norm)
+        #     self._state['ffpni']['y'][i] = area * data_tree.profiles.j_generic_current.sel(rho_cell_norm=rho_norm, method='neraest')
+
     def _res_update(self, data_tree):
 
         self._results['t_res'] = self._times
@@ -857,16 +887,6 @@ class DISMAL:
             'x': list(data_tree.scalars.B_0.coords['time'].values),
             'y': data_tree.scalars.B_0.to_numpy(),
         }
-
-        # self._results['q'][i] = {
-        #     'x': list(data_tree.profiles.q.coords['rho_face_norm'].values),
-        #     'y': data_tree.profiles.q.sel(time=t, method='nearest').to_numpy()
-        # }
-
-        # self._results['jtot'][i] = {
-        #     'x': list(data_tree.profiles.j_total.coords['rho_norm'].values),
-        #     'y': data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
-        # }
 
         self._results['n_e_line_avg'] = {
             'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
@@ -1015,14 +1035,6 @@ class DISMAL:
         os.mkdir('./tmp')
 
         self._fname_out = out
-
-        # if graph:
-        #     for var in ['ffp_prof', 'pp_prof']:
-        #         fig, ax = plt.subplots(1, len(self._eqtimes))
-        #         fig.suptitle(var)
-        #         for i, _ in enumerate(self._eqtimes):
-        #             ax[i].plot(self._state[var][i]['x'], self._state[var][i]['y'])
-        #         plt.show()           
 
         err = convergence_threshold + 1.0
         step = 0
