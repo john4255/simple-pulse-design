@@ -717,7 +717,7 @@ class DISMAL:
         j_ohmic = data_tree.profiles.j_ohmic.sel(time=t, method='nearest')
 
         rho_sample = np.linspace(0.0, 1.0, N_PSI)
-        dpsi = rho_sample[1] - rho_sample[0]
+        dpsi = rho_sample[1] ** 2 - rho_sample[0] ** 2
         area = data_tree.profiles.area.sel(time=t, method='nearest')
         prev_area = 0.0
         prev_F = 0.0
@@ -725,11 +725,11 @@ class DISMAL:
 
         for j, rho_norm in enumerate(rho_sample):
             dA = area.sel(rho_norm=rho_norm, method='nearest').to_numpy() - prev_area
-            j_ni = j_ext.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy() + \
+            j = j_ext.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy() + \
                     j_bootstrap.sel(rho_norm=rho_norm, method='nearest').to_numpy() + \
                     j_ohmic.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy()
             self._state['ffpni'][i]['x'][j] = rho_norm ** 2
-            j_tot += j_ni * dA
+            j_tot += j * dA
             F = 1.2566e-6 * j_tot / (2.0 * np.pi)
             ffpni = (F ** 2 - prev_F ** 2) / dpsi
             self._state['ffpni'][i]['y'][j] = ffpni
