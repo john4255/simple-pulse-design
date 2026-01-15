@@ -7,7 +7,6 @@ import copy
 import json
 import os
 import shutil
-import warnings
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -81,13 +80,15 @@ class DISMAL:
         self._state['pp_prof'] = {}
         self._state['ffp_prof_save'] = {}
         self._state['pp_prof_save'] = {}
+        self._state['pres'] = {}
+        self._state['fpol'] = {}
         self._state['eta_prof'] = {}
         self._state['T_e'] = {}
         self._state['T_i'] = {}
         self._state['n_e'] = {}
         self._state['n_i'] = {}
         self._state['Ptot'] = {}
-        self._state['ffpni'] = {}
+        self._state['ffpni_prof'] = {}
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -112,6 +113,8 @@ class DISMAL:
         pp_prof = []
         psi_axis = []
         psi_lcfs = []
+        pres_prof = []
+        fpol_prof = []
 
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
@@ -150,11 +153,18 @@ class DISMAL:
             ffp_prof.append(ffp)
             pp_prof.append(pp)
 
+            pres = np.interp(psi_sample, psi_eqdsk, g['pres'])
+            fpol = np.interp(psi_sample, psi_eqdsk, g['fpol'])
+            pres_prof.append(pres)
+            fpol_prof.append(fpol)
+
+        self.lcfs = lcfs
+
         def interp_prof(profs, time):
             if time <= self._eqtimes[0]:
                 return profs[0]
             for i in range(1, len(self._eqtimes)):
-                if time > self._eqtimes[i-1] and time < self._eqtimes[i]:
+                if time > self._eqtimes[i-1] and time <= self._eqtimes[i]:
                     dt = self._eqtimes[i] - self._eqtimes[i-1]
                     alpha = (time - self._eqtimes[i-1]) / dt
                     return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
@@ -179,7 +189,7 @@ class DISMAL:
             self._state['ffp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': psi_sample.copy(), 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
-            self._state['ffpni'][i] = {'x': np.zeros(N_PSI), 'y': np.zeros(N_PSI), 'type': 'linterp'}
+            self._state['ffpni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
 
             # Normalize profiles
             self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
@@ -192,6 +202,9 @@ class DISMAL:
                 'y': np.zeros(N_PSI),
                 'type': 'linterp',
             }
+            
+            self._state['pres'][i] = {'x': psi_sample.copy(), 'y': interp_prof(pres_prof, t), 'type': 'linterp'}
+            self._state['fpol'][i] = {'x': psi_sample.copy(), 'y': interp_prof(fpol_prof, t), 'type': 'linterp'}
         
         self._Ip = None
         self._Zeff = None
@@ -451,13 +464,11 @@ class DISMAL:
                     my_prof['x'][i] = x
                     my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
 
-            # ffp_NI = self.state['Ip']
             if step:
-                # print(self._state['ffpni'][i])
                 self._gs.set_profiles(
                     ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
                     pp_prof=mix_profiles(pp_prof_save, pp_prof),
-                    ffp_NI_prof=self._state['ffpni'][i],
+                    # ffp_NI_prof=self._state['ffpni_prof'][i],
                 )
             else:
                 self._gs.set_profiles(
@@ -487,7 +498,6 @@ class DISMAL:
                 self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
                 self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
                 ax.plot(self._state['lcfs'][i][:, 0], self._state['lcfs'][i][:, 1], color='r')
-                # ax.set_title(f'i={i}')
                 ax.set_title(f't={self._times[i]}')
                 plt.savefig(f'rampdown_{i}.png')
                 plt.show()
@@ -528,10 +538,10 @@ class DISMAL:
         self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
         self._state['psi_axis'][i] = self._gs.psi_bounds[1]
 
-        # if 'psi_lcfs_tmaker' not in self._results:
-        #     self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._eqtimes)), 'y': np.zeros(len(self._eqtimes))}
-        # self._results['psi_lcfs_tmaker']['x'][i] = self._eqtimes[i]
-        # self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
+        if 'psi_lcfs_tmaker' not in self._results:
+            self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
+        self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
+        self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i]
 
         self._state['vloop'][i] = self._gs.calc_loopvoltage()
         
@@ -595,7 +605,7 @@ class DISMAL:
                     safe_times.append(t)
                     safe_eqdsk.append(eqdsk)
                 else:
-                    warnings.warn('Deleting invalid eqdsk file.')
+                    print('Deleting invalid eqdsk file.')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': safe_eqdsk[i]} for i, t in enumerate(safe_times)
             }
@@ -603,9 +613,9 @@ class DISMAL:
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
-        myconfig['profile_conditions']['psi'] = {
-            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
-        }
+        # myconfig['profile_conditions']['psi'] = {
+        #     t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+        # }
 
         if self._Ip:
              myconfig['profile_conditions']['Ip'] = self._Ip
@@ -695,13 +705,28 @@ class DISMAL:
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
             self._transport_update(step, i, data_tree)
-            v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest') / (2.0 * np.pi)
+            v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
             # self._state[''] = v_loops[i]
         
         self._res_update(data_tree)
 
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         return consumed_flux
+
+    def _calc_ffp(self, i, data_tree):
+        t = self._times[i]
+        cocos = {'sigma_Bp': 1, 'sigma_RpZ': -1, 'sigma_rhotp': 1, 'sign_q_pos': 1, 'sign_pprime_pos': -1, 'exp_Bp': 0} # COCOS=2
+        psi_coords = self._state['pp_prof'][i]['x']
+        pprime = self._state['pp_prof'][i]['y']
+        j_tor_coords = np.pow(data_tree.profiles.j_total.sel(time=t, method='nearest').coords['rho_norm'].values, 2)
+        j_tor = data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
+        j_tor = np.interp(psi_coords, j_tor_coords, j_tor)
+        _, _, geo, _, _, _ = self._gs.get_q(npsi=100, psi_pad=0.02, compute_geo=True)
+        R_avg = np.array(geo[0])
+        R_inv_avg = np.array(geo[1])
+        ffprim = j_tor * cocos['sigma_Bp'] / (2.0 * np.pi) ** cocos['exp_Bp'] + pprime * R_avg
+        ffprim *= -4 * np.pi * 1e-7 / R_inv_avg
+        return {'x': psi_coords, 'y': ffprim, 'type': 'linterp'}
     
     def _transport_update(self, step, i, data_tree, smooth=False):
         r'''! Update the simulation state and simulation results based on results of the Torax simulation.
@@ -711,32 +736,6 @@ class DISMAL:
         '''
         t = self._times[i]
 
-        ### Non-Inductive Current
-        j_ext = data_tree.profiles.j_external.sel(time=t, method='nearest')
-        j_bootstrap = data_tree.profiles.j_bootstrap.sel(time=t, method='nearest')
-        j_ohmic = data_tree.profiles.j_ohmic.sel(time=t, method='nearest')
-
-        rho_sample = np.linspace(0.0, 1.0, N_PSI)
-        dpsi = rho_sample[1] ** 2 - rho_sample[0] ** 2
-        area = data_tree.profiles.area.sel(time=t, method='nearest')
-        prev_area = 0.0
-        prev_F = 0.0
-        j_tot = 0.0
-
-        for j, rho_norm in enumerate(rho_sample):
-            dA = area.sel(rho_norm=rho_norm, method='nearest').to_numpy() - prev_area
-            j = j_ext.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy() + \
-                    j_bootstrap.sel(rho_norm=rho_norm, method='nearest').to_numpy() + \
-                    j_ohmic.sel(rho_cell_norm=rho_norm, method='nearest').to_numpy()
-            self._state['ffpni'][i]['x'][j] = rho_norm ** 2
-            j_tot += j * dA
-            F = 1.2566e-6 * j_tot / (2.0 * np.pi)
-            ffpni = (F ** 2 - prev_F ** 2) / dpsi
-            self._state['ffpni'][i]['y'][j] = ffpni
-            prev_area = area.sel(rho_norm=rho_norm, method='nearest').to_numpy()
-            prev_F = F
-        plt.plot(self._state['ffpni'][i]['x'], self._state['ffpni'][i]['y'])
-        
         self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['pax'][i] = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
@@ -755,9 +754,6 @@ class DISMAL:
             'y': ffprime.to_numpy(),
             'type': 'linterp',
         }
-
-        plt.plot(self._state['ffp_prof'][i]['x'], -self._state['ffp_prof'][i]['y'])
-        plt.show()
 
         psi_sample = np.linspace(0.0, 1.0, N_PSI)
         ffp_sample = np.interp(psi_sample, self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
@@ -789,6 +785,17 @@ class DISMAL:
         if smooth:
             self._state['ffp_prof'][i]['y'] = make_smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
             self._state['pp_prof'][i]['y'] = make_smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
+
+        self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
+        self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
+        self._state['ffpni_prof'][i]['y'] /= self._state['ffpni_prof'][i]['y'][0]
+
+        # Test Non-Inductive Current
+        if i % 10 == 0:
+            plt.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], label='FFp')
+            plt.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], linestyle='dashed', label='FFp NI')
+            plt.legend()
+            plt.show()
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
@@ -834,14 +841,14 @@ class DISMAL:
 
         # areas = data_tree.profiles.area.sel(time=t, method='nearest')
         # rho_sample = areas.coords['rho_norm'].values
-        # self._state['ffpni'][i] = {
+        # self._state['ffpni_prof'][i] = {
         #     'x': np.pow(rho_sample, 2),
         #     'y': np.zeros_like(rho_sample),
         #     'type': 'linterp',
         # }
         # for i, rho_norm in enumerate(rho_sample):
         #     area = areas.sel(rho_norm=rho_norm)
-        #     self._state['ffpni']['y'][i] = area * data_tree.profiles.j_generic_current.sel(rho_cell_norm=rho_norm, method='neraest')
+        #     self._state['ffpni_prof']['y'][i] = area * data_tree.profiles.j_generic_current.sel(rho_cell_norm=rho_norm, method='neraest')
 
     def _res_update(self, data_tree):
 
@@ -961,9 +968,14 @@ class DISMAL:
         }
 
         psi_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
+        psi_axis = data_tree.profiles.psi.sel(rho_norm = 0.0)
         self._results['psi_lcfs_torax'] = {
             'x': list(psi_lcfs.coords['time'].values),
             'y': psi_lcfs.to_numpy(),
+        }
+        self._results['psi_axis_torax'] = {
+            'x': list(psi_axis.coords['time'].values),
+            'y': psi_axis.to_numpy(),
         }
 
         self._results['li3'] = {
@@ -997,15 +1009,17 @@ class DISMAL:
         }
 
         # Update accuracy metrics
-        self._results['n_e_diff'] = 0.0
-        for _, t in enumerate(self._times):
-            rho_real = sorted(self._validation_ne[t].keys())
-            ne_real = [self._validation_ne[t][rho] for rho in rho_real]
-            for j, rho_norm in enumerate(self._results['n_e'][t]['x']):
-                volume = data_tree.profiles.volume.sel(time=t, rho_norm=rho_norm, method='nearest').to_numpy()
-                diff = self._results['n_e'][t]['y'][j] - np.interp(rho_norm, rho_real, ne_real)
-                self._results['n_e_diff'] += volume * abs(diff)
-        self._results['n_e_diff'] /= len(self._times)
+        # self._results['n_e_diff'] = 0.0
+        # prev_vol = 0.0
+        # for _, t in enumerate(self._times):
+        #     rho_real = sorted(self._validation_ne[t].keys())
+        #     ne_real = [self._validation_ne[t][rho] for rho in rho_real]
+        #     for j, rho_norm in enumerate(self._results['n_e'][t]['x']):
+        #         volume = data_tree.profiles.volume.sel(time=t, rho_norm=rho_norm, method='nearest').to_numpy()
+        #         diff = self._results['n_e'][t]['y'][j] - np.interp(rho_norm, rho_real, ne_real)
+        #         self._results['n_e_diff'] += (volume - prev_vol) * abs(diff)
+        #         prev_vol = volume
+        # self._results['n_e_diff'] /= len(self._times)
 
     def save_state(self, fname):
         r'''! Save intermediate simulation state to JSON.
