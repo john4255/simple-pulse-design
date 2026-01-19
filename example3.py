@@ -29,7 +29,7 @@ eccd_powers = {k: 0.5 * v for k, v in powers.items()}
 # Set pedestals
 T_i_ped = {0: 0.146, 80: 0.146, 85: 3.69, 500: 3.69, 505: 0.146}
 T_e_ped = {0: 0.220, 80: 0.220, 85: 3.69, 500: 3.69, 505: 0.220}
-n_e_ped = {0: 1.821E19, 79: 1.821E19, 80: 7.482E19}
+n_e_ped = {0: 1.821E19, 79: 1.821E19, 80: 7.482E19, 500: 7.482E19, 505: 1.821E19}
 
 # Set density profiles
 def get_data(fname, mult):
@@ -66,4 +66,4 @@ mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
-mysim.fly(save_states=True, graph=False)
+mysim.fly(save_states=False, graph=False)

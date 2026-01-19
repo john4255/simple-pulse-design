@@ -441,7 +441,7 @@ class DISMAL:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
-        for i, _ in enumerate(self._times):
+        for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
 
@@ -458,22 +458,37 @@ class DISMAL:
             pp_prof = self._state['pp_prof'][i]
             ffp_prof_save = self._state['ffp_prof_save'][i]
             pp_prof_save = self._state['pp_prof_save'][i]
-            def mix_profiles(tmp, curr):
+
+            def mix_profiles(prev, curr, ratio=1.0):
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
                 for i, x in enumerate(curr['x']):
                     my_prof['x'][i] = x
-                    my_prof['y'][i] = 0.1 * tmp['y'][i] + 0.9 * curr['y'][i]
+                    my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
+                return my_prof
 
-            if step:
+            ffp_prof=mix_profiles(ffp_prof_save, ffp_prof)
+            pp_prof=mix_profiles(pp_prof_save, pp_prof)
+
+            ffp_prof['y'] -= ffp_prof['y'][-1]
+            pp_prof['y'] -= pp_prof['y'][-1]
+            ffp_prof['y'] /= ffp_prof['y'][0]
+            pp_prof['y'] /= pp_prof['y'][0]
+
+            if step > 1:
                 self._gs.set_profiles(
-                    ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
-                    pp_prof=mix_profiles(pp_prof_save, pp_prof),
+                    ffp_prof=ffp_prof,
+                    pp_prof=pp_prof,
                     # ffp_NI_prof=self._state['ffpni_prof'][i],
                 )
             else:
+                fig, ax = plt.subplots(1, 2)
+                ax[0].plot(ffp_prof['x'], ffp_prof['y'])
+                ax[1].plot(pp_prof['x'], pp_prof['y'])
+                plt.title(f't={t}')
+                plt.show()
                 self._gs.set_profiles(
-                    ffp_prof=mix_profiles(ffp_prof_save, ffp_prof),
-                    pp_prof=mix_profiles(pp_prof_save, pp_prof)
+                    ffp_prof=ffp_prof,
+                    pp_prof=pp_prof,
                 )
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
@@ -535,8 +550,8 @@ class DISMAL:
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0]
-        self._state['psi_axis'][i] = self._gs.psi_bounds[1]
+        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] / (2.0 * np.pi)
+        self._state['psi_axis'][i] = self._gs.psi_bounds[1] / (2.0 * np.pi)
 
         if 'psi_lcfs_tmaker' not in self._results:
             self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
@@ -613,9 +628,9 @@ class DISMAL:
         myconfig['profile_conditions']['Ip'] = {
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
-        # myconfig['profile_conditions']['psi'] = {
-        #     t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
-        # }
+        myconfig['profile_conditions']['psi'] = {
+            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+        }
 
         if self._Ip:
              myconfig['profile_conditions']['Ip'] = self._Ip
@@ -710,7 +725,7 @@ class DISMAL:
         
         self._res_update(data_tree)
 
-        consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
+        consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0])
         return consumed_flux
 
     def _calc_ffp(self, i, data_tree):
@@ -728,7 +743,7 @@ class DISMAL:
         ffprim *= -4 * np.pi * 1e-7 / R_inv_avg
         return {'x': psi_coords, 'y': ffprim, 'type': 'linterp'}
     
-    def _transport_update(self, step, i, data_tree, smooth=False):
+    def _transport_update(self, step, i, data_tree, smooth=True):
         r'''! Update the simulation state and simulation results based on results of the Torax simulation.
         @param i Timestep of the solve.
         @param data_tree Result object from Torax.
@@ -741,8 +756,8 @@ class DISMAL:
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
-        self._state['ffp_prof_save'][i] = self._state['ffp_prof'][i]
-        self._state['pp_prof_save'][i] = self._state['pp_prof'][i]
+        self._state['ffp_prof_save'][i] = self._state['ffp_prof'][i].copy()
+        self._state['pp_prof_save'][i] = self._state['pp_prof'][i].copy()
 
         ffprime = data_tree.profiles.FFprime.sel(time=t, method='nearest')
         pprime = data_tree.profiles.pprime.sel(time=t, method='nearest')
@@ -778,7 +793,7 @@ class DISMAL:
 
         # Smooth Profiles
         def make_smooth(x, y):
-            spline = make_smoothing_spline(x, y, lam=0.1)
+            spline = make_smoothing_spline(x, y, lam=0.001)
             smoothed = spline(x)
             return smoothed
 
@@ -786,16 +801,16 @@ class DISMAL:
             self._state['ffp_prof'][i]['y'] = make_smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
             self._state['pp_prof'][i]['y'] = make_smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
 
-        self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
-        self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
-        self._state['ffpni_prof'][i]['y'] /= self._state['ffpni_prof'][i]['y'][0]
+        # self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
+        # self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
+        # self._state['ffpni_prof'][i]['y'] /= self._state['ffpni_prof'][i]['y'][0]
 
-        # Test Non-Inductive Current
-        if i % 10 == 0:
-            plt.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], label='FFp')
-            plt.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], linestyle='dashed', label='FFp NI')
-            plt.legend()
-            plt.show()
+        # # Test Non-Inductive Current
+        # if i % 10 == 0:
+        #     plt.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], label='FFp')
+        #     plt.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], linestyle='dashed', label='FFp NI')
+        #     plt.legend()
+        #     plt.show()
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
