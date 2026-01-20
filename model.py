@@ -502,7 +502,7 @@ class DISMAL:
                 self._gs.set_profiles(
                     ffp_prof=ffp_prof,
                     pp_prof=pp_prof,
-                    # ffp_NI_prof=self._state['ffpni_prof'][i],
+                    ffp_NI_prof=self._state['ffpni_prof'][i],
                 )
             else:
                 self._gs.set_profiles(
@@ -762,8 +762,12 @@ class DISMAL:
         psi_coords = self._state['pp_prof'][i]['x']
         pprime = self._state['pp_prof'][i]['y']
         j_tor_coords = np.pow(data_tree.profiles.j_total.sel(time=t, method='nearest').coords['rho_norm'].values, 2)
-        j_tor = data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
-        j_tor = np.interp(psi_coords, j_tor_coords, j_tor)
+        j_tot = data_tree.profiles.j_total.sel(time=t, method='nearest').to_numpy()
+        j_tot = np.interp(psi_coords, j_tor_coords, j_tot)
+        j_ohmic_coords = np.pow(data_tree.profiles.j_ohmic.sel(time=t, method='nearest').coords['rho_cell_norm'].values, 2)
+        j_ohmic = data_tree.profiles.j_ohmic.sel(time=t, method='nearest').to_numpy()
+        j_ohmic = np.interp(psi_coords, j_ohmic_coords, j_ohmic)
+        j_tor = j_tot - j_ohmic
         _, _, geo, _, _, _ = self._gs.get_q(npsi=100, psi_pad=0.02, compute_geo=True)
         R_avg = np.array(geo[0])
         R_inv_avg = np.array(geo[1])
@@ -819,16 +823,15 @@ class DISMAL:
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
         self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
-        # self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
-        # self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
-        # self._state['ffpni_prof'][i]['y'] /= self._state['ffpni_prof'][i]['y'][0]
+        self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
+        self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
+        self._state['ffpni_prof'][i]['y'] /= self._state['ffpni_prof'][i]['y'][0]
 
-        # # Test Non-Inductive Current
-        # if i % 10 == 0:
-        #     plt.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], label='FFp')
-        #     plt.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], linestyle='dashed', label='FFp NI')
-        #     plt.legend()
-        #     plt.show()
+        # Test Non-Inductive Current
+        # plt.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], label='FFp')
+        # plt.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], linestyle='dashed', label='FFp NI')
+        # plt.legend()
+        # plt.show()
 
         t_i = data_tree.profiles.T_i.sel(time=t, method='nearest')
         t_e = data_tree.profiles.T_e.sel(time=t, method='nearest')
