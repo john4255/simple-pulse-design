@@ -31,23 +31,9 @@ T_i_ped = {0: 0.146, 80: 0.146, 85: 3.69, 500: 3.69, 505: 0.146}
 T_e_ped = {0: 0.220, 80: 0.220, 85: 3.69, 500: 3.69, 505: 0.220}
 n_e_ped = {0: 1.821E19, 79: 1.821E19, 80: 7.482E19, 500: 7.482E19, 505: 1.821E19}
 
-# Set density profiles
-def get_data(fname, mult):
-    f = open(fname)
-    raw = f.readlines()
-    dict = {}
-    for line in raw:
-        x, y = line.split(',')
-        x = float(x.strip())
-        y = float(y.strip()) * mult
-        dict[x] = y
-    dict[1.0] = y
-
-    return dict
-
 # Set boundary conditions
 # ne_right_bc = 1.0E18
-ne_right_bc = {0: 0.157E20, 79: 0.157E20, 80: 0.414E20}
+ne_right_bc = {0: 0.157E20, 79: 0.157E20, 80: 0.414E20, 500: 0.414E20, 505: 0.157E20}
 Te_right_bc = 0.01
 Ti_right_bc = 0.01
 
@@ -66,4 +52,4 @@ mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
-mysim.fly(save_states=False, graph=False)
+mysim.fly(save_states=False, graph=True)

@@ -248,6 +248,9 @@ class DISMAL:
 
         self._targets = None
         self._baseconfig = None
+        self._prof_mix_ratio = 1.0
+        self._prof_smoothing = True
+        self._eqdsk_skip = []
     
     def load_config(self, config):
         r'''! Load a base config for torax.
@@ -265,7 +268,7 @@ class DISMAL:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.settings.maxits = 500
+        self._gs.settings.maxits = 1000
         # self._gs.settings.pm = False
 
         if vsc is not None:
@@ -398,6 +401,12 @@ class DISMAL:
     
     def set_validation_density(self, ne):
         self._validation_ne = ne
+    
+    def set_prof_mix_ratio(self, ratio):
+        self._prof_mix_ratio = ratio
+    
+    def set_prof_smoothing(self, smoothing):
+        self._prof_smoothing = smoothing
             
     def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
         r'''! Set coil regularization terms.
@@ -441,6 +450,7 @@ class DISMAL:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
+        self._eqdsk_skip = []
         for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
@@ -466,14 +476,28 @@ class DISMAL:
                     my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
                 return my_prof
 
-            ffp_prof=mix_profiles(ffp_prof_save, ffp_prof)
-            pp_prof=mix_profiles(pp_prof_save, pp_prof)
+            def make_smooth(x, y):
+                spline = make_smoothing_spline(x, y)
+                smoothed = spline(x)
+                return smoothed
+            
+            ffp_prof=mix_profiles(ffp_prof_save, ffp_prof, ratio=self._prof_mix_ratio)
+            pp_prof=mix_profiles(pp_prof_save, pp_prof, ratio=self._prof_mix_ratio)
+            
+            if self._prof_smoothing:
+                ffp_prof['y'] = make_smooth(ffp_prof['x'], ffp_prof['y'])
+                pp_prof['y'] = make_smooth(pp_prof['x'], pp_prof['y'])
 
             ffp_prof['y'] -= ffp_prof['y'][-1]
             pp_prof['y'] -= pp_prof['y'][-1]
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
 
+            # fig, ax = plt.subplots(1, 2)
+            # ax[0].plot(ffp_prof['x'], ffp_prof['y'])
+            # ax[1].plot(pp_prof['x'], pp_prof['y'])
+            # plt.title(f't={t}')
+            # plt.show()
             if step > 1:
                 self._gs.set_profiles(
                     ffp_prof=ffp_prof,
@@ -481,11 +505,6 @@ class DISMAL:
                     # ffp_NI_prof=self._state['ffpni_prof'][i],
                 )
             else:
-                fig, ax = plt.subplots(1, 2)
-                ax[0].plot(ffp_prof['x'], ffp_prof['y'])
-                ax[1].plot(pp_prof['x'], pp_prof['y'])
-                plt.title(f't={t}')
-                plt.show()
                 self._gs.set_profiles(
                     ffp_prof=ffp_prof,
                     pp_prof=pp_prof,
@@ -518,24 +537,31 @@ class DISMAL:
                 plt.show()
 
             self._gs.update_settings()
-            err_flag = self._gs.solve()
 
-            # self._gs.print_info()
-            self._gs_update(i)
-
-            # if i:
-            #     # Compute loop voltage
-            #     dt = self._times[i] - self._times[i-1]
-            #     dpsi_lcfs_dt = (self._state['psi_lcfs'][i] - self._state['psi_lcfs'][i-1]) / dt
-            #     self._results['dpsi_lcfs_dt'][i] = dpsi_lcfs_dt
-            self._gs.save_eqdsk('tmp/{:03}.{:03}.eqdsk'.format(step, i),
-                                lcfs_pad=0.001,run_info='TokaMaker EQDSK',
-                                cocos=2)
+            skip_coil_update = False
+            eq_name = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
+            try:
+                err_flag = self._gs.solve()
+                self._gs_update(i)
+                self._gs.save_eqdsk(eq_name,
+                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
+                                    cocos=2)
+                self._print_out(f'Solve completed at t={t}.')
+            except:
+                self._eqdsk_skip.append(eq_name)
+                skip_coil_update = True
+                self._print_out(f'Solve failed at t={t}.')
+                # Save ff' and p' for inspection
+                fig, ax = plt.subplots(1, 2)
+                ax[0].plot(ffp_prof['x'], ffp_prof['y'])
+                ax[1].plot(pp_prof['x'], pp_prof['y'])
+                plt.title(f't={t}')
+                plt.savefig(f'err/t={t}.png')
 
             if self._prescribed_currents:
                 if i < len(self._times):
                     self.set_coil_reg(i=i+1)
-            else:
+            elif not skip_coil_update:
                 coil_targets, _ = self._gs.get_coil_currents()
                 self.set_coil_reg(targets=coil_targets)
 
@@ -616,6 +642,9 @@ class DISMAL:
             safe_eqdsk = []
             for i, t in enumerate(self._times):
                 eqdsk = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
+                if eqdsk in self._eqdsk_skip:
+                    print('Skipping failed solver step.')
+                    continue
                 if self._test_eqdsk(eqdsk):
                     safe_times.append(t)
                     safe_eqdsk.append(eqdsk)
@@ -698,7 +727,6 @@ class DISMAL:
         myconfig['transport']['V_e_min'] = self._Ve_min
         myconfig['transport']['V_e_max'] = self._Ve_max
 
-        # print(myconfig)
         with open('torax_config.json', 'w') as json_file:
             json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
         torax_config = torax.ToraxConfig.from_dict(myconfig)
@@ -790,16 +818,6 @@ class DISMAL:
         self._state['pp_prof'][i]['y'] -= self._state['pp_prof'][i]['y'][-1]
         self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
         self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
-
-        # Smooth Profiles
-        def make_smooth(x, y):
-            spline = make_smoothing_spline(x, y, lam=0.001)
-            smoothed = spline(x)
-            return smoothed
-
-        if smooth:
-            self._state['ffp_prof'][i]['y'] = make_smooth(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'])
-            self._state['pp_prof'][i]['y'] = make_smooth(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'])
 
         # self._state['ffpni_prof'][i] = self._calc_ffp(i, data_tree)
         # self._state['ffpni_prof'][i]['y'] -= self._state['ffpni_prof'][i]['y'][-1]
@@ -1047,6 +1065,11 @@ class DISMAL:
         r'''! Save simulation results to JSON.'''
         with open(self._fname_out, 'w') as f:
             json.dump(self._results, f, cls=MyEncoder)
+        
+    def _print_out(self, str):
+        with open('convergence_history.txt', 'a') as f:
+            print(str, file=f)
+
 
     def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=10, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
@@ -1081,9 +1104,8 @@ class DISMAL:
 
             self.save_res()
 
-            with open('convergence_history.txt', 'a') as f:
-                print("GS CF = {}".format(cflux_gs), file=f)
-                print("TS CF = {}".format(cflux), file=f)
+            self._print_out("GS CF = {}".format(cflux_gs))
+            self._print_out("TS CF = {}".format(cflux))
 
             err = np.abs(cflux - cflux_prev) / cflux_prev
             cflux_prev = cflux
