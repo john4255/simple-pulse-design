@@ -13,7 +13,7 @@ times = np.r_[rampup_times, flattop_times, rampdown_times]
 
 # Load gEQDSK
 # g_arr_rampup = [f'eqdsk/iter_i={i}.eqdsk' for i in range(10)]
-g_arr_rampup = [f'rampup/iter_i={i}.eqdsk' for i in range(10)]
+g_arr_rampup = [f'eqdsk/iter_i={i}.eqdsk' for i in range(10)]
 g_arr_flattop = ['eqdsk/Hmode.eqdsk'] * 10
 g_arr_rampdown = g_arr_rampup[::-1]
 g_arr = np.r_[g_arr_rampup, g_arr_flattop, g_arr_rampdown]
@@ -52,4 +52,4 @@ mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
-mysim.fly(save_states=False, graph=True)
+mysim.fly(save_states=True, graph=True)
