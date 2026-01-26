@@ -458,6 +458,8 @@ class DISMAL:
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
+        self._print_out(f"Step {step} TokaMaker:")
+
         self._eqdsk_skip = []
         for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
@@ -485,8 +487,8 @@ class DISMAL:
                 smoothed = spline(x)
                 return smoothed
 
-            # For step 0, use original profiles directly (no mixing since _prof_save doesn't exist yet)
-            if step == 0:
+            # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet)
+            if step == 1:
                 ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(), 
                            'y': self._state['ffp_prof'][i]['y'].copy(), 
                            'type': self._state['ffp_prof'][i]['type']}
@@ -576,48 +578,28 @@ class DISMAL:
             skip_coil_update = False
             eq_name = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
             
-            # For step 0, skip the solve entirely and just copy seed EQDSKs
-            # This initializes state from the seed equilibria without running TokaMaker
-            if step == 0:
-                # Read EQDSK values directly
-                eqdsk_idx = min(i, len(self._init_files) - 1)
-                g = read_eqdsk(self._init_files[eqdsk_idx])
-                
-                # Update state from EQDSK (vloop=0 for static equilibrium)
-                # Note: EQDSK psibry is in Wb, same as TokaMaker psi_bounds
-                self._state['psi_lcfs'][i] = abs(g['psibry'])
-                self._state['psi_axis'][i] = abs(g['psimag'])
-                self._state['Ip'][i] = abs(g['ip'])
-                self._state['vloop'][i] = 0.0  # No vloop from static EQDSK
-                
-                # Just copy the seed EQDSK to tmp/ for TORAX to use
-                import shutil
-                shutil.copy(self._init_files[eqdsk_idx], eq_name)
-                # self._print_out(f'Copied seed EQDSK for t={t}.')
+            try:
+                err_flag = self._gs.solve()
+                self._gs_update(i)
+                self._gs.save_eqdsk(eq_name,
+                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
+                                    cocos=2)
+                # self._print_out(f'Solve completed at t={t}.')
                 solve_succeeded = True
-            else:
-                try:
-                    err_flag = self._gs.solve()
-                    self._gs_update(i)
-                    self._gs.save_eqdsk(eq_name,
-                                        lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                        cocos=2)
-                    # self._print_out(f'Solve completed at t={t}.')
-                    solve_succeeded = True
-                except Exception as e:
-                    print(f'GS solve failed: {e}')
-                    self._eqdsk_skip.append(eq_name)
-                    skip_coil_update = True
-                    self._print_out(f'Solve failed at t={t}.')
-                    solve_succeeded = False
-                    
-                    # Save ff' and p' for inspection
-                    fig, ax = plt.subplots(1, 2)
-                    ax[0].plot(ffp_prof['x'], ffp_prof['y'])
-                    ax[1].plot(pp_prof['x'], pp_prof['y'])
-                    plt.title(f't={t}')
-                    plt.savefig(f'err/t={t}.png')
-                    plt.close(fig)
+            except Exception as e:
+                print(f'\tGS solve failed: {e}')
+                self._eqdsk_skip.append(eq_name)
+                skip_coil_update = True
+                self._print_out(f'TM: Solve failed at t={t}.')
+                solve_succeeded = False
+                
+                # Save ff' and p' for inspection
+                fig, ax = plt.subplots(1, 2)
+                ax[0].plot(ffp_prof['x'], ffp_prof['y'])
+                ax[1].plot(pp_prof['x'], pp_prof['y'])
+                plt.title(f't={t}')
+                plt.savefig(f'err/t={t}.png')
+                plt.close(fig)
             
             if solve_succeeded:
                 self._profile_plots(step, i, t, pp_prof, ffp_prof)
@@ -631,14 +613,14 @@ class DISMAL:
 
         consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
         # consumed_flux = np.trapezoid(self._state['vloop'], self._times)
-        consumed_flux_test = np.trapezoid(self._state['vloop'][1:], self._times[1:]) # ignore t=0 vloop
+        consumed_flux_integral = np.trapezoid(self._state['vloop'][1:], self._times[1:]) # ignore t=0 vloop
 
         # Diagnostic: print vloop statistics
         vloop_arr = np.array(self._state['vloop'])
-        self._print_out(f"Step {step} TM: vloop array: {vloop_arr}")
-        self._print_out(f"Step {step} TM: vloop: min={vloop_arr.min():.3f}, max={vloop_arr.max():.3f}, mean={vloop_arr.mean():.3f} V")
-        self._print_out(f"Step {step} TM: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
-        self._print_out(f'Step {step} TM: consumed flux: direct={consumed_flux:.3f} Wb, vloop integral without t=0 ={consumed_flux_test:.3f} Wb')
+        self._print_out(f"\tTM: vloop: min={vloop_arr.min():.3f}, max={vloop_arr.max():.3f}, mean={vloop_arr.mean():.3f} V")
+        self._print_out(f"\tTM: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
+        self._print_out(f'\tTM: psi_bound consumed flux={consumed_flux:.3f} Wb')
+        self._print_out(f'\tTM: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
 
         return consumed_flux
         
@@ -712,11 +694,11 @@ class DISMAL:
                 t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._eqtimes)
             },
         }
-        if step:
+        if step > 1:
             safe_times = []
             safe_eqdsk = []
             for i, t in enumerate(self._times):
-                eqdsk = 'tmp/{:03}.{:03}.eqdsk'.format(step, i)
+                eqdsk = 'tmp/{:03}.{:03}.eqdsk'.format(step - 1, i)
                 if eqdsk in self._eqdsk_skip:
                     print('Skipping failed solver step.')
                     continue
@@ -828,6 +810,12 @@ class DISMAL:
         self._res_update(data_tree)
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0])
+        consumed_flux_integral = np.trapezoid(v_loops[1:], self._times[1:])  # ignore t=0 vloop
+        self._print_out(f"Step {step} TORAX:")
+        self._print_out(f"\tTX: vloop: min={v_loops.min():.3f}, max={v_loops.max():.3f}, mean={v_loops.mean():.3f} V")
+        self._print_out(f"\tTX: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
+        self._print_out(f'\tTX: psi_bound consumed flux={consumed_flux:.3f} Wb')
+        self._print_out(f'\tTX: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
         return consumed_flux
 
     # def _calc_ffp(self, i, data_tree):
@@ -1445,7 +1433,7 @@ class DISMAL:
         plt.savefig(f'tmp/profiles_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=3, out='res.json'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=5, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
@@ -1464,27 +1452,45 @@ class DISMAL:
 
         err = convergence_threshold + 1.0
         step = 0
-        cflux_prev = 0.0
+        cflux_tx_prev = 0.0
 
-        # Step 0: Initialize GS solver with seed equilibria
-        # This ensures get_q(compute_geo=True) works properly when transport runs, for FF'_NI calculation
-        # self._print_out("Step 0: Initializing GS solver with seed equilibria")
-        _ = self._run_gs(step=0, graph=graph)
+        # Step 0: Initialize state from seed equilibria without running TokaMaker
+        # This populates psi_lcfs, psi_axis, Ip, vloop from EQDSK files
+        self._print_out("Step 0: Loading seed equilibria")
+        for i, t in enumerate(self._times):
+            eqdsk_idx = min(i, len(self._init_files) - 1)
+            g = read_eqdsk(self._init_files[eqdsk_idx])
+            
+            # Update state from EQDSK (vloop=0 for static equilibrium)
+            self._state['psi_lcfs'][i] = abs(g['psibry'])
+            self._state['psi_axis'][i] = abs(g['psimag'])
+            self._state['Ip'][i] = abs(g['ip'])
+            self._state['vloop'][i] = 0.0  # No vloop from static EQDSK
+        
+        self._print_out(f'---------------------------------------')
+        step = 1
 
         while err > convergence_threshold and step < max_step:
-            cflux = self._run_transport(step, graph=graph)
+            self._print_out(f'---- Step {step} ---- \n')
+            cflux_tx = self._run_transport(step, graph=graph)
             if save_states:
                 self.save_state('tmp/ts_state{}.json'.format(step))
-            step += 1
 
             cflux_gs = self._run_gs(step, graph=graph)
             if save_states:
-                self.save_state('tmp/gs_state{}.json'.format(step-1))
+                self.save_state('tmp/gs_state{}.json'.format(step))
 
             self.save_res()
 
-            self._print_out("TM CF = {}".format(cflux_gs))
-            self._print_out("TX CF = {}".format(cflux))
+            self._print_out(f'\n ---- Step {step} results ---- ')
 
-            err = np.abs(cflux - cflux_prev) / cflux_prev
-            cflux_prev = cflux
+            err = np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev
+            self._print_out(f"\t(oritinal) TX Convergence error = {err*100.0:.3f} %")
+            self._print_out(f'\tDifference Convergence error incl. 2pi**2 = {np.abs(cflux_tx - cflux_gs*4*np.pi**2) / (cflux_gs*4*np.pi**2)*100.0:.4f} %')
+            self._print_out(f'---------------------------------------\n')
+
+            # self._print_out(f"Step {step} Convergence error (inc. 4*pi**2) = {np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev*100.0:.4f} %\n")
+
+            cflux_tx_prev = cflux_tx
+
+            step += 1
