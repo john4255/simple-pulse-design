@@ -149,8 +149,8 @@ class DISMAL:
             pax.append(g['pres'][0])
             Ip.append(abs(g['ip']))
 
-            psi_axis.append(abs(g['psimag']))
-            psi_lcfs.append(abs(g['psibry']))
+            psi_axis.append(abs(g['psimag']) * 2.0 * np.pi)  # EQDSK is Wb/rad, store in Wb
+            psi_lcfs.append(abs(g['psibry']) * 2.0 * np.pi)  # EQDSK is Wb/rad, store in Wb
 
             lcfs.append(g['rzout'])
 
@@ -461,6 +461,8 @@ class DISMAL:
         self._print_out(f"Step {step} TokaMaker:")
 
         self._eqdsk_skip = []
+        self._print_out(f'Step {step}: TM input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+
         for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
@@ -548,7 +550,7 @@ class DISMAL:
 
             lcfs = self._state['lcfs'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs'][i]
+            lcfs_psi_target = self._state['psi_lcfs'][i] / (2.0 * np.pi) # _state in Wb, TM expects Wb/rad (AKA Wb-rad), so required /2pi
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
@@ -611,7 +613,11 @@ class DISMAL:
                 coil_targets, _ = self._gs.get_coil_currents()
                 self.set_coil_reg(targets=coil_targets)
 
-        consumed_flux = self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]
+
+        self._print_out(f'Step {step}: TM out: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+
+
+        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) # psi_lcfs stored in Wb, no 2pi required for FC calc
         # consumed_flux = np.trapezoid(self._state['vloop'], self._times)
         consumed_flux_integral = np.trapezoid(self._state['vloop'][1:], self._times[1:]) # ignore t=0 vloop
 
@@ -631,8 +637,9 @@ class DISMAL:
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] / (2.0 * np.pi)
-        self._state['psi_axis'][i] = self._gs.psi_bounds[1] / (2.0 * np.pi)
+        # TM outputs psi_bounds in Wb/rad, we store in Wb, so multiply by 2π
+        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] * (2.0 * np.pi)
+        self._state['psi_axis'][i] = self._gs.psi_bounds[1] * (2.0 * np.pi)
 
         if 'psi_lcfs_tmaker' not in self._results:
             self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
@@ -669,6 +676,8 @@ class DISMAL:
         @param step Iteration number of the Torax-Tokamaker simulation loop.
         @return Torax config object.
         '''
+        self._print_out(f'Step {step}: TX input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+
         myconfig = copy.deepcopy(BASE_CONFIG)
         if self._baseconfig:
             myconfig = self._baseconfig.copy()
@@ -715,6 +724,7 @@ class DISMAL:
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
         myconfig['profile_conditions']['psi'] = {
+            # State stores Wb, TORAX expects Wb - pass directly
             t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
         }
 
@@ -806,10 +816,11 @@ class DISMAL:
         for i, t in enumerate(self._times):
             self._transport_update(step, i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
-        
+        self._print_out(f'Step {step}: TX output: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+
         self._res_update(data_tree)
 
-        consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0])
+        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) # psi_lcfs stored in Wb, no 2pi factor required for FC calc
         consumed_flux_integral = np.trapezoid(v_loops[1:], self._times[1:])  # ignore t=0 vloop
         self._print_out(f"Step {step} TORAX:")
         self._print_out(f"\tTX: vloop: min={v_loops.min():.3f}, max={v_loops.max():.3f}, mean={v_loops.mean():.3f} V")
@@ -1071,9 +1082,9 @@ class DISMAL:
         self._state['eta_prof'][i]['x'] = psi_sample
         self._state['eta_prof'][i]['y'] = eta_sample
 
-        self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item() / (2.0 * np.pi)
-        self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item() / (2.0 * np.pi)
-
+        # TORAX outputs psi in Wb, we store in Wb - no conversion needed
+        self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item()
+        self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item()
         # areas = data_tree.profiles.area.sel(time=t, method='nearest')
         # rho_sample = areas.coords['rho_norm'].values
         # self._state['ffpni_prof'][i] = {
@@ -1433,7 +1444,7 @@ class DISMAL:
         plt.savefig(f'tmp/profiles_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=5, out='res.json'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=3, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
@@ -1462,11 +1473,14 @@ class DISMAL:
             g = read_eqdsk(self._init_files[eqdsk_idx])
             
             # Update state from EQDSK (vloop=0 for static equilibrium)
-            self._state['psi_lcfs'][i] = abs(g['psibry'])
-            self._state['psi_axis'][i] = abs(g['psimag'])
+            self._state['psi_lcfs'][i] = abs(g['psibry']) * 2.0 * np.pi  # Convert Wb/rad (AKA Wb-rad) to Wb
+            self._print_out(f'Time {t:.3f} s: Loaded EQDSK {self._init_files[eqdsk_idx]} with psi_lcfs = {self._state["psi_lcfs"][i]:.6f} Wb')
+            self._state['psi_axis'][i] = abs(g['psimag']) * 2.0 * np.pi  # Convert Wb/rad (AKA Wb-rad) to Wb
             self._state['Ip'][i] = abs(g['ip'])
             self._state['vloop'][i] = 0.0  # No vloop from static EQDSK
-        
+
+        self._print_out(f'Step {step}: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+
         self._print_out(f'---------------------------------------')
         step = 1
 
@@ -1486,7 +1500,7 @@ class DISMAL:
 
             err = np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev
             self._print_out(f"\t(oritinal) TX Convergence error = {err*100.0:.3f} %")
-            self._print_out(f'\tDifference Convergence error incl. 2pi**2 = {np.abs(cflux_tx - cflux_gs*4*np.pi**2) / (cflux_gs*4*np.pi**2)*100.0:.4f} %')
+            self._print_out(f'\tDifference Convergence error = {np.abs(cflux_tx - cflux_gs) / (cflux_gs)*100.0:.4f} %')
             self._print_out(f'---------------------------------------\n')
 
             # self._print_out(f"Step {step} Convergence error (inc. 4*pi**2) = {np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev*100.0:.4f} %\n")
