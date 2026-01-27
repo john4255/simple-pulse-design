@@ -149,8 +149,8 @@ class DISMAL:
             pax.append(g['pres'][0])
             Ip.append(abs(g['ip']))
 
-            psi_axis.append(abs(g['psimag']) * 2.0 * np.pi)  # EQDSK is Wb/rad, store in Wb
-            psi_lcfs.append(abs(g['psibry']) * 2.0 * np.pi)  # EQDSK is Wb/rad, store in Wb
+            psi_axis.append(abs(g['psimag']))
+            psi_lcfs.append(abs(g['psibry']))
 
             lcfs.append(g['rzout'])
 
@@ -550,7 +550,7 @@ class DISMAL:
 
             lcfs = self._state['lcfs'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs'][i] / (2.0 * np.pi) # _state in Wb, TM expects Wb/rad (AKA Wb-rad), so required /2pi
+            lcfs_psi_target = self._state['psi_lcfs'][i] #* 2.0 * np.pi # _state in Wb, TM expects Wb/rad (AKA Wb-rad)
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
@@ -617,7 +617,7 @@ class DISMAL:
         self._print_out(f'Step {step}: TM out: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
 
 
-        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) # psi_lcfs stored in Wb, no 2pi required for FC calc
+        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) * 2.0 * np.pi
         # consumed_flux = np.trapezoid(self._state['vloop'], self._times)
         consumed_flux_integral = np.trapezoid(self._state['vloop'][1:], self._times[1:]) # ignore t=0 vloop
 
@@ -637,9 +637,8 @@ class DISMAL:
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
 
-        # TM outputs psi_bounds in Wb/rad, we store in Wb, so multiply by 2π
-        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] * (2.0 * np.pi)
-        self._state['psi_axis'][i] = self._gs.psi_bounds[1] * (2.0 * np.pi)
+        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
+        self._state['psi_axis'][i] = self._gs.psi_bounds[1] 
 
         if 'psi_lcfs_tmaker' not in self._results:
             self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
@@ -676,7 +675,7 @@ class DISMAL:
         @param step Iteration number of the Torax-Tokamaker simulation loop.
         @return Torax config object.
         '''
-        self._print_out(f'Step {step}: TX input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+        self._print_out(f'Step {step}: TX input (w/ *2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
 
         myconfig = copy.deepcopy(BASE_CONFIG)
         if self._baseconfig:
@@ -724,8 +723,7 @@ class DISMAL:
             t: abs(self._state['Ip'][i]) for i, t in enumerate(self._times)
         }
         myconfig['profile_conditions']['psi'] = {
-            # State stores Wb, TORAX expects Wb - pass directly
-            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]} for i, t in enumerate(self._times)
+            t: {0.0: self._state['psi_axis'][i], 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times) # TORAX takes in Wb, psi_lcfs stores as Wb/rad (AKA Wb-rad) so needs 2pi factor
         }
 
         if self._Ip:
@@ -816,11 +814,11 @@ class DISMAL:
         for i, t in enumerate(self._times):
             self._transport_update(step, i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
-        self._print_out(f'Step {step}: TX output: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
+        self._print_out(f'Step {step}: TX output (w/ /2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f}')
 
         self._res_update(data_tree)
 
-        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) # psi_lcfs stored in Wb, no 2pi factor required for FC calc
+        consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0])
         consumed_flux_integral = np.trapezoid(v_loops[1:], self._times[1:])  # ignore t=0 vloop
         self._print_out(f"Step {step} TORAX:")
         self._print_out(f"\tTX: vloop: min={v_loops.min():.3f}, max={v_loops.max():.3f}, mean={v_loops.mean():.3f} V")
@@ -1082,9 +1080,8 @@ class DISMAL:
         self._state['eta_prof'][i]['x'] = psi_sample
         self._state['eta_prof'][i]['y'] = eta_sample
 
-        # TORAX outputs psi in Wb, we store in Wb - no conversion needed
-        self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item()
-        self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item()
+        self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad)
+        self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item() / (2.0 * np.pi) 
         # areas = data_tree.profiles.area.sel(time=t, method='nearest')
         # rho_sample = areas.coords['rho_norm'].values
         # self._state['ffpni_prof'][i] = {
@@ -1473,9 +1470,9 @@ class DISMAL:
             g = read_eqdsk(self._init_files[eqdsk_idx])
             
             # Update state from EQDSK (vloop=0 for static equilibrium)
-            self._state['psi_lcfs'][i] = abs(g['psibry']) * 2.0 * np.pi  # Convert Wb/rad (AKA Wb-rad) to Wb
+            self._state['psi_lcfs'][i] = abs(g['psibry'])
             self._print_out(f'Time {t:.3f} s: Loaded EQDSK {self._init_files[eqdsk_idx]} with psi_lcfs = {self._state["psi_lcfs"][i]:.6f} Wb')
-            self._state['psi_axis'][i] = abs(g['psimag']) * 2.0 * np.pi  # Convert Wb/rad (AKA Wb-rad) to Wb
+            self._state['psi_axis'][i] = abs(g['psimag'])
             self._state['Ip'][i] = abs(g['ip'])
             self._state['vloop'][i] = 0.0  # No vloop from static EQDSK
 
@@ -1502,8 +1499,6 @@ class DISMAL:
             self._print_out(f"\t(oritinal) TX Convergence error = {err*100.0:.3f} %")
             self._print_out(f'\tDifference Convergence error = {np.abs(cflux_tx - cflux_gs) / (cflux_gs)*100.0:.4f} %')
             self._print_out(f'---------------------------------------\n')
-
-            # self._print_out(f"Step {step} Convergence error (inc. 4*pi**2) = {np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev*100.0:.4f} %\n")
 
             cflux_tx_prev = cflux_tx
 
