@@ -519,7 +519,7 @@ class DISMAL:
                 self._gs.set_profiles(
                     ffp_prof=ffp_prof,
                     pp_prof=pp_prof,
-                    ffp_NI_prof=self._state['ffpni_prof'][i],
+                    ffp_NI_prof=self._state['ffpni_prof'][i], # TM wants ffp_ni without the factor of 2 present in the normal equation, per Chris 2026-01-27
                 )
             else: 
                 self._gs.set_profiles(
@@ -645,6 +645,7 @@ class DISMAL:
                 'last_surface_factor': self._last_surface_factor,
                 'Ip_from_parameters': False,
                 'geometry_file': eqdsk,
+                'cocos': 2,
             }
             try:
                 _ = torax.ToraxConfig.from_dict(myconfig)
@@ -681,7 +682,7 @@ class DISMAL:
             'n_surfaces': 100,
             'Ip_from_parameters': True,
             'geometry_configs': {
-                t: {'geometry_file': self._init_files[i]} for i, t in enumerate(self._eqtimes)
+                t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
             },
         }
         if step > 1:
@@ -698,7 +699,7 @@ class DISMAL:
                 else:
                     print('Deleting invalid eqdsk file.')
             myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': safe_eqdsk[i]} for i, t in enumerate(safe_times)
+                t: {'geometry_file': safe_eqdsk[i], 'cocos': 2} for i, t in enumerate(safe_times)
             }
 
         myconfig['profile_conditions']['Ip'] = {
@@ -787,6 +788,10 @@ class DISMAL:
         '''
         myconfig = self._get_torax_config(step)
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
+
+        # save data_tree object
+        data_tree_name = 'tmp/test.nc'
+        data_tree.to_netcdf(data_tree_name)
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             print(hist.sim_error)
@@ -955,6 +960,9 @@ class DISMAL:
         # for i, rho_norm in enumerate(rho_sample):
         #     area = areas.sel(rho_norm=rho_norm)
         #     self._state['ffpni_prof']['y'][i] = area * data_tree.profiles.j_generic_current.sel(rho_cell_norm=rho_norm, method='neraest')
+
+
+
 
     def _res_update(self, data_tree):
 
@@ -1173,13 +1181,16 @@ class DISMAL:
         j_ni = j_tot - j_ohmic
         
         # Get geometry factors and interpolate to psi_coords
-        psi_temp, _, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.0, compute_geo=False)
+        # psi_temp, _, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.0, compute_geo=False)
+        # R_inv_avg = np.interp(psi_coords, psi_temp, np.array(geo[1]))
 
-        R_inv_avg = np.interp(psi_coords, psi_temp, np.array(geo[1]))
+        R_inv_avg_rho = data_tree.profiles.gm9.sel(time=t, method='nearest').to_numpy()  # <1/R> on rho_N grid
+        R_inv_coords = np.pow(data_tree.profiles.gm9.sel(time=t, method='nearest').coords['rho_norm'].values, 2)
+        R_inv_avg = np.interp(psi_coords, R_inv_coords, R_inv_avg_rho)
         
         # FF'_NI = 2 * mu_0 * j_NI / <1/R>  (no p' term to avoid double-counting)
         mu_0 = 4.0 * np.pi * 1e-7
-        ffp_ni = 2.0 * mu_0 * j_ni / R_inv_avg
+        ffp_ni =  mu_0 * j_ni / R_inv_avg # *2.0 taken out because of tokamaker convention, Chris might change it to expect the factor of 2 later
         
         return {'x': psi_coords, 'y': ffp_ni, 'type': 'linterp'}, (psi_coords, j_ni, j_tot, j_ohmic)
 
@@ -1356,7 +1367,7 @@ class DISMAL:
         plt.savefig(f'tmp/big_plot_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=10, out='res.json'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=4, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
@@ -1382,7 +1393,6 @@ class DISMAL:
         tx_cflux_psi = []
         tx_cflux_vloop = []
 
-
         # Step 0: Initialize state from seed equilibria without running TokaMaker
         # This populates psi_lcfs, psi_axis, Ip, vloop from EQDSK files so that we can calculate non inductive FF' using <R> and <1/R> from tokamaker using torax step 1 profiles for gs step 1
         self._print_out("Step 0: Loading seed equilibria")
@@ -1397,7 +1407,7 @@ class DISMAL:
             self._state['Ip'][i] = abs(g['ip'])
             self._state['vloop'][i] = 0.0  # No vloop from static EQDSK
 
-        self._print_out(f'Step {step}: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
+        # self._print_out(f'Step {step}: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
 
         self._print_out(f'---------------------------------------')
         step = 1
@@ -1419,7 +1429,8 @@ class DISMAL:
             tm_cflux_vloop.append(cflux_gs_vloop)
             tx_cflux_psi.append(cflux_tx)
             tx_cflux_vloop.append(cflux_tx_vloop)
-
+            vloop_tm = self._state['vloop'].copy()
+            vloop_tx = self._results['v_loop_lcfs']['y'].copy()
 
             self._print_out(f'\n ---- Step {step} results ---- ')
 
@@ -1429,6 +1440,33 @@ class DISMAL:
             self._print_out(f'---------------------------------------\n')
 
             cflux_tx_prev = cflux_tx
+
+            fig, axes = plt.subplots()
+            axes.set_title(f'V_loop step {step}')
+            axes.plot(self._times, self._state['vloop'], 'r-o', label='TokaMaker')
+            axes.plot(self._results['v_loop_lcfs']['x'], self._results['v_loop_lcfs']['y'], 'b-o', label='TORAX')
+            axes.set_xlabel('Time [s]')
+            axes.set_ylabel('V_loop [V]')
+            axes.legend(fontsize=8)
+            plt.tight_layout()
+            plt.savefig(f'tmp/vloop_comparison_step{step}.png', dpi=150, bbox_inches='tight')
+            plt.close('all')
+
+            self._print_out(f'self._times =')
+            self._print_out(repr(self._times))
+            self._print_out(f'self._state[\'vloop\'] =')
+            self._print_out(repr(self._state['vloop']))
+
+            self._print_out(f'step {step} self._results["v_loop_lcfs"]["x"] =')
+            self._print_out(repr(self._results["v_loop_lcfs"]["x"]))
+            self._print_out(f'self._results["v_loop_lcfs"]["y"] =')
+            self._print_out(repr(self._results["v_loop_lcfs"]["y"]))
+            plt.close('all')
+
+
+
+
+
 
             step += 1
         
@@ -1453,3 +1491,6 @@ class DISMAL:
         axes[1].legend(fontsize=8)
         plt.tight_layout()
         plt.savefig('tmp/A_convergence_history.png', dpi=150, bbox_inches='tight')
+        plt.close('all')
+
+
