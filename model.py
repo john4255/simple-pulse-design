@@ -25,6 +25,10 @@ class MyEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        # Handle xarray DataArray
+        if hasattr(obj, 'to_numpy'):
+            print(f'using numpy fix in json coverter for {obj}')
+            return obj.to_numpy().tolist()
         return json.JSONEncoder.default(self, obj)
 
 class DISMAL:
@@ -41,7 +45,7 @@ class DISMAL:
         @param last_surface_factor Last surface factor for Torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
         '''
-        self._oftenv = OFT_env(nthreads=2)
+        self._oftenv = OFT_env(nthreads=6)
         self._gs = TokaMaker(self._oftenv)
 
         self._state = {}
@@ -70,6 +74,9 @@ class DISMAL:
         self._state['B0'] = np.zeros(len(self._times))
         self._state['V0'] = np.zeros(len(self._times))
         self._state['Ip'] = np.zeros(len(self._times))
+        self._state['Ip_tm'] = np.zeros(len(self._times)) # for testing
+        self._state['Ip_tx'] = np.zeros(len(self._times)) # for testing
+        self._state['Ip_NI_tx'] = np.zeros(len(self._times)) # for testing
         self._state['pax'] = np.zeros(len(self._times))
         self._state['beta_pol'] = np.zeros(len(self._times))
         self._state['vloop'] = np.zeros(len(self._times))
@@ -90,19 +97,32 @@ class DISMAL:
         self._state['n_e'] = {}
         self._state['n_i'] = {}
         self._state['ptot'] = {}
-        self._state['p_tmaker'] = {}  # TokaMaker pressure profile from get_profiles()
         self._state['ffpni_prof'] = {}
 
         # Outputs from TORAX (already normalized)
         self._state['ffp_prof_tx'] = {}
         self._state['pp_prof_tx'] = {}
+        self._state['ffp_prof_tm'] = {}
+        self._state['pp_prof_tm'] = {}
+        self._state['p_prof_tm'] = {} 
+        self._state['f_prof_tm'] = {}
         self._state['test'] = {}
+
+        # geo factors from both codes
+        self._state['R_avg_tx'] = {}
+        self._state['R_inv_avg_tx'] = {}
+        self._state['R_avg_tm'] = {}
+        self._state['R_inv_avg_tm'] = {}
         
         # Current density profiles from TORAX
         self._state['j_tot'] = {}
         self._state['j_parallel_total'] = {}
         self._state['j_ohmic'] = {}
         self._state['j_ni'] = {}
+        self._state['j_ohmic_tx'] = {}
+        self._state['j_ni_tx'] = {}
+        self._state['f_NI'] = np.zeros(len(self._times))
+
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -261,7 +281,7 @@ class DISMAL:
         self._targets = None
         self._baseconfig = None
         self._prof_mix_ratio = 1.0
-        self._prof_smoothing = True
+        self._prof_smoothing = False
         self._eqdsk_skip = []
     
     def load_config(self, config):
@@ -472,14 +492,14 @@ class DISMAL:
 
             Ip_target = abs(self._state['Ip'][i])
             P0_target = abs(self._state['pax'][i])
-            if self._state['beta_pol'][i] != 0: # always the case because TX runs first
+            if self._state['beta_pol'][i] != 0: # always true because TX runs first now
                 print('Using beta_p...')
                 Ip_ratio=(1.0/self._state['beta_pol'][i] - 1.0)
                 self._gs.set_targets(Ip=Ip_target, Ip_ratio=Ip_ratio, pax=P0_target)
             else:
                 self._gs.set_targets(Ip=Ip_target, pax=P0_target)
             
-            # self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs, error code told me
+            self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs, error code told me
 
 
             def mix_profiles(prev, curr, ratio=1.0):
@@ -519,19 +539,12 @@ class DISMAL:
  
             # ffpni = self._state['ffpni_prof'][i]
             # self._print_out(f"  t={t}: ffpni_prof min={np.min(ffpni['y']):.3e}, max={np.max(ffpni['y']):.3e}")
-
             self._gs.set_profiles(
-                ffp_prof=ffp_prof,
-                pp_prof=pp_prof,
-                ffp_NI_prof=self._state['ffpni_prof'][i], # TM wants ffp_ni without the factor of 2 present in the normal equation, per Chris 2026-01-27
+                # ffp_prof=self._state['ffp_prof'][i],
+                ffp_prof=self._state['j_tot'][i], 
+                pp_prof=self._state['pp_prof_tx'][i],
+                ffp_NI_prof=self._state['ffpni_prof'][i], # TM wants ffp_ni without the factor of 2 present in the normal equation and without normalization, per Chris 2026-01-27
             )
-            
-            # pass j_phi instead of ffp
-            # self._gs.set_profiles(
-            #     ffp_prof=self._state['j_tot'][i],
-            #     pp_prof=pp_prof,
-            #     ffp_NI_prof=self._state['j_ni'][i]
-            # )
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
@@ -569,6 +582,7 @@ class DISMAL:
             
             try:
                 err_flag = self._gs.solve()
+                print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
                 self._gs_update(i)
                 self._gs.save_eqdsk(eq_name,
                                     lcfs_pad=0.01,run_info='TokaMaker EQDSK',
@@ -583,15 +597,15 @@ class DISMAL:
                 solve_succeeded = False
                 
                 # Save ff' and p' for inspection
-                fig, ax = plt.subplots(1, 2)
-                ax[0].plot(ffp_prof['x'], ffp_prof['y'])
-                ax[1].plot(pp_prof['x'], pp_prof['y'])
-                plt.title(f't={t}')
-                plt.savefig(f'err/t={t}.png')
-                plt.close(fig)
+                # fig, ax = plt.subplots(1, 2)
+                # ax[0].plot(ffp_prof['x'], ffp_prof['y'])
+                # ax[1].plot(pp_prof['x'], pp_prof['y'])
+                # plt.title(f't={t}')
+                # plt.savefig(f'err/t={t}.png')
+                # plt.close(fig)
             
             if solve_succeeded:
-                self._big_plot(step, i, t, pp_prof, ffp_prof)
+                self._profile_plot(step, i, t, pp_prof, ffp_prof)
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -623,6 +637,7 @@ class DISMAL:
         '''
         eq_stats = self._gs.get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
+        self._state['Ip_tm'][i] = eq_stats['Ip']
 
         self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
         self._state['psi_axis'][i] = self._gs.psi_bounds[1] 
@@ -636,7 +651,20 @@ class DISMAL:
         
         # Store TokaMaker pressure profile from get_profiles()
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
-        self._state['p_tmaker'][i] = {'x': tm_psi.copy(), 'y': tm_p_prof.copy()}
+
+        self._state['ffp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_fp_prof*tm_f_prof), 'type': 'linterp'}
+        self._state['pp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
+        self._state['p_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_p_prof), 'type': 'linterp'}
+        self._state['f_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
+
+        # pull geo profiles
+        psi_geo, _, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
+        
+        # R_avg = np.interp(self._psi_N, psi_geo, np.array(geo[0]))
+        # R_inv_avg = np.interp(self._psi_N, psi_geo, np.array(geo[1]))
+
+        self._state['R_avg_tm'][i] =     {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[0])), 'type': 'linterp'}
+        self._state['R_inv_avg_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[1])), 'type': 'linterp'}
         
         # Update Results
         coils, _ = self._gs.get_coil_currents()
@@ -777,7 +805,7 @@ class DISMAL:
         }
 
         if self._Ip:
-             myconfig['profile_conditions']['Ip'] = self._Ip
+            myconfig['profile_conditions']['Ip'] = self._Ip
         
         if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
@@ -893,12 +921,16 @@ class DISMAL:
         self._state['test'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=True)
 
 
-        self._state['Ip'][i] = data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip'][i] =          data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip_tx'][i] =       data_tree.scalars.Ip.sel(time=t, method='nearest')
+        self._state['Ip_NI_tx'][i] =    data_tree.scalars.I_non_inductive.sel(time=t, method='nearest')
+        self._state['f_NI'][i] =        data_tree.scalars.f_non_inductive.sel(time=t, method='nearest')
+
         self._state['pax'][i] = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest')
         self._state['beta_pol'][i] = data_tree.scalars.beta_pol.sel(time=t, method='nearest')
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
 
-        # Deep copy to prevent mutation when normalizing ffp_prof/pp_prof later
+        # deep copy to prevent mutation when normalizing ffp_prof/pp_prof later
         # these are normalized already from the previous step
         self._state['ffp_prof_save'][i] = {
             'x': self._state['ffp_prof'][i]['x'].copy(),
@@ -913,23 +945,26 @@ class DISMAL:
 
 
         self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=True)
-        self._state['pp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state', normalize=True)
+        self._state['pp_prof'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime',  t, load_into_state='state', normalize=True)
         
-        # Store profiles from TORAX for plotting
-        ffp_sample = self._state['ffp_prof'][i]['y'].copy()
-        pp_sample = self._state['pp_prof'][i]['y'].copy()
-        self._state['ffp_prof_tx'][i] = {'x': self._psi_N.copy(), 'y': ffp_sample.copy()}
-        self._state['pp_prof_tx'][i] = {'x': self._psi_N.copy(), 'y': pp_sample.copy()}
-        
+        self._state['ffp_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=False) # temp for calculating j_phi
+        self._state['ffp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
+
+        self._state['pp_prof_tx'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state', normalize=False)
+        self._state['pp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
 
         # calculate ffp_ni profile
         self._state['j_tot'][i] =            self._pull_torax_onto_psi(data_tree, 'j_total',          t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_parallel_total'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_total', t, load_into_state='state', profile_type='jphi-linterp')
+        # self._state['j_parallel_total'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_total', t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_ohmic'][i] =          self._pull_torax_onto_psi(data_tree, 'j_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
-    
+        # self._state['j_ohmic_tx'][i] =       self._pull_torax_onto_psi(data_tree, 'j_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_ni_tx'][i] =          self._pull_torax_onto_psi(data_tree, 'j_non_inductive',  t, load_into_state='state', profile_type='jphi-linterp')
+
         ffp_ni, j_ni = self._calc_ffp_ni(i, data_tree)
 
         self._state['ffpni_prof'][i] = {'x': self._psi_N.copy(), 'y': ffp_ni.copy(), 'type': 'linterp'} 
+        # self._state['ffpni_prof'][i]['y'] *= -2.0 * np.pi  # im calculating ffp_ni, don't need to convert from torax units
+
         self._state['j_ni'][i] = {'x': self._psi_N.copy(), 'y': j_ni.copy(), 'type': 'jphi-linterp'}
         
 
@@ -961,7 +996,7 @@ class DISMAL:
             self._results['T_e'][t] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='results', normalize=False)
             self._results['T_i'][t] = self._pull_torax_onto_psi(data_tree, 'T_i', t, load_into_state='results', normalize=False)
             self._results['n_e'][t] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='results', normalize=False)
-            self._results['q'][t] = self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='results', normalize=False)
+            self._results['q'][t] =   self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='results', normalize=False)
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
@@ -1094,7 +1129,7 @@ class DISMAL:
 
         self._results['P_SOL_total'] = {
             'x': list(data_tree.scalars.P_SOL_total.coords['time'].values),
-            'y': -1.0 * data_tree.scalars.P_SOL_total.to_numpy(),
+            'y': data_tree.scalars.P_SOL_total.to_numpy(),
         }
 
 
@@ -1135,12 +1170,16 @@ class DISMAL:
         
         j_ni = j_tot - j_ohmic
 
-        R_inv_avg = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state=None, normalize=False)
+        self._state['R_inv_avg_tx'][i] = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state='state', normalize=False)
+
+        self._state['R_avg_tx'][i] = {'x': self._psi_N.copy(), 'y': 1 / self._state['R_inv_avg_tx'][i]['y'].copy(), 'type': 'linterp'}
+
         
         # FF'_NI = 2 * mu_0 * j_NI / <1/R>  (no p' term to avoid double-counting)
         mu_0 = 4.0 * np.pi * 1e-7
-        ffp_ni =  mu_0 * j_ni / R_inv_avg # *2 removed out because of tokamaker convention, Chris might change it to expect the factor of 2 later
-        
+        ffp_ni =  mu_0 * j_ni / self._state['R_inv_avg_tx'][i]['y'] # *2 removed out because of tokamaker convention, Chris might change it to expect the factor of 2 later
+        # ffp_ni =  mu_0 * self._state['j_ni_tx'][i]['y'] / self._state['R_inv_avg_tx'][i]['y'] # *2 removed out because of tokamaker convention, Chris might change it to expect the factor of 2 later
+
 
         # # TORAX calculation - same as above but smaller by 2pi because TORAX works with psi in units of [Wb] not [Wb/rad]
         # Rsr_inv_avg_rho = data_tree.profiles.g3.sel(time=t, method='nearest').to_numpy()  # <1/R^2> on rho_N grid
@@ -1163,7 +1202,7 @@ class DISMAL:
         y /= y[0]
         return {'x': profile['x'], 'y': y, 'type': profile['type']}
 
-    def _big_plot(self, step, i, t, pp_prof_in, ffp_prof_in): 
+    def _profile_plot(self, step, i, t, pp_prof_in, ffp_prof_in): 
         # plot and save profiles at each time step and iteration
         # called in _run_gs after successful GS solve
 
@@ -1192,13 +1231,13 @@ class DISMAL:
         ffpni_on_tm = np.interp(tm_psi, self._state['ffpni_prof'][i]['x'], ffpni_real)
         ffp_inductive = tm_ffp_prof - ffpni_on_tm
 
-        fig, axes = plt.subplots(4, 3, figsize=(15, 16))
+        fig, axes = plt.subplots(4, 4, figsize=(18, 16))
         plt.suptitle(f'Step {step} - Time index {i}/{len(self._times)-1} - t = {t:.1f} s', fontsize=14)
 
         # p (real units)
         axes[0,0].set_title('p (real)')
         # axes[0,0].plot(tm_psi, tm_p_prof, 'r--', label='TM get_profiles() (input?)')
-        axes[0,0].plot(self._state['p_tmaker'][i]['x'], self._state['p_tmaker'][i]['y'], 'g-', label='TM get_prof')
+        axes[0,0].plot(self._state['p_prof_tm'][i]['x'], self._state['p_prof_tm'][i]['y'], 'g-', label='TM get_prof')
         axes[0,0].plot(self._state['ptot'][i]['x'], self._state['ptot'][i]['y'], 'b-', label='TORAX output')
         axes[0,0].set_ylabel('p [Pa]')
         axes[0,0].set_xlabel(r'$\hat{\psi}$')
@@ -1214,26 +1253,26 @@ class DISMAL:
         axes[0,1].legend(fontsize=8)
 
         # p' comparison
-        axes[0,2].set_title("p' comparison")
-        axes[0,2].plot(self._state['pp_prof_tx'][i]['x'], self._state['pp_prof_tx'][i]['y'], 'b-', label='TORAX output')
+        axes[0,2].set_title("p' comparison (normalized)")
+        axes[0,2].plot(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'], 'b-', label='TORAX output (norm)')
         axes[0,2].plot(pp_prof_in['x'], pp_prof_in['y'], 'g-', label='TM input (norm)')
         axes[0,2].plot(tm_psi, tm_pp_norm, 'r--', label='TM get_profiles (norm)')
         axes[0,2].set_ylabel("p'")
         axes[0,2].set_xlabel(r'$\hat{\psi}$')
         axes[0,2].legend(fontsize=8)
 
-        # f from TM
-        # axes[1,0].set_title('F')
-        # axes[1,0].plot(tm_psi, tm_f_prof, 'r--', label='TM get_profiles() (input?)')
-        # axes[1,0].plot(self._state['fpol'][i]['x'], self._state['fpol'][i]['y'], 'b-', label='Initial EQDSK')
-        # axes[1,0].set_ylabel(r'$F [T \cdot m]$')
-        # axes[1,0].set_xlabel(r'$\hat{\psi}$')
-        # axes[1,0].legend(fontsize=8)
-
+        # p' comparison (real units)
+        ax_pp_comp = axes[0,3]
+        ax_pp_comp.set_title("p' comparison (real units)")
+        # ax_pp_comp.plot(self._state['pp_prof_tx'][i]['x'], self._state['pp_prof_tx'][i]['y'], 'b-', label='TORAX output *-1 (real)', linewidth=2)
+        ax_pp_comp.plot(self._state['pp_prof_tx'][i]['x'], self._state['pp_prof_tx'][i]['y'], 'b-', label='TORAX output *-2pi (real)', linewidth=2)
+        ax_pp_comp.plot(self._psi_N, self._state['pp_prof_tm'][i]['y'], 'g-', label='TM get_profiles (real)', linewidth=2)
+        ax_pp_comp.set_ylabel("p' [Pa/Wb]")
+        ax_pp_comp.set_xlabel(r'$\hat{\psi}$')
+        ax_pp_comp.legend(fontsize=8)
 
         # FF' comparison: TORAX output vs calculated from basic equation
         # Basic equation: FF'_total = 2.0 * mu_0 * (j_tot + p' * <R>) / <1/R>
-        j_tot_arr = self._state['j_tot'][i]['y']
         pp_real = np.interp(self._psi_N, self._state['pp_prof_tx'][i]['x'], self._state['pp_prof_tx'][i]['y']) 
         
         # Get geometry factors
@@ -1242,38 +1281,55 @@ class DISMAL:
         R_inv_avg = np.interp(self._psi_N, psi_geo, np.array(geo[1]))
         
         mu_0 = 4.0 * np.pi * 1e-7
-        ffp_calc = 2.0 *  mu_0 * (j_tot_arr + pp_real * R_avg) / R_inv_avg
+        ffp_calc =               mu_0 * (self._state['j_tot'][i]['y']            + pp_real * R_avg) / R_inv_avg # removed 2.0 to reflect desired tokamaker input, doesnt matter after normalization
+        # ffp_calc_with_parallel = mu_0 * (self._state['j_parallel_total'][i]['y'] + pp_real * R_avg) / R_inv_avg #* 2.0  # for checking against TORAX output before normalization
 
-        ffp_calc_norm = self._normalize_profile({'x': self._psi_N, 'y': ffp_calc, 'type': 'linterp'})['y']
-        
+        ffp_calc_norm = self._normalize_profile({'x': self._psi_N, 'y': ffp_calc, 'type': 'linterp'})['y'] # TODO remove _normalize_profile, this is the only time it's called
+        # ffp_calc_norm_parallel = self._normalize_profile({'x': self._psi_N, 'y': ffp_calc_with_parallel, 'type': 'linterp'})['y'] 
+
+
         axes[1,0].set_title("FF' comp (basic eq)")
-        axes[1,0].plot(self._state['ffp_prof_tx'][i]['x'], self._state['ffp_prof_tx'][i]['y'], 'b-', label="TORAX")
+        axes[1,0].plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], 'b-', label="TORAX")
         axes[1,0].plot(self._psi_N, ffp_calc_norm, 'g--', label="FF' from eq (norm)", linewidth=2)
-        axes[1,0].plot(self._state['test'][i]['x'], self._state['test'][i]['y'], 'r--', label="FF' pull_torax_onto_psi", linewidth=1)
+        # axes[1,0].plot(self._state['test'][i]['x'], self._state['test'][i]['y'], 'r--', label="FF' pull_torax_onto_psi", linewidth=1)
         axes[1,0].set_ylabel("FF'")
         axes[1,0].set_xlabel(r'$\hat{\psi}$')
         axes[1,0].legend(fontsize=8)
 
 
-        # FF' comparison
-        axes[1,1].set_title("FF' comparison")
-        axes[1,1].plot(self._state['ffp_prof_tx'][i]['x'], self._state['ffp_prof_tx'][i]['y'], 'b-', label='TORAX')
-        axes[1,1].plot(ffp_prof_in['x'], ffp_prof_in['y'], 'g-', label='TM input (norm)')
-        axes[1,1].plot(tm_psi, tm_ffp_norm, 'r--', label='TM get_profiles (norm)')
+        # FF' comparison (normalized)
+        axes[1,1].set_title("FF' comparison (normalized)")
+        axes[1,1].plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], 'b-', label='TORAX output (normalized)', linewidth=2)
+        # axes[1,1].plot(ffp_prof_in['x'], ffp_prof_in['y'], 'g-', label='TM input (norm)')
+        axes[1,1].plot(tm_psi, tm_ffp_norm, 'r--', label='TM get_profiles (normalized)', linewidth=2)
+        # axes[1,1].plot(self._psi_N, ffp_calc_norm, 'g--', label="FF' from eq (normalized)", linewidth=2)
+        # axes[1,1].plot(self._psi_N, ffp_calc_norm_parallel, 'm-.', label="FF' from eq w/ j_parallel (normalized)", linewidth=2)
         axes[1,1].set_ylabel("FF'")
         axes[1,1].set_xlabel(r'$\hat{\psi}$')
         axes[1,1].legend(fontsize=8)
 
 
-        # FF' decomposition (real units): total, NI, inductive
-        axes[1,2].set_title("FF' decomposition")
-        axes[1,2].plot(tm_psi, tm_ffp_prof, 'k-', label="FF' total", linewidth=2)
-        axes[1,2].plot(self._state['ffpni_prof'][i]['x'], ffpni_real, 'b-', label="FF' NI")
-        axes[1,2].plot(tm_psi, ffp_inductive, 'r--', label="FF' inductive")
+        # FF' comparison (real units)
+        axes[1,2].set_title("FF' comparison (real units)")
+        # axes[1,2].plot(self._psi_N, -1*self._state['ffp_prof_tx'][i]['y'], 'k-', label="FF' total TX * -1.0", linewidth=2)
+        # axes[1,2].plot(self._psi_N, -np.pi*self._state['ffp_prof_tx'][i]['y'], 'k--', label="FF' total TX * -pi", linewidth=2)
+        # axes[1,2].plot(self._psi_N, -2*np.pi*self._state['ffp_prof_tx'][i]['y'], 'k-.', label="FF' total TX * -2pi", linewidth=2)
+        axes[1,2].plot(self._psi_N, self._state['ffp_prof_tx'][i]['y'], 'k-', label="FF' total TX (converted)", linewidth=2)
+        axes[1,2].plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], 'b-', label="FF' NI")
+        axes[1,2].plot(self._psi_N, self._state['ffp_prof_tx'][i]['y'] - self._state['ffpni_prof'][i]['y'], 'r--', label="FF' inductive")
+        axes[1,2].plot(self._psi_N, self._state['ffp_prof_tm'][i]['y'], 'g--', label="FF' total TM", linewidth=1)
 
         axes[1,2].set_ylabel("FF'")
         axes[1,2].set_xlabel(r'$\hat{\psi}$')
         axes[1,2].legend(fontsize=8)
+
+
+        axes[1,3].set_title("p' profile ratio (TM / TX)")
+        axes[1,3].plot(self._psi_N, self._state['pp_prof_tm'][i]['y'] / self._state['pp_prof_tx'][i]['y'], 'm-', label='TM / TX', linewidth=2)
+        axes[1,3].set_ylabel("p' ratio")
+        axes[1,3].set_xlabel(r'$\hat{\psi}$')
+        # axes[1,3].legend(fontsize=8)
+
 
 
         # resistivity profile
@@ -1284,10 +1340,33 @@ class DISMAL:
         axes[2,0].set_xlabel(r'$\hat{\psi}$')
         axes[2,0].legend(fontsize=8)
 
-        # TORAX j_total vs j_parallel_total
+        # j comparison
+
+        # compute j using basic equation        
+        # j_tx_geo = -1 * (self._state['ffp_prof_tx'][i]['y'] * self._state['R_inv_avg_tx'][i]['y'] / mu_0 + self._state['pp_prof_tx'][i]['y'] * self._state['R_avg_tx'][i]['y']) * 2.0 * np.pi
+        
+        # j_tm_geo = -2.0*np.pi * self._state['ffp_prof_tx'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / mu_0 + self._state['pp_prof_tx'][i]['y'] * self._state['R_avg_tm'][i]['y']
+
+        
+        # j_tm_tm_geo_tx_eq = (self._state['ffp_prof_tm'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / 2*mu_0 - self._state['pp_prof_tm'][i]['y'] * self._state['R_avg_tm'][i]['y']) *2*np.pi
+        # j_tm_tm_geo = (-1 * self._state['ffp_prof_tm'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / mu_0 + self._state['pp_prof_tm'][i]['y'] * self._state['R_avg_tm'][i]['y']) * 2.0 * np.pi
+        # j_tm_tm_geo_tm_eq = 0.5 * self._state['ffp_prof_tm'][i]['y'] * (self._state['R_inv_avg_tm'][i]['y'] / mu_0) + self._state['pp_prof_tm'][i]['y'] * self._state['R_avg_tm'][i]['y']
+        # j_tm_tm_geo_tm_eq2 = self._state['ffp_prof_tm'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / (2.0*mu_0)   - self._state['pp_prof_tm'][i]['y'] * self._state['R_avg_tm'][i]['y']
+        
+        j_tx_prof_tm_eq = self._state['ffp_prof_tx'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / mu_0 + self._state['pp_prof_tx'][i]['y'] * self._state['R_avg_tm'][i]['y']
+        j_tm_new =        self._state['ffp_prof_tm'][i]['y'] * self._state['R_inv_avg_tm'][i]['y'] / mu_0 + self._state['pp_prof_tm'][i]['y'] * self._state['R_avg_tm'][i]['y']
+
         axes[2,1].plot(self._state['j_tot'][i]['x'], self._state['j_tot'][i]['y'] / 1e6, 'k-', label=r'$j_{tot}$', linewidth=2)
-        axes[2,1].plot(self._state['j_parallel_total'][i]['x'], self._state['j_parallel_total'][i]['y'] / 1e6, 'm-', label=r'$j_{parallel\_total}$', linewidth=1.5)
-        axes[2,1].set_title('Total and parallel current densities from torax')
+        # axes[2,1].plot(self._state['j_parallel_total'][i]['x'], self._state['j_parallel_total'][i]['y'] / 1e6, 'm-', label=r'$j_{parallel\_total}$', linewidth=2)
+        axes[2,1].plot(self._psi_N, j_tx_prof_tm_eq / 1e6,          'b--', label='tm eq, TX profs, tm geo', linewidth=2)
+        # axes[2,1].plot(self._psi_N, j_tm_geo / 1e6,          'r--', label='tx eq, TX profs, tm geo', linewidth=2)
+        # axes[2,1].plot(self._psi_N, j_tm_tm_geo / 1e6,       'g--', label='tx eq, tm profs, tm geo', linewidth=2)
+        # axes[2,1].plot(self._psi_N, j_tm_tm_geo_tm_eq / 1e6, 'c--', label='tm eq, tm profs, tm geo', linewidth=2)
+        axes[2,1].plot(self._psi_N, j_tm_new / 1e6, 'g--', label='new eq, TM profs, tm geo', linewidth=2)
+        # axes[2,1].plot(self._psi_N, j_tm_tm_geo_tx_eq / 1e6, 'c--', label='tx eq (mod), tm profs, tm geo', linewidth=2)
+
+
+        axes[2,1].set_title('j_phi comp')
         axes[2,1].set_ylabel(r'$j$ [MA/m²]')
         axes[2,1].set_xlabel(r'$\hat{\psi}$')
         axes[2,1].legend(fontsize=8)
@@ -1303,39 +1382,79 @@ class DISMAL:
 
 
 
-        # V_loop comparison (TokaMaker vs TORAX)
-        axes[3,0].set_title('V_loop comparison')
-        axes[3,0].plot(self._times, self._state['vloop'], 'r-', label='TokaMaker', linewidth=2)
-        if 'v_loop_lcfs' in self._results:
-            axes[3,0].plot(self._results['v_loop_lcfs']['x'], self._results['v_loop_lcfs']['y'], 'b--', label='TORAX', linewidth=2)
-        axes[3,0].axvline(t, color='gray', linestyle=':', alpha=0.7, label=f't={t:.1f}s')
-        axes[3,0].set_ylabel('V_loop [V]')
-        axes[3,0].set_xlabel('Time [s]')
-        axes[3,0].legend(fontsize=8)
+        # q-profile panel (TORAX q if available)
+        axes[3,0].set_title('q profile (TORAX)')
+        if 'q' in self._results and self._times[i] in self._results['q']:
+            q_prof = self._results['q'][self._times[i]]
+            axes[3,0].plot(q_prof['x'], q_prof['y'], 'b-', linewidth=2)
+            axes[3,0].set_xlabel(r'$\hat{\psi}$')
+            axes[3,0].set_ylabel('q')
+        else:
+            axes[3,0].text(0.5, 0.5, 'No q profile', horizontalalignment='center', verticalalignment='center')
+            axes[3,0].set_xticks([])
+            axes[3,0].set_yticks([])
+
+        # Ti and Te profiles (same panel)
+        axes[3,1].set_title('T_e and T_i')
+        if i in self._state.get('T_e', {}) and i in self._state.get('T_i', {}):
+            axes[3,1].plot(self._state['T_e'][i]['x'], self._state['T_e'][i]['y'], 'r-', label=r'$T_e$')
+            axes[3,1].plot(self._state['T_i'][i]['x'], self._state['T_i'][i]['y'], 'm--', label=r'$T_i$')
+            axes[3,1].set_xlabel(r'$\hat{\psi}$')
+            axes[3,1].set_ylabel('T [keV]')
+            axes[3,1].legend(fontsize=8)
+        else:
+            axes[3,1].text(0.5, 0.5, 'No T profiles', horizontalalignment='center', verticalalignment='center')
+            axes[3,1].set_xticks([])
+            axes[3,1].set_yticks([])
+
+        # n_e and n_i profiles (same panel)
+        axes[3,2].set_title('n_e and n_i')
+        if i in self._state.get('n_e', {}) and i in self._state.get('n_i', {}):
+            axes[3,2].plot(self._state['n_e'][i]['x'], self._state['n_e'][i]['y'], 'b-', label=r'$n_e$')
+            axes[3,2].plot(self._state['n_i'][i]['x'], self._state['n_i'][i]['y'], 'c--', label=r'$n_i$')
+            axes[3,2].set_xlabel(r'$\hat{\psi}$')
+            axes[3,2].set_ylabel(r'$n$ [m$^{-3}$]')
+            axes[3,2].legend(fontsize=8)
+        else:
+            axes[3,2].text(0.5, 0.5, 'No n profiles', horizontalalignment='center', verticalalignment='center')
+            axes[3,2].set_xticks([])
+            axes[3,2].set_yticks([])
+
+        # # Add R_avg (TM vs TORAX) and <1/R> comparison in row=1, last column (axes[1,3])
+        # ax_03 = axes[0,3]
+        # ax_03.set_title('<R> and <1/R> TM vs TORAX')
+        # ax_03.plot(self._state['R_avg_tm'][i]['x'], self._state['R_avg_tm'][i]['y'], 'r-', label='R_avg TM')
+        # ax_03.plot(self._state['R_avg_tx'][i]['x'], self._state['R_avg_tx'][i]['y'], 'b-', label='R_avg TORAX')
+        # ax_03.set_xlabel(r'$\hat{\psi}$')
+        # ax_03.set_ylabel('R_avg [m]')
+        # ax_03.grid(True, alpha=0.3)
+        # ax_03.legend(fontsize=8)
+        # # secondary axis for <1/R>
+        # ax2_03 = ax_03.twinx()
+        # ax2_03.plot(self._state['R_inv_avg_tm'][i]['x'], self._state['R_inv_avg_tm'][i]['y'], 'r--', label='<1/R> TM')
+        # ax2_03.plot(self._state['R_inv_avg_tx'][i]['x'], self._state['R_inv_avg_tx'][i]['y'], 'b--', label='<1/R> TORAX')
+        # ax2_03.set_ylabel('<1/R> [1/m]')
+        # # combine legends
+        # handles1, labels1 = ax_03.get_legend_handles_labels()
+        # handles2, labels2 = ax2_03.get_legend_handles_labels()
+        # ax_03.legend(handles1 + handles2, labels1 + labels2, fontsize=7, loc='upper right')
 
 
-        # unused plot (row 3, col 1)
-
-
-        # psi_boundary evolution
-        axes[3,2].set_title(r'$\psi_{boundary}$')
-        if 'psi_lcfs_tmaker' in self._results:
-            axes[3,2].plot(self._results['psi_lcfs_tmaker']['x'], self._results['psi_lcfs_tmaker']['y'], 'r-', linewidth=2, label = 'TokaMaker')
-        if 'psi_lcfs_torax' in self._results:
-            axes[3,2].plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], 'b--', linewidth=2, label = 'TORAX')
-        axes[3,2].axvline(t, color='gray', linestyle=':', alpha=0.7, label=f't={t:.1f}s')
-        axes[3,2].set_ylabel(r'$\psi_{lcfs}$ [Wb/rad]')
-        axes[3,2].set_xlabel('Time [s]')
-        axes[3,2].legend(fontsize=8)
+        axes[2,3].set_title('j_ni comparison')
+        axes[2,3].plot(self._psi_N, self._state['j_ni'][i]['y'] / 1e6, 'b-', label='j_NI from calc', linewidth=2)
+        axes[2,3].plot(self._psi_N, self._state['j_ni_tx'][i]['y'] / 1e6, 'r-', label='j_NI from TORAX', linewidth=2)
+        axes[2,3].set_ylabel(r'$j_{NI}$ [MA/m²]')
+        axes[2,3].set_xlabel(r'$\hat{\psi}$')
+        axes[2,3].legend(fontsize=8)
 
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.93)
-        plt.savefig(f'tmp/big_plot_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
+        plt.savefig(f'tmp/profile_plot_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
-    def profile_color_plot(self, step):
+    def _profile_evolution_plot(self, step):
         r'''! Plot multiple profiles over time with color representing time.
         Creates a single figure with subplots for ne, Te, ni, Ti, p (TORAX), p (TokaMaker), q.
         Each subplot shows profiles at all time points with color mapped to time using plasma colormap.
@@ -1366,7 +1485,7 @@ class DISMAL:
             ('n_i', 'state', r'$n_i$ [m$^{-3}$]', r'$\hat{\psi}$'),
             ('T_i', 'state', r'$T_i$ [keV]', r'$\hat{\psi}$'),
             ('ptot', 'state', r'$p$ (TORAX) [Pa]', r'$\hat{\psi}$'),
-            ('p_tmaker', 'state', r'$p$ (TokaMaker) [Pa]', r'$\hat{\psi}$'),
+            ('p_prof_tm', 'state', r'$p$ (TokaMaker) [Pa]', r'$\hat{\psi}$'),
             ('q', 'results', r'$q$', r'$\hat{\psi}$'),
         ]
         
@@ -1408,10 +1527,204 @@ class DISMAL:
         plt.close(fig)
 
 
+    def _scalar_plot(self, step):
+        r'''! Plot a grid of time-series scalars across the entire pulse for a given step.
+        Produces a 4x3 grid with diagnostics including Ip, psi (TM/TORAX), V_loop comparison,
+        Q, n_e_line_avg, T_e_line_avg, P_ohmic, beta_N, l_i, q95, pax.
+        @param step Step number used for filename/label.
+        '''
+        fig, axes = plt.subplots(4, 3, figsize=(16, 12))
+        ax_flat = axes.flatten()
+
+        def get_series(key):
+            # special-case derived/state variables
+            if key == 'Ip':
+                return (self._times, self._state['Ip'])
+            if key == 'vloop_tm':
+                return (self._times, self._state['vloop'])
+            if key == 'pax':
+                return (self._times, self._state['pax'])
+            if key == 'q95_state':
+                return (self._times, self._state['q95'])
+            if key == 'B0_state':
+                return (self._times, self._state['B0'])
+
+            # results dict entries
+            if key in self._results:
+                entry = self._results[key]
+                return (entry['x'], entry['y'])
+
+            # fallback: if present in _state as time-indexed dict
+            if key in self._state and isinstance(self._state[key], dict):
+                x = []
+                y = []
+                for i, t in enumerate(self._times):
+                    if i in self._state[key]:
+                        x.append(t)
+                        # attempt to extract scalar value
+                        val = self._state[key][i]
+                        if isinstance(val, dict) and 'y' in val and np.isscalar(val['y']):
+                            y.append(val['y'])
+                        else:
+                            try:
+                                y.append(float(val))
+                            except:
+                                y.append(np.nan)
+                    else:
+                        x.append(t)
+                        y.append(np.nan)
+                return (np.array(x), np.array(y))
+
+            return (None, None)
+
+        plots = [
+            ('Ip', 'Ip [A]'),
+            ('psi_both', r'$\psi_{lcfs}$ TM & TORAX [Wb/rad]'),
+            ('vloops_combined', 'V_loop (TM vs TORAX) [V]'),
+            ('Q', 'Q_fusion'),
+            ('n_e_line_avg', r'$\bar{n}_e$ line avg [m$^{-3}$]'),
+            ('T_e_line_avg', r'$T_e$ line avg [keV]'),
+            ('P_ohmic_e', 'Power channels [W]'),
+            ('beta_N', 'beta_N'),
+            ('li3', 'l_i (li3)'),
+            ('q95_state', 'q95'),
+            ('pax', 'pax [Pa]'),
+            ('B0_state', 'B0 [T]'),
+        ]
+
+        for idx, (key, title) in enumerate(plots):
+            ax = ax_flat[idx]
+            # handle special panels
+            if key == 'Ip':
+                ax.set_title(title)
+                ax.plot(self._times, self._state['Ip_tm'], 'r-o', markersize=3, label='Ip TM')
+                ax.plot(self._times, self._state['Ip_tx'], 'b-o', markersize=3, label='Ip TORAX')
+                ax.plot(self._times, self._state['Ip_NI_tx'], 'g--', markersize=3, label='Ip NI TORAX')
+                ax.set_xlabel('Time [s]')
+                ax.set_ylabel('Ip [A]')
+                ax.grid(True, alpha=0.3)
+                ax.legend(fontsize=8)
+                # B0 on secondary axis if available
+                # if 'B0' in self._results:
+                #     ax2 = ax.twinx()
+                #     bx, by = self._results['B0']['x'], self._results['B0']['y']
+                #     ax2.plot(bx, by, 'g--', markersize=3, label='B0')
+                #     ax2.set_ylabel('B0 [T]')
+                #     ax2.legend(fontsize=8)
+                continue
+
+            if key == 'psi_both':
+                ax.set_title('psi_lcfs (TM & TORAX)')
+                if 'psi_lcfs_tmaker' in self._results:
+                    ax.plot(self._results['psi_lcfs_tmaker']['x'], self._results['psi_lcfs_tmaker']['y'], 'r-', label='TokaMaker')
+                if 'psi_lcfs_torax' in self._results:
+                    ax.plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], 'b--', label='TORAX')
+                ax.set_xlabel('Time [s]')
+                ax.set_ylabel(r'$\psi_{lcfs}$ [Wb/rad]')
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3)
+                continue
+
+            if key == 'vloops_combined':
+                ax.set_title(title)
+                ax.plot(self._times, self._state['vloop'], 'r-o', markersize=3, label='TokaMaker')
+                if 'v_loop_lcfs' in self._results:
+                    rx = self._results['v_loop_lcfs']['x']
+                    ry = self._results['v_loop_lcfs']['y']
+                    ax.plot(rx, ry, 'b--o', markersize=3, label='TORAX')
+                ax.set_xlabel('Time [s]')
+                ax.grid(True, alpha=0.3)
+                ax.legend(fontsize=8)
+                continue
+
+            if key == 'Q':
+                ax.set_title(title)
+                if 'Q' in self._results:
+                    ax.plot(self._results['Q']['x'], self._results['Q']['y'], 'b-o', markersize=3, label='Q')
+                ax.set_xlabel('Time [s]')
+                ax.grid(True, alpha=0.3)
+                # E_fusion on secondary axis
+                if 'E_fusion' in self._results:
+                    ax2 = ax.twinx()
+                    ax2.plot(self._results['E_fusion']['x'], self._results['E_fusion']['y'], 'g--', markersize=3, label='E_fusion')
+                    ax2.set_ylabel('E_fusion')
+                continue
+
+            if key == 'n_e_line_avg':
+                ax.set_title(title)
+                if 'n_e_line_avg' in self._results:
+                    ax.plot(self._results['n_e_line_avg']['x'], self._results['n_e_line_avg']['y'], 'b-o', markersize=3, label='n_e line avg')
+                # plot core from results if present
+                if 'n_e_core' in self._results:
+                    ax.plot(self._results['n_e_core']['x'], self._results['n_e_core']['y'], 'k--', markersize=3, label='n_e core')
+                # edge from state profiles
+                ne_edge_x = self._times
+                ne_edge_y = [self._state['n_e'][ii]['y'][-1] if ii in self._state.get('n_e', {}) else np.nan for ii in range(len(self._times))]
+                ax.plot(ne_edge_x, ne_edge_y, 'c:', marker='s', markersize=3, label='n_e edge')
+                ax.set_xlabel('Time [s]')
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3)
+                continue
+
+            if key == 'T_e_line_avg':
+                ax.set_title(title)
+                if 'T_e_line_avg' in self._results:
+                    ax.plot(self._results['T_e_line_avg']['x'], self._results['T_e_line_avg']['y'], 'r-o', markersize=3, label='T_e line avg')
+                if 'T_e_core' in self._results:
+                    ax.plot(self._results['T_e_core']['x'], self._results['T_e_core']['y'], 'k--', markersize=3, label='T_e core')
+                te_edge_x = self._times
+                te_edge_y = [self._state['T_e'][ii]['y'][-1] if ii in self._state.get('T_e', {}) else np.nan for ii in range(len(self._times))]
+                ax.plot(te_edge_x, te_edge_y, 'm:', marker='s', markersize=3, label='T_e edge')
+                ax.set_xlabel('Time [s]')
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3)
+                continue
+
+            if key == 'P_ohmic_e':
+                ax.set_title(title)
+                # Plot P_ohmic_e and related channels if available
+                if 'P_ohmic_e' in self._results:
+                    ax.plot(self._results['P_ohmic_e']['x'], self._results['P_ohmic_e']['y'], 'r-o', markersize=3, label='P_ohmic_e')
+                if 'P_radiation_e' in self._results:
+                    ax.plot(self._results['P_radiation_e']['x'], self._results['P_radiation_e']['y'], 'm--', markersize=3, label='P_radiation_e')
+                if 'P_SOL_total' in self._results:
+                    ax.plot(self._results['P_SOL_total']['x'], self._results['P_SOL_total']['y'], 'c--', markersize=3, label='P_SOL_total')
+                if 'P_alpha_total' in self._results:
+                    ax.plot(self._results['P_alpha_total']['x'], self._results['P_alpha_total']['y'], 'g-.', markersize=3, label='P_alpha_total')
+                if 'P_aux_total' in self._results:
+                    ax.plot(self._results['P_aux_total']['x'], self._results['P_aux_total']['y'], 'y-.', markersize=3, label='P_aux_total')
+                ax.set_xlabel('Time [s]')
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3)
+                continue
+
+            x, y = get_series(key)
+            ax.set_title(title)
+            if x is None or y is None:
+                ax.text(0.5, 0.5, 'No data', horizontalalignment='center', verticalalignment='center')
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+
+            try:
+                ax.plot(x, y, '-o', markersize=3)
+            except Exception:
+                ax.plot(x, np.array(y, dtype=float), '-o', markersize=3)
+
+            ax.set_xlabel('Time [s]')
+            ax.grid(True, alpha=0.3)
+
+        plt.suptitle(f'Scalars Over Pulse (Step {step})', fontsize=14)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)
+        plt.savefig(f'tmp/scalars_step{step}.png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
 
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=3, out='res.json'):
+
+
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=10, out='res.json'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
@@ -1496,6 +1809,12 @@ class DISMAL:
             plt.savefig(f'tmp/vloop_comparison_step{step}.png', dpi=150, bbox_inches='tight')
             plt.close('all')
 
+
+            # interpolate then print v_loop ratio for debugging
+            v_loop_tm = np.interp(self._results['v_loop_lcfs']['x'], self._times, self._state['vloop'])
+            print(f'v_loop_tm/v_loop_tx = {v_loop_tm/self._results["v_loop_lcfs"]["y"]}')
+
+
             # self._print_out(f'self._times =')
             # temp_text = 'yesffpni'
 
@@ -1511,7 +1830,8 @@ class DISMAL:
 
 
 
-            self.profile_color_plot(step)
+            self._profile_evolution_plot(step)
+            self._scalar_plot(step)
 
 
 
