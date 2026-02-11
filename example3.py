@@ -54,4 +54,4 @@ mysim.set_right_bc(Te_right_bc=Te_right_bc, Ti_right_bc=Ti_right_bc, ne_right_bc
 mysim.set_pedestal(T_i_ped=T_i_ped, T_e_ped=T_e_ped, n_e_ped=n_e_ped)
 mysim.set_nbar({0: 0.326E20, 80: .905E20})
 
-mysim.fly(save_states=True, graph=False)
+mysim.fly(save_states=True, graph=True)
