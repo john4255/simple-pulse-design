@@ -433,11 +433,12 @@ class DISMAL:
         if ohmic is not None:
             self._ohmic_power = ohmic
 
-    def set_pedestal(self, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
+    def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
         @pararm T_i_ped Ion temperature pedestal (dictionary of temperature at times).
         @pararm T_e_ped Electron temperature pedestal (dictionary of temperature at times).
         '''
+        self._set_pedestal = set_pedestal
         if T_i_ped:
             self._T_i_ped = T_i_ped
         if T_e_ped:
@@ -973,10 +974,12 @@ class DISMAL:
         if self._T_e_ped:
             myconfig['pedestal']['T_e_ped'] = self._T_e_ped
         
+
         if self._n_e_ped:
             myconfig['pedestal']['n_e_ped_is_fGW'] = False
             myconfig['pedestal']['n_e_ped'] = self._n_e_ped
         
+        myconfig['pedestal']['set_pedestal'] = self._set_pedestal # TODO not working
         myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
         
         if self._nbar:
