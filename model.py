@@ -666,6 +666,7 @@ class DISMAL:
                 self._eqdsk_skip.append(eq_name)
                 skip_coil_update = True
                 self._print_out(f'TM: Solve failed at t={t}.')
+                self._print_tokamaker_inputs(step, i, t, ffp_prof, pp_prof)
                 solve_succeeded = False
             
             if solve_succeeded:
@@ -936,6 +937,7 @@ class DISMAL:
             'geometry_configs': {
                 t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
             },
+            'n_rho': 25, 
         }
         if step > 1:
             safe_times = []
@@ -1334,6 +1336,67 @@ class DISMAL:
     def _print_out(self, str):
         with open('convergence_history.txt', 'a') as f:
             print(str, file=f)
+    
+    def _print_tokamaker_inputs(self, step, i, t, ffp_prof, pp_prof):
+        r'''! Print all TokaMaker inputs when solver fails.
+        @param step Current iteration step
+        @param i Time index
+        @param t Current time
+        @param ffp_prof FF' profile used (after mixing/normalization)
+        @param pp_prof p' profile used (after mixing/normalization)
+        '''
+
+        g = read_eqdsk(self._init_files[i])
+        self._print_out(f"\n===== TM SOLVER FAILURE: Step {step}, t={t:.3f}s (idx {i}/{len(self._times)-1}) =====")
+        
+        # TARGETS & GEOMETRY
+        self._print_out(f"TARGETS: Ip={abs(self._state['Ip'][i]):.4e}A, pax={abs(self._state['pax'][i]):.4e}Pa" + 
+                       (f", Ip_NI(TX)={self._state['Ip_NI_tx'][i]:.4e}A" if step > 1 else ""))
+        self._print_out(f"Init EQDSK: Ip={abs(g['ip']):.4e}A, pax={g['pres'][0]:.4e}Pa")
+        self._print_out(f"GEOMETRY: R={self._state['R'][i]:.3f}m, Z={self._state['Z'][i]:.3f}m, a={self._state['a'][i]:.3f}m, κ={self._state['kappa'][i]:.3f}, δ={self._state['delta'][i]:.3f}, B0={self._state['B0'][i]:.2f}T")
+        
+        # FLUX CONSTRAINTS
+        lcfs_R = self._state['lcfs'][i][:, 0]
+        lcfs_Z = self._state['lcfs'][i][:, 1]
+        self._print_out(f"TORAX psi: psi_lcfs={self._state['psi_lcfs'][i]:.4e}Wb/rad, psi_axis={self._state['psi_axis'][i]:.4e}Wb/rad")
+        self._print_out(f'Init EQDSK psi: psi_lcfs={abs(g["psibry"]):.4e}Wb/rad, psi_axis={abs(g["psimag"]):.4e}Wb/rad')
+        
+        # SCALAR QUANTITIES FROM TORAX (if step > 1)
+        if step > 1:
+            self._print_out(f"TORAX scalars: beta_pol={self._state['beta_pol'][i]:.4f}, q95={self._state['q95'][i]:.3f}, q0={self._state['q0'][i]:.3f}, vloop={self._state['vloop_tx'][i]:.3f}V")
+            if self._state['vol_tx_lcfs'][i] > 0:
+                self._print_out(f"TORAX volume: vol_lcfs={self._state['vol_tx_lcfs'][i]:.3f}m³")
+        # self._print_out(f"LCFS: {len(self._state['lcfs'][i])} pts, R=[{lcfs_R.min():.3f},{lcfs_R.max():.3f}]m, Z=[{lcfs_Z.min():.3f},{lcfs_Z.max():.3f}]m, weight={LCFS_WEIGHT}")
+        
+        # PROFILES (compact format)
+        # self._print_out(f"PROFILES (mix_ratio={self._prof_mix_ratio:.2f}, smoothing={self._prof_smoothing}):")
+        # self._print_out(f"  ffp_norm: [{np.min(ffp_prof['y']):.3e}, {np.max(ffp_prof['y']):.3e}], ψ=0:{ffp_prof['y'][0]:.3e}, ψ=1:{ffp_prof['y'][-1]:.3e}")
+        # self._print_out(f"  pp_norm:  [{np.min(pp_prof['y']):.3e}, {np.max(pp_prof['y']):.3e}], ψ=0:{pp_prof['y'][0]:.3e}, ψ=1:{pp_prof['y'][-1]:.3e}")
+        
+        # ffpni = self._state['ffpni_prof'][i]['y']
+        # eta = self._state['eta_prof'][i]['y']
+        # self._print_out(f"  ffpni:    [{np.min(ffpni):.3e}, {np.max(ffpni):.3e}], ψ=0:{ffpni[0]:.3e}, ψ=1:{ffpni[-1]:.3e}")
+        # self._print_out(f"  eta(Ωm):  [{np.min(eta):.3e}, {np.max(eta):.3e}], ψ=0:{eta[0]:.3e}, ψ=1:{eta[-1]:.3e}")
+        
+        # Current densities (if available)
+        # if step > 1:
+        #     j_tot = self._state['j_tot'][i]['y']
+        #     j_ohm = self._state['j_ohmic'][i]['y']
+        #     j_ni = self._state['j_ni'][i]['y']
+        #     self._print_out(f"CURRENTS: j_tot=[{np.min(j_tot):.3e},{np.max(j_tot):.3e}], j_ohm=[{np.min(j_ohm):.3e},{np.max(j_ohm):.3e}], j_ni=[{np.min(j_ni):.3e},{np.max(j_ni):.3e}] A/m²")
+        
+        # Previous step comparison
+        # if step > 1 and i in self._state['ffp_prof_save']:
+        #     ffp_save = self._state['ffp_prof_save'][i]['y']
+        #     pp_save = self._state['pp_prof_save'][i]['y']
+        #     self._print_out(f"PREV STEP: ffp=[{np.min(ffp_save):.3e},{np.max(ffp_save):.3e}], pp=[{np.min(pp_save):.3e},{np.max(pp_save):.3e}]")
+        
+        # Initial EQDSK info
+        # if step == 1:
+        #     eqdsk_idx = min(i, len(self._init_files) - 1)
+        #     self._print_out(f"SEED EQDSK: {self._init_files[eqdsk_idx]}")
+        
+        self._print_out(f"===============================================================================\n")
 
     def _calc_ffp_ni(self, i, data_tree):
         r'''! Calculate non-inductive FF' profile from TORAX current densities.
