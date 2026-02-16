@@ -39,7 +39,6 @@ BASE_CONFIG = {
         # 'n_e': {0: {0.0: 1.3, 1.0: 1.0}},  # Initial electron density profile
         'normalize_n_e_to_nbar': False, # normalize initial n_e to nbar
         'n_e_nbar_is_fGW': False, # nbar is in units for greenwald fraction
-        'initial_psi_from_j': False, # initial psi from current formula # TODO: change?
         # 'initial_j_is_total_current': True, # only ohmic current on init
         # 'current_profile_nu': 2, # exponent in initial current formula
     },
