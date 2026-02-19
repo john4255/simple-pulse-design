@@ -4,7 +4,7 @@ import json
 import numpy as np
 from model import DISMAL
 
-eqdsk_names = sorted(os.listdir('163303/eqs_safe'))
+eqdsk_names = sorted(os.listdir('163303/eqs_200'))
 eqdsk = []
 eqtimes = []
 for fname in eqdsk_names:
@@ -14,7 +14,7 @@ for fname in eqdsk_names:
     _, t = tag.split('-')
     t = float(t) / 1e3
     eqtimes.append(t)
-    eqdsk.append(f'163303/eqs_safe/{fname}')
+    eqdsk.append(f'163303/eqs_200/{fname}')
 eqtimes_1 = eqtimes.copy()
 
 prof_names = sorted(os.listdir('163303/profs'))
@@ -36,8 +36,9 @@ for fname in extra_eq_names:
     t = float(t) / 1e3
     eqtimes.append(t)
 alltimes = np.append(prof_t[::10], eqtimes)
+alltimes = sorted(list(set(alltimes)))[::2]
 
-mysim = DISMAL(0.1, 5.0, eqtimes_1, eqdsk, dt=1.0E-2, times=alltimes)
+mysim = DISMAL(0.0, 5.0, eqtimes_1, eqdsk, dt=1.0E-2, times=alltimes, last_surface_factor=0.99)
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {
@@ -181,7 +182,8 @@ for t in t_inc:
     nbar[t] = np.interp(t, prof_times, nbar_list)
 
 mysim.set_nbar({0.1: nbar[0.1]})
-mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped)
+# mysim.set_pedestal(T_e_ped=T_e_ped, T_i_ped=T_i_ped, n_e_ped=n_e_ped)
+# mysim.set_pedestal(set_pedstal=False)
 
 Te_init = {0.1: Te[0.1]}
 Ti_init = {0.1: Ti[0.1]}

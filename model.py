@@ -12,7 +12,7 @@ import shutil
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
+from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 
 from baseconfig import BASE_CONFIG
 
@@ -72,7 +72,9 @@ class DISMAL:
         self._state['Ip'] = np.zeros(len(self._times))
         self._state['pax'] = np.zeros(len(self._times))
         self._state['beta_pol'] = np.zeros(len(self._times))
-        self._state['vloop'] = np.zeros(len(self._times))
+        # self._state['vloop'] = np.zeros(len(self._times))
+        self._state['vloop_tm'] = np.zeros(len(self._times))
+        self._state['vloop_tx'] = np.zeros(len(self._times))
         self._state['q95'] = np.zeros(len(self._times))
         self._state['psi_lcfs'] = np.zeros(len(self._times))
         self._state['psi_axis'] = np.zeros(len(self._times))
@@ -209,6 +211,18 @@ class DISMAL:
             self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
             self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
+            # Copy eqdsk profiles for later use
+            # self._state['ffp_prof_eq'] = {
+            #     'x': self._state['ffp_prof'][i]['x'].copy(),
+            #     'y': self._state['ffp_prof'][i]['y'].copy(),
+            #     'type': 'linterp'
+            # }
+            # self._state['pp_prof_eq'] = {
+            #     'x': self._state['pp_prof'][i]['x'].copy(),
+            #     'y': self._state['pp_prof'][i]['y'].copy(),
+            #     'type': 'linterp'
+            # }
+
             self._state['eta_prof'][i]= {
                 'x': self._psi_N.copy(),
                 'y': np.zeros(N_PSI),
@@ -260,7 +274,7 @@ class DISMAL:
 
         self._targets = None
         self._baseconfig = None
-        self._prof_mix_ratio = 1.0
+        # self._prof_mix_ratio = 1.0
         self._prof_smoothing = True
         self._eqdsk_skip = []
     
@@ -280,7 +294,7 @@ class DISMAL:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.settings.maxits = 1000
+        self._gs.settings.maxits = 500
         # self._gs.settings.pm = False
 
         if vsc is not None:
@@ -378,9 +392,9 @@ class DISMAL:
         for i, t in enumerate(self._times):
             self._state['beta_pol'][i] = np.interp(t, Bp_t, Bp_list)
 
-    def set_Vloop(self, vloop):
-        for i in range(len(self._times)):
-            self._state['vloop'][i] = vloop[i]
+    # def set_Vloop(self, vloop):
+    #     for i in range(len(self._times)):
+    #         self._state['vloop'][i] = vloop[i]
     
     def set_gaspuff(self, s=None, decay_length=None):
         r'''! Set gas puff particle source.
@@ -414,8 +428,8 @@ class DISMAL:
     def set_validation_density(self, ne):
         self._validation_ne = ne
     
-    def set_prof_mix_ratio(self, ratio):
-        self._prof_mix_ratio = ratio
+    # def set_prof_mix_ratio(self, ratio):
+    #     self._prof_mix_ratio = ratio
     
     def set_prof_smoothing(self, smoothing):
         self._prof_smoothing = smoothing
@@ -481,30 +495,23 @@ class DISMAL:
             
             # self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs, error code told me
 
-
             def mix_profiles(prev, curr, ratio=1.0):
                 my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
                 for i, x in enumerate(curr['x']):
                     my_prof['x'][i] = x
-                    my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
+                    my_prof['y'][i] = ratio * prev['y'][i] + (1.0 - ratio) * curr['y'][i]
                 return my_prof
 
             def make_smooth(x, y):
                 spline = make_smoothing_spline(x, y)
                 smoothed = spline(x)
                 return smoothed
-
-            # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet) #TODO might not be necessary anymore
-            if step == 1:
-                ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(), 
-                           'y': self._state['ffp_prof'][i]['y'].copy(), 
-                           'type': self._state['ffp_prof'][i]['type']}
-                pp_prof = {'x': self._state['pp_prof'][i]['x'].copy(), 
-                          'y': self._state['pp_prof'][i]['y'].copy(), 
-                          'type': self._state['pp_prof'][i]['type']}
-            else:
-                ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
-                pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
+            
+            ffp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,1.5,2.0), self._state['ffp_prof'][i], 0.5)
+            pp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,4.0,1.0), self._state['pp_prof'][i], 0.5)
+            mix_ratio = 0.9 ** (step-1)
+            ffp_prof=mix_profiles(ffp_prof_simple, self._state['ffp_prof'][i], ratio=mix_ratio)
+            pp_prof=mix_profiles(pp_prof_simple, self._state['pp_prof'][i], ratio=mix_ratio)
             
             if self._prof_smoothing:
                 ffp_prof['y'] = make_smooth(ffp_prof['x'], ffp_prof['y'])
@@ -569,17 +576,19 @@ class DISMAL:
             
             try:
                 err_flag = self._gs.solve()
+                self._print_out(f'\tTM: Solve succeeded at t={t}')
                 self._gs_update(i)
                 self._gs.save_eqdsk(eq_name,
+                                    nr=200,
+                                    nz=200,
                                     lcfs_pad=0.01,run_info='TokaMaker EQDSK',
                                     cocos=2)
                 # self._print_out(f'Solve completed at t={t}.')
                 solve_succeeded = True
             except Exception as e:
-                print(f'\tGS solve failed: {e}')
+                self._print_out(f'\tTM: Solve failed at t={t}: {e}')
                 self._eqdsk_skip.append(eq_name)
                 skip_coil_update = True
-                self._print_out(f'TM: Solve failed at t={t}.')
                 solve_succeeded = False
                 
                 # Save ff' and p' for inspection
@@ -602,18 +611,18 @@ class DISMAL:
 
 
         self._print_out(f'Step {step}: TM out: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
-
+        self._plot_vloop(step)
 
         consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         # consumed_flux = np.trapezoid(self._state['vloop'], self._times)
-        consumed_flux_integral = np.trapezoid(self._state['vloop'][1:], self._times[1:]) # ignore t=0 vloop
+        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][1:], self._times[1:]) # ignore t=0 vloop
 
         # Diagnostic: print vloop statistics
-        vloop_arr = np.array(self._state['vloop'])
-        self._print_out(f"\tTM: vloop: min={vloop_arr.min():.3f}, max={vloop_arr.max():.3f}, mean={vloop_arr.mean():.3f} V")
-        self._print_out(f"\tTM: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
-        self._print_out(f'\tTM: psi_bound consumed flux={consumed_flux:.3f} Wb')
-        self._print_out(f'\tTM: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
+        # vloop_arr = np.array(self._state['vloop'])
+        # self._print_out(f"\tTM: vloop: min={vloop_arr.min():.3f}, max={vloop_arr.max():.3f}, mean={vloop_arr.mean():.3f} V")
+        # self._print_out(f"\tTM: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
+        # self._print_out(f'\tTM: psi_bound consumed flux={consumed_flux:.3f} Wb')
+        # self._print_out(f'\tTM: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
 
         return consumed_flux, consumed_flux_integral
         
@@ -632,7 +641,7 @@ class DISMAL:
         self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
         self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i] # stored as Wb/rad
 
-        self._state['vloop'][i] = self._gs.calc_loopvoltage()
+        self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
         
         # Store TokaMaker pressure profile from get_profiles()
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
@@ -747,12 +756,27 @@ class DISMAL:
             'geometry_directory': os.getcwd(),
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 100,
+            'n_rho': 50,
             'Ip_from_parameters': True,
             'geometry_configs': {
                 t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
             },
         }
-        if step > 1:
+        if step == 1:
+            safe_times = []
+            safe_eqdsk = []
+            for i, t in enumerate(self._eqtimes):
+                eqdsk = self._init_files[i]
+                if self._test_eqdsk(eqdsk):
+                    safe_times.append(t)
+                    safe_eqdsk.append(eqdsk)
+                else:
+                    self._print_out(f'\tTX: Skipping invalid eqdsk file at t={t}')
+            myconfig['geometry']['geometry_configs'] = {
+                t: {'geometry_file': safe_eqdsk[i], 'cocos': 2} for i, t in enumerate(safe_times)
+            }
+            self._print_out(f'\tTX: Skipped {len(self._eqtimes) - len(safe_eqdsk)} out of {len(self._eqtimes)} EQDSK files.')
+        else:
             safe_times = []
             safe_eqdsk = []
             for i, t in enumerate(self._times):
@@ -764,7 +788,7 @@ class DISMAL:
                     safe_times.append(t)
                     safe_eqdsk.append(eqdsk)
                 else:
-                    print('Deleting invalid eqdsk file.')
+                    self._print_out('\tTX: Skipping invalid eqdsk file at t={t}')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': safe_eqdsk[i], 'cocos': 2} for i, t in enumerate(safe_times)
             }
@@ -804,6 +828,7 @@ class DISMAL:
         myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
         myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
+        # myconfig['pedestal']['set_pedestal'] = False
         if self._T_i_ped:
             myconfig['pedestal']['T_i_ped'] = self._T_i_ped
         if self._T_e_ped:
@@ -900,17 +925,16 @@ class DISMAL:
 
         # Deep copy to prevent mutation when normalizing ffp_prof/pp_prof later
         # these are normalized already from the previous step
-        self._state['ffp_prof_save'][i] = {
-            'x': self._state['ffp_prof'][i]['x'].copy(),
-            'y': self._state['ffp_prof'][i]['y'].copy(),
-            'type': self._state['ffp_prof'][i]['type'],
-        }
-        self._state['pp_prof_save'][i] = {
-            'x': self._state['pp_prof'][i]['x'].copy(),
-            'y': self._state['pp_prof'][i]['y'].copy(),
-            'type': self._state['pp_prof'][i]['type'],
-        }
-
+        # self._state['ffp_prof_save'][i] = {
+        #     'x': self._state['ffp_prof'][i]['x'].copy(),
+        #     'y': self._state['ffp_prof'][i]['y'].copy(),
+        #     'type': self._state['ffp_prof'][i]['type'],
+        # }
+        # self._state['pp_prof_save'][i] = {
+        #     'x': self._state['pp_prof'][i]['x'].copy(),
+        #     'y': self._state['pp_prof'][i]['y'].copy(),
+        #     'type': self._state['pp_prof'][i]['type'],
+        # }
 
         self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=True)
         self._state['pp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state', normalize=True)
@@ -1050,7 +1074,7 @@ class DISMAL:
             'y': data_tree.scalars.H98.to_numpy(),
         }
 
-        self._results['v_loop_lcfs'] = {
+        self._results['vloop_tx'] = {
             'x': list(data_tree.scalars.v_loop_lcfs.coords['time'].values),
             'y': data_tree.scalars.v_loop_lcfs.to_numpy(),
         }
@@ -1305,9 +1329,9 @@ class DISMAL:
 
         # V_loop comparison (TokaMaker vs TORAX)
         axes[3,0].set_title('V_loop comparison')
-        axes[3,0].plot(self._times, self._state['vloop'], 'r-', label='TokaMaker', linewidth=2)
-        if 'v_loop_lcfs' in self._results:
-            axes[3,0].plot(self._results['v_loop_lcfs']['x'], self._results['v_loop_lcfs']['y'], 'b--', label='TORAX', linewidth=2)
+        axes[3,0].plot(self._times, self._state['vloop_tm'], 'r-', label='TokaMaker', linewidth=2)
+        if 'vloop_tx' in self._results:
+            axes[3,0].plot(self._results['vloop_tx']['x'], self._results['vloop_tx']['y'], 'b--', label='TORAX', linewidth=2)
         axes[3,0].axvline(t, color='gray', linestyle=':', alpha=0.7, label=f't={t:.1f}s')
         axes[3,0].set_ylabel('V_loop [V]')
         axes[3,0].set_xlabel('Time [s]')
@@ -1333,6 +1357,39 @@ class DISMAL:
         plt.subplots_adjust(top=0.93)
         plt.savefig(f'tmp/big_plot_{step:03}.{i:03}.png', dpi=150, bbox_inches='tight')
         plt.close(fig)
+
+    def _plot_vloop(self, step):
+        fig, ax = plt.subplots(1,2)
+        ax[0].set_title('V_loop (TM vs TX) [V]')
+        ax[1].set_title('V_loop ratio (TX/TM)')
+        if 'vloop_tx' in self._results:
+            rx = self._results['vloop_tx']['x']
+            ry = self._results['vloop_tx']['y']
+            ax[0].plot(rx, ry, '--o', markersize=3, label='TORAX')
+            # Secondary axis for vloop ratio (TokaMaker / TORAX)
+            tm_vloop = np.array(self._state['vloop_tm'])
+            tx_vloop = np.array(ry)
+            # Interpolate TokaMaker vloop to TORAX time points if needed
+            tm_vloop_times = []
+            tm_vloop_real = []
+            for i, t in enumerate(self._times):
+                if tm_vloop[i] != 0:
+                    tm_vloop_times.append(t)
+                    tm_vloop_real.append(tm_vloop[i])
+            interp_tm = interp1d(tm_vloop_times, tm_vloop_real, bounds_error=False, fill_value=np.nan)
+            ax[0].set_ylim(0,5)
+            ax[0].plot(tm_vloop_times, tm_vloop_real, '-o', markersize=3, label='TokaMaker')
+            ratio = tx_vloop / interp_tm(rx)
+            ratio_times = np.array(rx)
+            ax[1].plot(ratio_times, ratio, 'g-s', markersize=3, label='TX/TM ratio')
+            ax[1].set_ylim(0,2.5)
+            ax[0].legend()
+            # Print average vloop and ratio between 300 and 400 seconds
+        ax[0].set_xlabel('Time [s]')
+        ax[0].grid(True, alpha=0.3)
+        ax[0].legend(fontsize=8, loc='upper left')
+        plt.suptitle(f'TX/TM ratio min={np.min(ratio)} max={np.max(ratio)} (nrho=150)')
+        plt.savefig(f'tmp/vloop_comparison_{step}.png')
 
 
     def profile_color_plot(self, step):
@@ -1473,8 +1530,8 @@ class DISMAL:
             tm_cflux_vloop.append(cflux_gs_vloop)
             tx_cflux_psi.append(cflux_tx)
             tx_cflux_vloop.append(cflux_tx_vloop)
-            vloop_tm = self._state['vloop'].copy()
-            vloop_tx = self._results['v_loop_lcfs']['y'].copy()
+            vloop_tm = self._state['vloop_tm'].copy()
+            vloop_tx = self._results['vloop_tx']['y'].copy()
 
             self._print_out(f'\n ---- Step {step} results ---- ')
 
@@ -1487,8 +1544,8 @@ class DISMAL:
 
             fig, axes = plt.subplots()
             axes.set_title(f'V_loop step {step}')
-            axes.plot(self._times, self._state['vloop'], 'r-o', label='TokaMaker')
-            axes.plot(self._results['v_loop_lcfs']['x'], self._results['v_loop_lcfs']['y'], 'b-o', label='TORAX')
+            axes.plot(self._times, self._state['vloop_tm'], 'r-o', label='TokaMaker')
+            axes.plot(self._results['vloop_tx']['x'], self._results['vloop_tx']['y'], 'b-o', label='TORAX')
             axes.set_xlabel('Time [s]')
             axes.set_ylabel('V_loop [V]')
             axes.legend(fontsize=8)
