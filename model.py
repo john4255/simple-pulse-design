@@ -507,9 +507,9 @@ class DISMAL:
                 smoothed = spline(x)
                 return smoothed
             
-            ffp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,1.5,2.0), self._state['ffp_prof'][i], 0.5)
-            pp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,4.0,1.0), self._state['pp_prof'][i], 0.5)
-            mix_ratio = 0.9 ** (step-1)
+            ffp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,1.5,2.0), self._state['ffp_prof'][i], 1.0)
+            pp_prof_simple = mix_profiles(create_power_flux_fun(N_PSI,4.0,1.0), self._state['pp_prof'][i], 1.0)
+            mix_ratio = 0.5 ** (step-1)
             ffp_prof=mix_profiles(ffp_prof_simple, self._state['ffp_prof'][i], ratio=mix_ratio)
             pp_prof=mix_profiles(pp_prof_simple, self._state['pp_prof'][i], ratio=mix_ratio)
             
