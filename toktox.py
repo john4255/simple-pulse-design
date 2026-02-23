@@ -64,6 +64,8 @@ class TokTox:
         self._last_surface_factor = last_surface_factor
         self._psi_N = np.linspace(0.0, 1.0, N_PSI) # standardized psi_N grid all values should be mapped onto
 
+        self._current_step = 0
+
         if times is None:
             self._times = eqtimes
         else:
@@ -144,7 +146,7 @@ class TokTox:
         self._state['f_NI'] = np.zeros(len(self._times))
 
         # Volume and shape comparisons
-        self._state['vol_tm'] = np.zeros(len(self._times))
+        self._state['vol_tm'] = {}
         self._state['vol_tx'] = {}  # volume profile vs psi
         self._state['vol_tx_lcfs'] = np.zeros(len(self._times))  # volume at LCFS (scalar)
         self._state['vpr_tm'] = {}
@@ -1072,7 +1074,7 @@ class TokTox:
         self._state['l_i_tm'][i] = eq_stats['l_i']
         
         eq_read_extended = read_eqdsk_extended(os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i)))
-        vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['volume'])
+        vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vol'])
         vpr_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vpr'])
         self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
         self._state['vpr_tm'][i] = {'x': self._psi_N.copy(), 'y': vpr_tm, 'type': 'linterp'}
@@ -1094,12 +1096,12 @@ class TokTox:
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
 
         self._state['ffp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_fp_prof*tm_f_prof), 'type': 'linterp'}
-        self._state['pp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
-        self._state['p_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_p_prof), 'type': 'linterp'}
-        self._state['f_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
+        self._state['pp_prof_tm'][i] =  {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
+        self._state['p_prof_tm'][i] =   {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_p_prof), 'type': 'linterp'}
+        self._state['f_prof_tm'][i] =   {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
 
         # pull geo profiles
-        psi_geo, q_tm, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
+        psi_geo, q_tm, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02)
         
         self._state['q0_tm'][i] = q_tm[0] if len(q_tm) > 0 else np.nan
         self._state['q95_tm'][i] = np.interp(0.95, psi_geo, q_tm) if len(psi_geo) > 0 and len(q_tm) > 0 else np.nan
@@ -1132,8 +1134,6 @@ class TokTox:
                 return True
             except:
                 return False
-
-
 
     def _res_update(self, data_tree):
 
@@ -1296,181 +1296,6 @@ class TokTox:
         with open(self._log_file, 'a') as f:
             print(str, file=f)
     
-    def _print_tokamaker_inputs(self, step, i, t):
-        r'''! Print TokaMaker inputs/targets in a comparison table, used when solver fails.
-        @param step Current iteration step
-        @param i Time index
-        @param t Current time
-        '''
-        # --- Find the correct seed EQDSK for this time (nearest eqtime) ---
-        eq_idx = int(np.argmin(np.abs(np.array(self._eqtimes) - t)))
-        seed_file = self._init_files[eq_idx]
-        g_seed = read_eqdsk(seed_file)
-
-        # pp' and FF' axis/edge from seed EQDSK (already in TM-compatible units: Pa/(Wb/rad), T·m)
-        seed_pp_ax  = g_seed['pprime'][0]
-        seed_pp_ed  = g_seed['pprime'][-1]
-        seed_ffp_ax = g_seed['ffprim'][0]
-        seed_ffp_ed = g_seed['ffprim'][-1]
-
-        # --- Try to load previous step's solved EQDSK for this time index ---
-        prev_eqdsk_file = 'tmp/{:03}.{:03}.eqdsk'.format(step - 1, i)
-        g_prev = None
-        prev_pp_ax = prev_pp_ed = prev_ffp_ax = prev_ffp_ed = None
-        if step > 1 and os.path.isfile(prev_eqdsk_file):
-            try:
-                g_prev = read_eqdsk(prev_eqdsk_file)
-                prev_pp_ax  = g_prev['pprime'][0]   if 'pprime'  in g_prev else None
-                prev_pp_ed  = g_prev['pprime'][-1]  if 'pprime'  in g_prev else None
-                prev_ffp_ax = g_prev['ffprime'][0]  if 'ffprime' in g_prev else None
-                prev_ffp_ed = g_prev['ffprime'][-1] if 'ffprime' in g_prev else None
-            except Exception:
-                g_prev = None
-
-        def _f(val, fmt):
-            """Format a value or return '---' if None."""
-            return format(val, fmt) if val is not None else '---'
-
-        def _axis(state_key):
-            """Get axis (rho=0) value from a profile dict if available, else None."""
-            d = self._state.get(state_key, {})
-            entry = d[i] if (isinstance(d, (list, np.ndarray)) and len(d) > i) else d.get(i)
-            if entry is not None and isinstance(entry, dict) and 'y' in entry:
-                return float(entry['y'][0])
-            return None
-
-        # --- Collect scalar values ---
-        # psi convention: TORAX (in this code) outputs psi in the EQDSK/TM convention
-        # (sigma_Bp=-1, COCOS 2 from input) so psi DECREASES from axis → LCFS:
-        #   psi_axis > psi_lcfs  for BOTH TORAX output and EQDSK.
-        # psi_swing = psi_axis - psi_lcfs  (positive for both, = enclosed flux / 2π).
-        tx_ip    = abs(self._state['Ip'][i]) / 1e6
-        tx_pax   = abs(self._state['pax'][i]) / 1e3          # kPa
-        tx_plcfs = self._state['psi_lcfs'][i]                # Wb/rad
-        tx_paxis = self._state['psi_axis'][i]                # Wb/rad
-        tx_swing = tx_paxis - tx_plcfs                       # enclosed flux / 2π (positive)
-
-        seed_ip    = abs(g_seed['ip']) / 1e6
-        seed_pax   = g_seed['pres'][0] / 1e3
-        seed_plcfs = abs(g_seed['psibry'])
-        seed_paxis = abs(g_seed['psimag'])
-        seed_swing = seed_paxis - seed_plcfs                       # enclosed flux / 2pi (positive for TM/EQDSK: psimag > psibry)
-
-        prev_ip    = abs(g_prev['ip']) / 1e6        if g_prev else None
-        prev_pax   = g_prev['pres'][0] / 1e3        if g_prev else None
-        prev_plcfs = abs(g_prev['psibry'])           if g_prev else None
-        prev_paxis = abs(g_prev['psimag'])           if g_prev else None
-        prev_swing = (prev_paxis - prev_plcfs)           if g_prev else None
-
-        tx_ipni  = self._state['Ip_NI_tx'][i] / 1e6   if step > 1 else None
-        tx_bp    = self._state['beta_pol'][i]          if step > 1 else None
-        tx_q95   = self._state['q95'][i]               if step > 1 else None
-        tx_q0    = self._state['q0'][i]                if step > 1 else None
-        tx_vl    = self._state['vloop_tx'][i]          if step > 1 else None
-        prev_q95   = self._state['q95_tm'][i]            if (step > 1 and g_prev) else None
-        prev_q0    = self._state['q0_tm'][i]             if (step > 1 and g_prev) else None
-
-        # Last TM-converged vloop at this timestep — only updated when TM converges, so persists
-        tm_vloop    = self._state['vloop_tm'][i]   # always available (0 if never converged this t)
-
-        # Kinetic axis values from TORAX output (populated by _transport_update this step)
-        tx_Te_ax = _axis('T_e')      # keV
-        tx_Ti_ax = _axis('T_i')      # keV
-        tx_ne_ax = _axis('n_e')      # m^-3 → show in 1e20 m^-3
-
-        # TM profile inputs: pp' and FF' in TM units (converted in _transport_update)
-        # pp_prof_tx: Pa/(Wb/rad) after -2π conversion from TORAX Pa/Wb
-        # ffp_prof_tx: T·m after -2π conversion
-        _pp_tx  = self._state['pp_prof_tx'].get(i)
-        _ffp_tx = self._state['ffp_prof_tx'].get(i)
-        pp_tx_ax  = float(_pp_tx['y'][0])
-        pp_tx_ed  = float(_pp_tx['y'][-1])
-        ffp_tx_ax = float(_ffp_tx['y'][0])
-        ffp_tx_ed = float(_ffp_tx['y'][-1])
-
-        # Last TM-converged p_axis for this time index (0 if TM never converged here)
-        pax_tm_kpa = self._state['pax_tm'][i] / 1e3
-
-        # On-axis beta: 2μ₀ p_ax / B₀²  — if >> 0.5 TM can struggle
-        _B0 = self._state['B0'][i]
-        beta_0 = (2.0 * 4e-7 * np.pi * self._state['pax'][i] / (_B0 ** 2)) if _B0 > 0 else None
-
-        # Normalized beta from TORAX (this step) and from last TM solve
-        beta_N_tx = self._state['beta_N_tx'][i]  # always set after _transport_update
-        beta_N_tm = self._state['beta_N_tm'][i]  # 0.0 if TM never converged at this t
-
-        # --- Header ---
-        self._print_out(f"\n===== TM SOLVER FAILURE: Step {step}, t={t:.1f}s (idx {i}/{len(self._times)-1}) =====")
-        self._print_out(f"Seed EQDSK  : {seed_file}  (eqtimes[{eq_idx}]={self._eqtimes[eq_idx]:.1f}s)")
-        self._print_out(f"Prev EQDSK  : {prev_eqdsk_file if g_prev else 'not available'}")
-        self._print_out(f"Geometry    : R={self._state['R'][i]:.3f}m, a={self._state['a'][i]:.3f}m, "
-                        f"κ={self._state['kappa'][i]:.3f}, δ={self._state['delta'][i]:.3f}, "
-                        f"B0={self._state['B0'][i]:.2f}T")
-
-        # --- Table ---
-        col_w = 16
-        sep = '-' * (24 + col_w * 3)
-        self._print_out(sep)
-        self._print_out(f"{'Quantity':<24}{'TORAX output':>{col_w}}{'Seed EQDSK':>{col_w}}{'Prev EQDSK':>{col_w}}")
-        self._print_out(sep)
-
-        def row(label, tx_val, seed_val, prev_val, fmt='.4f'):
-            tx_s = _f(tx_val, fmt) if tx_val is not None else '---'
-            seed_s = _f(seed_val, fmt) if seed_val is not None else '---'
-            prev_s = _f(prev_val, fmt) if prev_val is not None else '---'
-            self._print_out(f"{label:<24}{tx_s:>{col_w}}{seed_s:>{col_w}}{prev_s:>{col_w}}")
-
-        # Current & pressure
-        row('Ip [MA]',             tx_ip,    seed_ip,    prev_ip,    '.4f')
-        row('p_axis [kPa]',        tx_pax,   seed_pax,   prev_pax,   '.2f')
-
-        # psi
-        self._print_out(f"  -- psi (axis > lcfs for both TORAX and EQDSK; psi_swing = axis - lcfs) --")
-        row('psi_axis [Wb/rad]',   tx_paxis, seed_paxis, prev_paxis, '.4f')
-        row('psi_lcfs [Wb/rad]',   tx_plcfs, seed_plcfs, prev_plcfs, '.4f')
-        row('psi_swing [Wb/rad]',  tx_swing, seed_swing, prev_swing, '.4f')
-
-        # Kinetics (TORAX only — no EQDSK equivalent)
-        self._print_out(f"  -- kinetics (TORAX axis values) --")
-        row('T_e(axis) [keV]',     tx_Te_ax, None,     None,     '.3f')
-        row('T_i(axis) [keV]',     tx_Ti_ax, None,     None,     '.3f')
-        ne_ax_1e20 = tx_ne_ax / 1e20 if tx_ne_ax is not None else None
-        row('n_e(axis) [1e20/m³]', ne_ax_1e20, None,   None,     '.4f')
-
-        # v_loop
-        # self._print_out(f"  -- v_loop --")
-        tx_vl_s  = _f(tx_vl, '.3f')  if tx_vl  is not None else '---'
-        tm_vl_s  = f'{tm_vloop:.3f}'
-        prev_q95_s = _f(prev_q95, '.3f') if prev_q95 is not None else '---'
-        prev_q0_s  = _f(prev_q0,  '.3f') if prev_q0  is not None else '---'
-        row('v_loop [V]', tx_vl, None, tm_vl_s, '.3f')
-        self._print_out(f"{'v_loop TORAX [V]':<24}{tx_vl_s:>{col_w}}{'---':>{col_w}}{'---':>{col_w}}")
-        self._print_out(f"{'v_loop TM last [V]':<24}{tm_vl_s:>{col_w}}{prev_q95_s:>{col_w}}{prev_q0_s:>{col_w}}")
-
-        # Other scalars
-        if tx_ipni is not None or tx_bp is not None:
-            self._print_out(f"  -- other scalars --")
-        if tx_ipni is not None:
-            row('Ip_NI [MA]',      tx_ipni,  None,     None,     '.4f')
-        if tx_bp is not None:
-            row('beta_pol [-]',    tx_bp,    None,     None,     '.4f')
-        if tx_q95 is not None:
-            row('q95',             tx_q95,   None,     prev_q95,   '.3f')
-        if tx_q0 is not None:
-            row('q0',              tx_q0,    None,     prev_q0,    '.3f')
-
-        # TM profile inputs (what was handed to TokaMaker) + reference from seed/prev EQDSKs
-        self._print_out(f"  -- TM profile inputs (TORAX\u2192TM converted, TM units) --")
-        row("p'(0) TM [Pa/Wb/rad]",  pp_tx_ax,  seed_pp_ax,  prev_pp_ax,  '.3e')
-        row("p'(1) TM [Pa/Wb/rad]",  pp_tx_ed,  seed_pp_ed,  prev_pp_ed,  '.3e')
-        row("FF'(0) TM [T m]",       ffp_tx_ax, seed_ffp_ax, prev_ffp_ax, '.3e')
-        row("FF'(1) TM [T m]",       ffp_tx_ed, seed_ffp_ed, prev_ffp_ed, '.3e')
-        row('p_ax TM last [kPa]',    pax_tm_kpa if pax_tm_kpa else None, None, None, '.2f')
-        row('beta_0 [-]',            beta_0,    None, None, '.4f')
-        row('beta_N TORAX [-]',      beta_N_tx if beta_N_tx else None, None, None, '.4f')
-        row('beta_N TM last [-]',    beta_N_tm if beta_N_tm > 0 else None, None, None, '.4f')
-
-        self._print_out(sep + '\n')
 
     def _calc_ffp_ni(self, i, data_tree):
         r'''! Calculate non-inductive FF' profile from TORAX current densities.
@@ -1673,8 +1498,11 @@ class TokTox:
         # (2,2): Volume comparison
         ax_vol = axes[2,2]
         ax_vol.set_title('Volume comparison')
-        vol_tm_lcfs = self._state['vol_tm'][i]
+        vol_tm_lcfs = self._state['vol_tm'][i]['y'][-1] if i in self._state['vol_tm'] else np.nan
         vol_tx_lcfs = self._state['vol_tx_lcfs'][i]
+        # Plot volume profile from TokaMaker
+        if i in self._state['vol_tm']:
+            ax_vol.plot(self._state['vol_tm'][i]['x'], self._state['vol_tm'][i]['y'], 'r-', label='Vol TM', linewidth=2)
         # Plot volume profile from TORAX
         if i in self._state['vol_tx']:
             ax_vol.plot(self._state['vol_tx'][i]['x'], self._state['vol_tx'][i]['y'], 'b-', label='Vol TX', linewidth=2)
@@ -1694,8 +1522,6 @@ class TokTox:
         # =======================
         # ROW 3: Profiles (q, T, n)
         # =======================
-        
-        psi_geo, q_tm, geo, vol_geo, vpr_geo, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
 
         # (3,0): q-profile panel (TORAX q if available)
         ax_q = axes[3,0]
@@ -1799,7 +1625,6 @@ class TokTox:
         beta_n_tx    = float(self._state['beta_N_tx'][i])
 
         if solve_succeeded:
-            # Four-column tables: Parameter | Init EQDSK | TORAX | TokaMaker
             input_rows = [
                 ['Parameter', 'Init EQDSK', 'TORAX', 'TokaMaker'],
                 ['Ip',
@@ -1838,7 +1663,7 @@ class TokTox:
             ax_tbl1   = fig.add_subplot(gs_layout[0, 4:6])
             ax_tbl2   = fig.add_subplot(gs_layout[1:3, 4:6])
 
-            # TX input panels
+            # TX input plots
             ax_ffp_tx.plot(ffp_prof['x'], ffp_prof['y'], 'b-', linewidth=2, label="FF\' total (norm)")
             ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
                            'g--', linewidth=1.5, label="FF\'_NI (real)")
@@ -1862,7 +1687,7 @@ class TokTox:
             ax_eta.set_ylabel(r'$\eta$ [$\Omega\cdot$m]')
             ax_eta.grid(True, alpha=0.3)
 
-            # TM output panels
+            # TM output plots
             ax_ffp_tm.plot(self._state['ffp_prof_tx'][i]['x'], self._state['ffp_prof_tx'][i]['y'],
                            'b--', linewidth=1.5, label="FF\' TX (real)")
             ax_ffp_tm.plot(self._state['ffp_prof_tm'][i]['x'], self._state['ffp_prof_tm'][i]['y'],
@@ -1886,7 +1711,7 @@ class TokTox:
 
             # q profile: TM vs TORAX
             try:
-                psi_geo, q_tm_vals, _, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
+                psi_geo, q_tm_vals, _, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02)
                 ax_q_tm.plot(psi_geo, q_tm_vals, 'r--', linewidth=2, label='TokaMaker')
             except Exception:
                 pass
@@ -1910,7 +1735,6 @@ class TokTox:
             out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{step:03}.{i:03}_OK.png')
 
         else:
-            # Three-column tables: Parameter | Init EQDSK | TORAX
             input_rows = [
                 ['Parameter', 'Init EQDSK', 'TORAX'],
                 ['Ip',       f'{Ip_seed/1e6:.3f} MA',       f'{Ip_tx/1e6:.3f} MA'],
@@ -1926,7 +1750,6 @@ class TokTox:
                 ['beta_N',   '\u2014', f'{beta_n_tx:.4f}'],
             ]
 
-            # Failure layout: 3 rows x 4 cols  (profiles | tables + fail msg)
             fig = plt.figure(figsize=(16, 12))
             gs_layout = fig.add_gridspec(3, 4, hspace=0.5, wspace=0.55)
 
@@ -2372,7 +2195,7 @@ class TokTox:
         self._fname_out = os.path.join(self._out_dir, 'results', out)
 
         err = convergence_threshold + 1.0
-        step = 0
+        self._current_step = 0
         cflux_tx_prev = 0.0
         # records of flux consumption throughout steps
         tm_cflux_psi = []
@@ -2397,17 +2220,17 @@ class TokTox:
         # self._print_out(f'Step {step}: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
 
         self._print_out(f'---------------------------------------')
-        step = 1
+        self._current_step = 1
 
-        while err > convergence_threshold and step < max_step:
-            self._print_out(f'---- Step {step} ---- \n')
-            cflux_tx, cflux_tx_vloop = self._run_transport(step, graph=graph)
+        while err > convergence_threshold and self._current_step < max_step:
+            self._print_out(f'---- Step {self._current_step} ---- \n')
+            cflux_tx, cflux_tx_vloop = self._run_transport(self._current_step, graph=graph)
             if save_states:
-                self.save_state(os.path.join(self._out_dir, 'results', 'ts_state{}.json'.format(step)))
+                self.save_state(os.path.join(self._out_dir, 'results', 'ts_state{}.json'.format(self._current_step)))
 
-            cflux_gs, cflux_gs_vloop = self._run_gs(step, graph=graph)
+            cflux_gs, cflux_gs_vloop = self._run_gs(self._current_step, graph=graph)
             if save_states:
-                self.save_state(os.path.join(self._out_dir, 'results', 'gs_state{}.json'.format(step)))
+                self.save_state(os.path.join(self._out_dir, 'results', 'gs_state{}.json'.format(self._current_step)))
 
             self.save_res()
 
@@ -2419,7 +2242,7 @@ class TokTox:
             vloop_tm = self._state['vloop_tm'].copy()
             vloop_tx = self._results['v_loop_lcfs']['y'].copy()
 
-            self._print_out(f'\n ---- Step {step} results ---- ')
+            self._print_out(f'\n ---- Step {self._current_step} results ---- ')
 
             err = np.abs(cflux_tx - cflux_tx_prev) / cflux_tx_prev
             self._print_out(f"\t(original) TX Convergence error = {err*100.0:.3f} %")
@@ -2444,21 +2267,21 @@ class TokTox:
 
 
 
-            self._profile_evolution_plot(step)
-            self._scalar_plot(step)
+            self._profile_evolution_plot(self._current_step)
+            self._scalar_plot(self._current_step)
 
 
 
-            step += 1
+            self._current_step += 1
         
 
         # from save_tokamaker_inputs import save_tokamaker_inputs
-        # save_tokamaker_inputs(self, step=step-1, fname='2026-02-09_tokamaker_test_inputs.npz')
+        # save_tokamaker_inputs(self, step=self._current_step-1, fname='2026-02-09_tokamaker_test_inputs.npz')
 
 
         if err < convergence_threshold:
-            self._print_out(f'Convergence achieved in {step-1} steps with error = {err*100.0:.3f} %')
-        elif step >= max_step:
+            self._print_out(f'Convergence achieved in {self._current_step-1} steps with error = {err*100.0:.3f} %')
+        elif self._current_step >= max_step:
             self._print_out(f'Maximum steps {max_step} reached without convergence (last error = {err*100.0:.3f} %)')
 
         # plot final convergence history

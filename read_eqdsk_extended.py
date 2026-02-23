@@ -416,7 +416,7 @@ def read_eqdsk_extended(filename):
     Returns a dictionary containing all fields from read_eqdsk plus:
         psi_n       - normalised psi grid       shape (nr,)
         psi         - psi values [Wb/rad]       shape (nr,)
-        volume      - V(psi_n) [m^3]            shape (nr,)
+        vol      - V(psi_n) [m^3]            shape (nr,)
         vpr         - dV/dpsi [m^3/(Wb/rad)]    shape (nr,)
         R_avg       - <R>(psi_n) [m]            shape (nr,)
         R_inv_avg   - <1/R>(psi_n) [1/m]        shape (nr,)
