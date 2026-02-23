@@ -11,9 +11,9 @@ _NBI_W_TO_MA = 1/16e6 # rough estimate of NBI heating power to current drive
 W_to_Ne_ratio = 0
 
 # No NBI during rampup. Rampup all NBI power between 99-100 seconds
-nbi_times = np.array([0, 99, 100])
-nbi_powers = np.array([0, 0, 33e6])
-nbi_cd = nbi_powers * _NBI_W_TO_MA
+# nbi_times = np.array([0, 99, 100])
+# nbi_powers = np.array([0, 0, 33e6])
+# nbi_cd = nbi_powers * _NBI_W_TO_MA
 
 # Gaussian prescription of "NBI" deposition profiles and fractional deposition
 r_nbi = 0.25
