@@ -17,6 +17,8 @@ from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
 
 from baseconfig import BASE_CONFIG
 
+from read_eqdsk_extended import read_eqdsk_extended
+
 LCFS_WEIGHT = 100.0
 N_PSI = 100
 _NBI_W_TO_MA = 1/16e6
@@ -92,6 +94,8 @@ class TokTox:
         self._state['q0'] = np.zeros(len(self._times))
         self._state['q95_tm'] = np.zeros(len(self._times))
         self._state['q0_tm'] = np.zeros(len(self._times))
+        self._state['q_prof_tm'] = {}
+        self._state['q_prof_tx'] = {}
         self._state['psi_lcfs'] = np.zeros(len(self._times))
         self._state['psi_axis'] = np.zeros(len(self._times))
         self._state['psi_tx'] = {}  
@@ -149,7 +153,7 @@ class TokTox:
 
         self._results['lcfs'] = {}
         self._results['dpsi_lcfs_dt'] = {}
-        self._results['vloop_tmaker'] = np.zeros([20, len(self._times)])
+        self._results['vloop_tm'] = np.zeros([20, len(self._times)])
         self._results['vloop_torax'] = np.zeros([20, len(self._times)])
         self._results['q'] = {}
         self._results['jtot'] = {}
@@ -247,8 +251,6 @@ class TokTox:
             self._state['ffpni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
 
             # Normalize profiles
-            # self._state['ffp_prof'][i]['y'] -= self._state['ffp_prof'][i]['y'][-1]
-            # self._state['pp_prof'][i]['y'] -= self._state['pp_prof'][i]['y'][-1]
             self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
             self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
@@ -532,268 +534,6 @@ class TokTox:
     
     def set_prof_smoothing(self, smoothing):
         self._prof_smoothing = smoothing
-            
-    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
-        r'''! Set coil regularization terms.
-        @param targets Target values for each coil.
-        @param weights Default weight for each coil.
-        @param strict_limit Strict limit for coil currents.
-        @param disable_virtual_vsc Disable VSC virtual coil. 
-        @param weight_mult Factor by which to multiply target weights (reduce to allow for more flexibility).
-        '''
-        # Set regularization weights
-        # coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
-        # self._gs.set_coil_bounds(coil_bounds)
-
-        coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
-        # for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
-        #     coil_bounds[key] = [0, 0] # turn off div coils, for now
-        self._gs.set_coil_bounds(coil_bounds)
-
-        if self._prescribed_currents and targets:
-            self._targets = targets
-        
-        regularization_terms = []
-        if self._prescribed_currents:
-            for name, currents in self._targets.items():
-                if name == 'time':
-                    continue
-                t_current = np.interp(self._times[i], self._targets['time'], currents)
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=t_current,weight=1.0E-3))
-        else:
-            for name, target_current in targets.items():
-                if name == 'time':
-                    continue
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
-
-        # Pass regularization terms to TokaMaker
-        self._gs.set_coil_reg(reg_terms=regularization_terms)
-
-    def _run_gs(self, step, graph=False):
-        r'''! Run the GS solve across n timesteps using TokaMaker.
-        @param step Iteration number of the Torax-Tokamaker simulation loop.
-        @param graph Whether to display psi graphs at each iteration (for testing).
-        @return Consumed flux.
-        '''
-        self._print_out(f"Step {step} TokaMaker:")
-        # self._print_out(f'\tStep {step}: TM input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
-
-        self._eqdsk_skip = []
-        for i, t in enumerate(self._times):
-            self._gs.set_isoflux(None)
-            self._gs.set_flux(None,None)
-
-            Ip_target = abs(self._state['Ip'][i])
-            P0_target = abs(self._state['pax'][i])
-            
-            self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs 
-
-
-            def mix_profiles(prev, curr, ratio=1.0):
-                my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
-                for i, x in enumerate(curr['x']):
-                    my_prof['x'][i] = x
-                    my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
-                return my_prof
-
-            def make_smooth(x, y):
-                spline = make_smoothing_spline(x, y)
-                smoothed = spline(x)
-                return smoothed
-
-            # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet)
-            # profile_strategy = "original gEQDSK"
-            # if step == 1:
-            #     ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(), 
-            #                'y': self._state['ffp_prof'][i]['y'].copy(), 
-            #                'type': self._state['ffp_prof'][i]['type']}
-            #     pp_prof = {'x': self._state['pp_prof'][i]['x'].copy(), 
-            #               'y': self._state['pp_prof'][i]['y'].copy(), 
-            #               'type': self._state['pp_prof'][i]['type']}
-            # else:
-            #     profile_strategy = f"mixed (ratio={self._prof_mix_ratio:.2f})"
-            ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
-            pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
-            
-            
-            if self._prof_smoothing:
-                ffp_prof['y'] = make_smooth(ffp_prof['x'], ffp_prof['y'])
-                pp_prof['y'] = make_smooth(pp_prof['x'], pp_prof['y'])
-
-            # Normalize profiles
-            # ffp_prof['y'] -= ffp_prof['y'][-1]
-            ffp_prof['y'] /= ffp_prof['y'][0]
-
-            # pp_prof['y'] -= pp_prof['y'][-1]
-            pp_prof['y'] /= pp_prof['y'][0]
-
-            # ffpni = self._state['ffpni_prof'][i]
-            # self._print_out(f"  t={t}: ffpni_prof min={np.min(ffpni['y']):.3e}, max={np.max(ffpni['y']):.3e}")
-
-            self._gs.set_profiles(
-                ffp_prof=ffp_prof,
-                pp_prof=pp_prof,
-                # ffp_prof=self._state['ffp_prof'][i],
-                # ffp_prof=self._state['j_tot'][i], 
-                # pp_prof=self._state['pp_prof'][i],
-                ffp_NI_prof=self._state['ffpni_prof'][i], 
-            )
-
-            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
-
-            lcfs = self._state['lcfs'][i]
-            isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
-
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
-
-            # Initialize psi from geometry parameters
-            # For step 0, using the seed EQDSK geometry should give a good initial guess
-            err_flag = self._gs.init_psi(self._state['R'][i],
-                                         self._state['Z'][i],
-                                         self._state['a'][i],
-                                         self._state['kappa'][i],
-                                         self._state['delta'][i])
-            if err_flag:
-                print("Error initializing psi.")
-
-
-
-            self._gs.update_settings()
-
-            skip_coil_update = False
-            eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step, i))
-            
-            fail_msg = None
-            try:
-                err_flag = self._gs.solve()
-                print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
-                self._gs_update(i)
-                self._gs.save_eqdsk(eq_name,
-                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                    cocos=2, nr=200, nz=200)
-
-                solve_succeeded = True
-            except Exception as e:
-                fail_msg = str(e)
-                print(f'\tGS solve failed: {e}')
-                self._eqdsk_skip.append(eq_name)
-                skip_coil_update = True
-                self._print_out(f'TM: Solve failed at t={t}.')
-                # self._print_tokamaker_inputs(step, i, t)
-                solve_succeeded = False
-            
-            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
-
-            if solve_succeeded:
-                self._profile_plot(step, i, t)
-
-                if graph:
-                    fig, ax = plt.subplots(1,1)
-                    self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-                    self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-                    ax.plot(self._state['lcfs'][i][:, 0], self._state['lcfs'][i][:, 1], color='r')
-                    ax.set_title(f't={self._times[i]}')
-                    # plt.savefig(f'tmp/step_{step}_rampdown_equil_{i}.png')
-                    plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
-                    plt.close(fig)
-                    # plt.show()
-
-            if self._prescribed_currents:
-                if i < len(self._times):
-                    self.set_coil_reg(i=i+1)
-            elif not skip_coil_update:
-                coil_targets, _ = self._gs.get_coil_currents()
-                self.set_coil_reg(targets=coil_targets)
-
-
-        # self._print_out(f'Step {step}: TM out: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
-
-        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
-        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:]) 
-
-        # Diagnostic: print vloop statistics
-        vloop_arr = np.array(self._state['vloop_tm'])
-        # self._print_out(f"\tTM: vloop: min={vloop_arr.min():.3f}, max={vloop_arr.max():.3f}, mean={vloop_arr.mean():.3f} V")
-        # self._print_out(f"\tTM: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb")
-        # self._print_out(f'\tTM: psi_bound consumed flux={consumed_flux:.3f} Wb')
-        # self._print_out(f'\tTM: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
-
-        return consumed_flux, consumed_flux_integral
-        
-    def _gs_update(self, i):
-        r'''! Update internal state and coil current results based on results of GS solver.
-        @param i Timestep of the solve.
-        '''
-        eq_stats = self._gs.get_stats()
-        self._state['Ip'][i] = eq_stats['Ip']
-        self._state['Ip_tm'][i] = eq_stats['Ip']
-        self._state['pax_tm'][i] = eq_stats['P_ax']
-        self._state['beta_N_tm'][i] = eq_stats['beta_n']
-        self._state['l_i_tm'][i] = eq_stats['l_i']
-        
-        self._state['vol_tm'][i] = eq_stats.get('vol', 0.0)  # will use 0 if not available
-
-
-
-        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
-        self._state['psi_axis'][i] = self._gs.psi_bounds[1] 
-
-        if 'psi_lcfs_tmaker' not in self._results:
-            self._results['psi_lcfs_tmaker'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
-        self._results['psi_lcfs_tmaker']['x'][i] = self._times[i]
-        self._results['psi_lcfs_tmaker']['y'][i] = self._state['psi_lcfs'][i] # stored as Wb/rad
-        self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis'][i] + (self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * self._psi_N, 'type': 'linterp'}
-
-
-        self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
-        
-        # store TokaMaker pressure profile from get_profiles()
-        tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
-
-        self._state['ffp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_fp_prof*tm_f_prof), 'type': 'linterp'}
-        self._state['pp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
-        self._state['p_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_p_prof), 'type': 'linterp'}
-        self._state['f_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
-
-        # pull geo profiles
-        psi_geo, q_tm, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
-        
-        # Extract q0 and q95 from TokaMaker q profile
-        self._state['q0_tm'][i] = q_tm[0] if len(q_tm) > 0 else np.nan
-        self._state['q95_tm'][i] = np.interp(0.95, psi_geo, q_tm) if len(psi_geo) > 0 and len(q_tm) > 0 else np.nan
-
-
-        self._state['R_avg_tm'][i] =     {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[0])), 'type': 'linterp'}
-        self._state['R_inv_avg_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[1])), 'type': 'linterp'}
-        
-
-        
-        # Update Results
-        coils, _ = self._gs.get_coil_currents()
-        if 'COIL' not in self._results:
-            self._results['COIL'] = {coil: {} for coil in coils}
-        for coil, current in coils.items():
-            if coil not in self._results['COIL']:
-                self._results['COIL'][coil] = {}
-            self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
-
-    def _test_eqdsk(self, eqdsk):
-            myconfig = copy.deepcopy(BASE_CONFIG)
-            myconfig['geometry'] = {
-                'geometry_type': 'eqdsk',
-                'geometry_directory': os.getcwd(),
-                'last_surface_factor': self._last_surface_factor,
-                'Ip_from_parameters': False,
-                'geometry_file': eqdsk,
-                'cocos': 2,
-            }
-            try:
-                _ = torax.ToraxConfig.from_dict(myconfig)
-                return True
-            except:
-                return False
-
 
     def _pull_torax_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'):
         r'''! Load TORAX variable onto psi_norm grid.
@@ -1092,7 +832,7 @@ class TokTox:
 
         self._state['vloop_tx'][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
         
-
+        self._state['q_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='state', normalize=False)
 
         # calculate ffp_ni profile
         self._state['j_tot'][i] =            self._pull_torax_onto_psi(data_tree, 'j_total',          t, load_into_state='state', profile_type='jphi-linterp')
@@ -1146,6 +886,252 @@ class TokTox:
         self._state['vol_tx_lcfs'][i] = data_tree.profiles.volume.sel(time=t, rho_norm=1.0, method='nearest').item()
         self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state', normalize=False)
         self._state['vpr_tx'][i] = self._pull_torax_onto_psi(data_tree, 'vpr', t, load_into_state='state', normalize=False)
+
+
+
+
+    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
+        r'''! Set coil regularization terms.
+        @param targets Target values for each coil.
+        @param weights Default weight for each coil.
+        @param strict_limit Strict limit for coil currents.
+        @param disable_virtual_vsc Disable VSC virtual coil. 
+        @param weight_mult Factor by which to multiply target weights (reduce to allow for more flexibility).
+        '''
+        # Set regularization weights
+        # coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
+        # self._gs.set_coil_bounds(coil_bounds)
+
+        coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
+        # for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
+        #     coil_bounds[key] = [0, 0] # turn off div coils, for now
+        self._gs.set_coil_bounds(coil_bounds)
+
+        if self._prescribed_currents and targets:
+            self._targets = targets
+        
+        regularization_terms = []
+        if self._prescribed_currents:
+            for name, currents in self._targets.items():
+                if name == 'time':
+                    continue
+                t_current = np.interp(self._times[i], self._targets['time'], currents)
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=t_current,weight=1.0E-3))
+        else:
+            for name, target_current in targets.items():
+                if name == 'time':
+                    continue
+                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
+
+        # Pass regularization terms to TokaMaker
+        self._gs.set_coil_reg(reg_terms=regularization_terms)
+
+    def _run_gs(self, step, graph=False):
+        r'''! Run the GS solve across n timesteps using TokaMaker.
+        @param step Iteration number of the Torax-Tokamaker simulation loop.
+        @param graph Whether to display psi graphs at each iteration (for testing).
+        @return Consumed flux.
+        '''
+        self._print_out(f"Step {step} TokaMaker:")
+        # self._print_out(f'\tStep {step}: TM input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
+
+        self._eqdsk_skip = []
+        for i, t in enumerate(self._times):
+            self._gs.set_isoflux(None)
+            self._gs.set_flux(None,None)
+
+            Ip_target = abs(self._state['Ip'][i])
+            P0_target = abs(self._state['pax'][i])
+            
+            self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs 
+
+
+            def mix_profiles(prev, curr, ratio=1.0):
+                my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
+                for i, x in enumerate(curr['x']):
+                    my_prof['x'][i] = x
+                    my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
+                return my_prof
+
+            def make_smooth(x, y):
+                spline = make_smoothing_spline(x, y)
+                smoothed = spline(x)
+                return smoothed
+
+            # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet)
+            # profile_strategy = "original gEQDSK"
+            # if step == 1:
+            #     ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(), 
+            #                'y': self._state['ffp_prof'][i]['y'].copy(), 
+            #                'type': self._state['ffp_prof'][i]['type']}
+            #     pp_prof = {'x': self._state['pp_prof'][i]['x'].copy(), 
+            #               'y': self._state['pp_prof'][i]['y'].copy(), 
+            #               'type': self._state['pp_prof'][i]['type']}
+            # else:
+            #     profile_strategy = f"mixed (ratio={self._prof_mix_ratio:.2f})"
+            ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
+            pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
+            
+            
+            if self._prof_smoothing:
+                ffp_prof['y'] = make_smooth(ffp_prof['x'], ffp_prof['y'])
+                pp_prof['y'] = make_smooth(pp_prof['x'], pp_prof['y'])
+
+            # Normalize profiles
+            ffp_prof['y'] /= ffp_prof['y'][0]
+            pp_prof['y'] /= pp_prof['y'][0]
+
+            self._gs.set_profiles(
+                ffp_prof=ffp_prof,
+                pp_prof=pp_prof,
+                # ffp_prof=self._state['ffp_prof'][i],
+                # ffp_prof=self._state['j_tot'][i], 
+                # pp_prof=self._state['pp_prof'][i],
+                ffp_NI_prof=self._state['ffpni_prof'][i], 
+            )
+
+            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
+
+            lcfs = self._state['lcfs'][i]
+            isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
+            lcfs_psi_target = self._state['psi_lcfs'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
+
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+
+            # Initialize psi from geometry parameters
+            # For step 0, using the seed EQDSK geometry should give a good initial guess
+            err_flag = self._gs.init_psi(self._state['R'][i],
+                                         self._state['Z'][i],
+                                         self._state['a'][i],
+                                         self._state['kappa'][i],
+                                         self._state['delta'][i])
+            if err_flag:
+                print("Error initializing psi.")
+
+
+
+            self._gs.update_settings()
+
+            skip_coil_update = False
+            eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step, i))
+            
+            fail_msg = None
+            try:
+                err_flag = self._gs.solve()
+                print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
+                self._gs.save_eqdsk(eq_name,
+                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
+                                    cocos=2, nr=200, nz=200)
+                self._gs_update(i)
+
+                solve_succeeded = True
+            except Exception as e:
+                fail_msg = str(e)
+                print(f'\tGS solve failed: {e}')
+                self._eqdsk_skip.append(eq_name)
+                skip_coil_update = True
+                self._print_out(f'TM: Solve failed at t={t}.')
+                solve_succeeded = False
+            
+            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
+
+            if solve_succeeded:
+                self._profile_plot(step, i, t)
+
+                if graph:
+                    fig, ax = plt.subplots(1,1)
+                    self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
+                    self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
+                    ax.plot(self._state['lcfs'][i][:, 0], self._state['lcfs'][i][:, 1], color='r')
+                    ax.set_title(f't={self._times[i]}')
+                    plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
+                    plt.close(fig)
+                    # plt.show()
+
+            if self._prescribed_currents:
+                if i < len(self._times):
+                    self.set_coil_reg(i=i+1)
+            elif not skip_coil_update:
+                coil_targets, _ = self._gs.get_coil_currents()
+                self.set_coil_reg(targets=coil_targets)
+
+        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
+        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:]) 
+
+        return consumed_flux, consumed_flux_integral
+        
+    def _gs_update(self, i):
+        r'''! Update internal state and coil current results based on results of GS solver.
+        @param i Timestep of the solve.
+        '''
+        eq_stats = self._gs.get_stats()
+        self._state['Ip'][i] = eq_stats['Ip']
+        self._state['Ip_tm'][i] = eq_stats['Ip']
+        self._state['pax_tm'][i] = eq_stats['P_ax']
+        self._state['beta_N_tm'][i] = eq_stats['beta_n']
+        self._state['l_i_tm'][i] = eq_stats['l_i']
+        
+        eq_read_extended = read_eqdsk_extended(os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i)))
+        vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['volume'])
+        vpr_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vpr'])
+        self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
+        self._state['vpr_tm'][i] = {'x': self._psi_N.copy(), 'y': vpr_tm, 'type': 'linterp'}
+
+
+        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
+        self._state['psi_axis'][i] = self._gs.psi_bounds[1] 
+
+        if 'psi_lcfs_tm' not in self._results:
+            self._results['psi_lcfs_tm'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
+        self._results['psi_lcfs_tm']['x'][i] = self._times[i]
+        self._results['psi_lcfs_tm']['y'][i] = self._state['psi_lcfs'][i] # stored as Wb/rad
+        self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis'][i] + (self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * self._psi_N, 'type': 'linterp'}
+
+
+        self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
+        
+        # store TokaMaker pressure profile from get_profiles()
+        tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
+
+        self._state['ffp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_fp_prof*tm_f_prof), 'type': 'linterp'}
+        self._state['pp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
+        self._state['p_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_p_prof), 'type': 'linterp'}
+        self._state['f_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
+
+        # pull geo profiles
+        psi_geo, q_tm, geo, _, _, _ = self._gs.get_q(npsi=N_PSI, psi_pad=0.02, compute_geo=False)
+        
+        self._state['q0_tm'][i] = q_tm[0] if len(q_tm) > 0 else np.nan
+        self._state['q95_tm'][i] = np.interp(0.95, psi_geo, q_tm) if len(psi_geo) > 0 and len(q_tm) > 0 else np.nan
+        self._state['q_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, q_tm), 'type': 'linterp'}
+
+        self._state['R_avg_tm'][i] =     {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[0])), 'type': 'linterp'}
+        self._state['R_inv_avg_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[1])), 'type': 'linterp'}
+        
+        # Update Results
+        coils, _ = self._gs.get_coil_currents()
+        if 'COIL' not in self._results:
+            self._results['COIL'] = {coil: {} for coil in coils}
+        for coil, current in coils.items():
+            if coil not in self._results['COIL']:
+                self._results['COIL'][coil] = {}
+            self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
+
+    def _test_eqdsk(self, eqdsk):
+            myconfig = copy.deepcopy(BASE_CONFIG)
+            myconfig['geometry'] = {
+                'geometry_type': 'eqdsk',
+                'geometry_directory': os.getcwd(),
+                'last_surface_factor': self._last_surface_factor,
+                'Ip_from_parameters': False,
+                'geometry_file': eqdsk,
+                'cocos': 2,
+            }
+            try:
+                _ = torax.ToraxConfig.from_dict(myconfig)
+                return True
+            except:
+                return False
 
 
 
@@ -1715,9 +1701,10 @@ class TokTox:
         ax_q = axes[3,0]
         ax_q.set_title('q profile')
         if 'q' in self._results and self._times[i] in self._results['q']:
-            q_prof = self._results['q'][self._times[i]]
-            ax_q.plot(q_prof['x'], q_prof['y'], 'b-', linewidth=2, label = 'TX')
-            ax_q.plot(psi_geo, q_tm, 'r--', label='TM', linewidth=2)  
+            # q_prof = self._results['q'][self._times[i]]
+            # ax_q.plot(q_prof['x'], q_prof['y'], 'b-', linewidth=2, label = 'TX')
+            ax_q.plot(self._state['q_prof_tx'][i]['x'], self._state['q_prof_tx'][i]['y'], 'b--', label='TX', linewidth=1)
+            ax_q.plot(self._state['q_prof_tm'][i]['x'], self._state['q_prof_tm'][i]['y'], 'r--', label='TM', linewidth=2)  
             ax_q.set_xlabel(r'$\hat{\psi}$')
             ax_q.set_ylabel('q')
             ax_q.legend(fontsize=9)  
@@ -2161,8 +2148,8 @@ class TokTox:
         # (0,1): psi_lcfs (TM & TX)
         ax_01 = axes[0,1]
         ax_01.set_title('psi_lcfs (TM & TX)')
-        if 'psi_lcfs_tmaker' in self._results:
-            ax_01.plot(self._results['psi_lcfs_tmaker']['x'], self._results['psi_lcfs_tmaker']['y'], '-', label='TokaMaker')
+        if 'psi_lcfs_tm' in self._results:
+            ax_01.plot(self._results['psi_lcfs_tm']['x'], self._results['psi_lcfs_tm']['y'], '-', label='TokaMaker')
         if 'psi_lcfs_torax' in self._results:
             ax_01.plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], '--', label='TORAX')
         ax_01.set_xlabel('Time [s]')
