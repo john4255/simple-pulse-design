@@ -401,7 +401,12 @@ def add_flux_surface_geometry(eqdsk, filename=None):
     eqdsk['vpr'] = vpr
     eqdsk['R_avg'] = R_avg
     eqdsk['R_inv_avg'] = R_inv_avg
-    
+
+    # q-profile derived scalars
+    psi_n_q = np.linspace(0.0, 1.0, len(eqdsk['qpsi']))
+    eqdsk['q0']  = float(np.abs(eqdsk['qpsi'][0]))
+    eqdsk['q95'] = float(np.interp(0.95, psi_n_q, np.abs(eqdsk['qpsi'])))
+
     return eqdsk
 
 

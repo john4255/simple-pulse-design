@@ -200,4 +200,4 @@ coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3
 target_currents = {coil: 0.0 for coil in coil_names}
 mysim.set_coil_reg(targets=target_currents, strict_limit=1.0E8)
 
-mysim.fly(save_states=True, graph=True, run_name='torax_iter_rampup')
+mysim.fly(save_states=True, graph=True, run_name='tmp')
