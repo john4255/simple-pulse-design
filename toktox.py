@@ -663,8 +663,8 @@ class TokTox:
             }
 
         myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
-            t: {0.0: self._state['psi_axis'][i] * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times) 
-        }
+            t: {0.0: (2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times) 
+        } # TODO have to convert this to TORAX Ip sign convention? i.e. psi_axis < psi_lcfs or vice versa? 
         
         if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
@@ -1016,7 +1016,7 @@ class TokTox:
 
             lcfs = self._state['lcfs_geo'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
+            lcfs_psi_target = self._state['psi_lcfs'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
@@ -1107,6 +1107,11 @@ class TokTox:
             self._results['psi_lcfs_tm'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
         self._results['psi_lcfs_tm']['x'][i] = self._times[i]
         self._results['psi_lcfs_tm']['y'][i] = self._state['psi_lcfs'][i] # stored as Wb/rad
+
+        if 'psi_axis_tm' not in self._results:
+            self._results['psi_axis_tm'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
+        self._results['psi_axis_tm']['x'][i] = self._times[i]
+        self._results['psi_axis_tm']['y'][i] = self._state['psi_axis'][i] # stored as Wb/rad
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis'][i] + (self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * self._psi_N, 'type': 'linterp'}
 
 
@@ -1944,17 +1949,27 @@ class TokTox:
         ax_00.grid(True, alpha=0.3)
         ax_00.legend(fontsize=8)
 
-        # (0,1): psi_lcfs (TM & TX)
+        # (0,1): psi_lcfs (TM & TX) with psi_axis on secondary axis
         ax_01 = axes[0,1]
-        ax_01.set_title('psi_lcfs (TM & TX)')
+        ax_01.set_title(r'$\psi_{lcfs}$ & $\psi_{axis}$ (TM & TX)')
         if 'psi_lcfs_tm' in self._results:
-            ax_01.plot(self._results['psi_lcfs_tm']['x'], self._results['psi_lcfs_tm']['y'], '-', label='TokaMaker')
+            ax_01.plot(self._results['psi_lcfs_tm']['x'], self._results['psi_lcfs_tm']['y'], '-', color='tab:blue', label=r'$\psi_{lcfs}$ TM')
         if 'psi_lcfs_torax' in self._results:
-            ax_01.plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], '--', label='TORAX')
+            ax_01.plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], '--', color='tab:blue', label=r'$\psi_{lcfs}$ TX')
         ax_01.set_xlabel('Time [s]')
-        ax_01.set_ylabel(r'$\psi_{lcfs}$ [Wb/rad]')
-        ax_01.legend(fontsize=8)
+        ax_01.set_ylabel(r'$\psi_{lcfs}$ [Wb/rad]', color='tab:blue')
+        ax_01.tick_params(axis='y', labelcolor='tab:blue')
+        ax_01.legend(fontsize=8, loc='upper left')
         ax_01.grid(True, alpha=0.3)
+        # Secondary axis: psi at axis (psi_N = 0)
+        ax2_01 = ax_01.twinx()
+        if 'psi_axis_tm' in self._results:
+            ax2_01.plot(self._results['psi_axis_tm']['x'], self._results['psi_axis_tm']['y'], '-', color='tab:orange', label=r'$\psi_{axis}$ TM')
+        if 'psi_axis_torax' in self._results:
+            ax2_01.plot(self._results['psi_axis_torax']['x'], self._results['psi_axis_torax']['y'], '--', color='tab:orange', label=r'$\psi_{axis}$ TX')
+        ax2_01.set_ylabel(r'$\psi_{axis}$ [Wb/rad]', color='tab:orange')
+        ax2_01.tick_params(axis='y', labelcolor='tab:orange')
+        ax2_01.legend(fontsize=8, loc='upper right')
 
         # (0,2): V_loop comparison with ratio
         ax_02 = axes[0,2]
