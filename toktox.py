@@ -82,25 +82,27 @@ class TokTox:
         self._state['B0'] = np.zeros(len(self._times))
         self._state['V0'] = np.zeros(len(self._times))
         self._state['Ip'] = np.zeros(len(self._times))
-        self._state['Ip_tm'] = np.zeros(len(self._times)) # for testing
-        self._state['Ip_tx'] = np.zeros(len(self._times)) # for testing
-        self._state['Ip_NI_tx'] = np.zeros(len(self._times)) # for testing
+        self._state['Ip_tm'] = np.zeros(len(self._times))
+        self._state['Ip_tx'] = np.zeros(len(self._times))
+        self._state['Ip_NI_tx'] = np.zeros(len(self._times))
         self._state['pax'] = np.zeros(len(self._times))
-        self._state['pax_tm'] = np.zeros(len(self._times)) # for testing
-        self._state['beta_N_tm'] = np.zeros(len(self._times)) # for testing
-        self._state['beta_N_tx'] = np.zeros(len(self._times)) # normalized beta from TORAX
-        self._state['l_i_tm'] = np.zeros(len(self._times)) # for testing
+        self._state['pax_tm'] = np.zeros(len(self._times))
+        self._state['beta_N_tm'] = np.zeros(len(self._times))
+        self._state['beta_N_tx'] = np.zeros(len(self._times))
+        self._state['l_i_tm'] = np.zeros(len(self._times))
         self._state['beta_pol'] = np.zeros(len(self._times))
         self._state['vloop_tm'] = np.zeros(len(self._times))
-        self._state['vloop_tx'] = np.zeros(len(self._times)) # for testing
+        self._state['vloop_tx'] = np.zeros(len(self._times))
         self._state['q95'] = np.zeros(len(self._times))
         self._state['q0'] = np.zeros(len(self._times))
         self._state['q95_tm'] = np.zeros(len(self._times))
         self._state['q0_tm'] = np.zeros(len(self._times))
         self._state['q_prof_tm'] = {}
         self._state['q_prof_tx'] = {}
-        self._state['psi_lcfs'] = np.zeros(len(self._times))
-        self._state['psi_axis'] = np.zeros(len(self._times))
+        self._state['psi_lcfs_tm'] = np.zeros(len(self._times))
+        self._state['psi_axis_tm'] = np.zeros(len(self._times))
+        self._state['psi_lcfs_tx'] = np.zeros(len(self._times))
+        self._state['psi_axis_tx'] = np.zeros(len(self._times))
         self._state['psi_tx'] = {}  
         self._state['psi_tm'] = {}
 
@@ -239,8 +241,8 @@ class TokTox:
             self._state['B0'][i] = np.interp(t, self._eqtimes, B0)
             self._state['pax'][i] = np.interp(t, self._eqtimes, pax)
             self._state['Ip'][i] = np.interp(t, self._eqtimes, Ip)
-            self._state['psi_axis'][i] = np.interp(t, self._eqtimes, psi_axis)
-            self._state['psi_lcfs'][i] = np.interp(t, self._eqtimes, psi_lcfs)
+            self._state['psi_axis_tm'][i] = np.interp(t, self._eqtimes, psi_axis)
+            self._state['psi_lcfs_tm'][i] = np.interp(t, self._eqtimes, psi_lcfs)
 
             # Default Profiles
             self._state['lcfs_geo'][i] = interp_prof(lcfs, t)
@@ -263,8 +265,8 @@ class TokTox:
             self._state['fpol'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(fpol_prof, t), 'type': 'linterp'}
 
         # Save seed values from initial equilibria
-        self._psi_axis_seed = self._state['psi_axis'].copy()
-        self._psi_lcfs_seed = self._state['psi_lcfs'].copy()
+        self._psi_axis_seed = self._state['psi_axis_tm'].copy()
+        self._psi_lcfs_seed = self._state['psi_lcfs_tm'].copy()
         self._Ip_seed       = self._state['Ip'].copy()
         self._pax_seed      = self._state['pax'].copy()
 
@@ -538,7 +540,7 @@ class TokTox:
         @param data_tree TORAX output data tree.
         @param var_name Name of variable (e.g., 'T_i', 'j_ohmic', 'FFprime').
         @param time Time value to extract.
-        @param load_into_state If 'state' loads into '_state', elif 'results' loads into '_results', elif None, return (psi, data).
+        @param load_into_state If 'state' returns dict to load right into '_state' into '_state', elif None, return interpolated data array.
         @param normalize If True, normalize profile: subtract edge value, divide by core value (for FFprime, pprime).
         @param profile_type Type key for returned dict: 'linterp' or 'jphi-linterp'. Default is 'linterp'.
         '''
@@ -595,8 +597,6 @@ class TokTox:
         
         if load_into_state == 'state':
             return {'x': self._psi_N.copy(), 'y': data_on_psi.copy(), 'type': profile_type}
-        elif load_into_state == 'results':
-            return {'x': self._psi_N.copy(), 'y': data_on_psi.copy(), 'type': profile_type}
         else:
             return data_on_psi
         
@@ -645,8 +645,8 @@ class TokTox:
                     # TM failed: use nearest seed EQDSK and reset psi to seed values
                     seed_idx = int(np.argmin(np.abs(eqtimes_arr - t)))
                     full_eqdsk_map[t] = self._init_files[seed_idx]
-                    self._state['psi_axis'][i] = self._psi_axis_seed[i] 
-                    self._state['psi_lcfs'][i] = self._psi_lcfs_seed[i]
+                    self._state['psi_axis_tm'][i] = self._psi_axis_seed[i] 
+                    self._state['psi_lcfs_tm'][i] = self._psi_lcfs_seed[i]
             if n_tm == 0:
                 print(f'Warning: Step {step}: no valid TM EQDSKs from step {step-1}, using all seed EQDSKs.')
             else:
@@ -659,7 +659,7 @@ class TokTox:
             # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
             # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
             # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
-            t: {0.0: (2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
+            t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
         if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
@@ -773,7 +773,7 @@ class TokTox:
 
         self._res_update(data_tree)
 
-        consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
+        consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(v_loops[0:], self._times[0:]) 
         self._print_out(f"Step {step} TORAX:")
         # self._print_out(f"\tTX: vloop: min={v_loops.min():.3f}, max={v_loops.max():.3f}, mean={v_loops.mean():.3f} V")
@@ -862,11 +862,19 @@ class TokTox:
             'type': 'linterp',
         }
 
-        self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
-        self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
-        self._state['psi_tx'][i]   = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state='state', normalize=False)
-        self._state['psi_tx'][i]['y'] /= (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        psi_tx = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state=None, normalize=False) / (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        psi_tx = 2.0 * psi_tx[-1] - psi_tx  # reflect over psi_lcfs to convert from TX to TM convention
+        self._state['psi_tx'][i] = {'x': self._psi_N.copy(), 'y': psi_tx.copy(), 'type': 'linterp',}
+        self._state['psi_lcfs_tx'][i] = self._state['psi_tx'][i]['y'][-1]  # update psi_lcfs based on reflected psi profile
+        self._state['psi_axis_tx'][i] = self._state['psi_tx'][i]['y'][0]  # update psi_axis based on reflected psi profile
 
+
+        # self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        # self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        # self._state['psi_tx'][i]   = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state='state', normalize=False)
+        # self._state['psi_tx'][i]['y'] /= (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        # 2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi
+        
         # Pull volume and volume derivative from TORAX
         self._state['vol_tx_lcfs'][i] = data_tree.profiles.volume.sel(time=t, rho_norm=1.0, method='nearest').item()
         self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state', normalize=False)
@@ -1010,7 +1018,7 @@ class TokTox:
 
             lcfs = self._state['lcfs_geo'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
+            lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
             self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
@@ -1091,7 +1099,7 @@ class TokTox:
                 coil_targets, _ = self._gs.get_coil_currents()
                 self.set_coil_reg(targets=coil_targets)
 
-        consumed_flux = (self._state['psi_lcfs'][-1] - self._state['psi_lcfs'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
+        consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:]) 
 
         return consumed_flux, consumed_flux_integral
@@ -1121,19 +1129,9 @@ class TokTox:
         self._state['vpr_tm'][i] = {'x': self._psi_N.copy(), 'y': vpr_tm, 'type': 'linterp'}
 
 
-        self._state['psi_lcfs'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
-        self._state['psi_axis'][i] = self._gs.psi_bounds[1] 
-
-        if 'psi_lcfs_tm' not in self._results:
-            self._results['psi_lcfs_tm'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
-        self._results['psi_lcfs_tm']['x'][i] = self._times[i]
-        self._results['psi_lcfs_tm']['y'][i] = self._state['psi_lcfs'][i] # stored as Wb/rad
-
-        if 'psi_axis_tm' not in self._results:
-            self._results['psi_axis_tm'] = {'x': np.zeros(len(self._times)), 'y': np.zeros(len(self._times))}
-        self._results['psi_axis_tm']['x'][i] = self._times[i]
-        self._results['psi_axis_tm']['y'][i] = self._state['psi_axis'][i] # stored as Wb/rad
-        self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis'][i] + (self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * self._psi_N, 'type': 'linterp'}
+        self._state['psi_lcfs_tm'][i] = self._gs.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
+        self._state['psi_axis_tm'][i] = self._gs.psi_bounds[1] 
+        self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
 
         self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
@@ -1171,10 +1169,10 @@ class TokTox:
         self._results['t_res'] = self._times
 
         for t in self._times:
-            self._results['T_e'][t] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='results', normalize=False)
-            self._results['T_i'][t] = self._pull_torax_onto_psi(data_tree, 'T_i', t, load_into_state='results', normalize=False)
-            self._results['n_e'][t] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='results', normalize=False)
-            self._results['q'][t] =   self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='results', normalize=False)
+            self._results['T_e'][t] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='state', normalize=False)
+            self._results['T_i'][t] = self._pull_torax_onto_psi(data_tree, 'T_i', t, load_into_state='state', normalize=False)
+            self._results['n_e'][t] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='state', normalize=False)
+            self._results['q'][t] =   self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='state', normalize=False)
 
         self._results['E_fusion'] = {
             'x': list(data_tree.scalars.E_fusion.coords['time'].values),
@@ -1511,18 +1509,12 @@ class TokTox:
         # (3,0): q-profile panel (TORAX q if available)
         ax_q = axes[3,0]
         ax_q.set_title('q profile')
-        if 'q' in self._results and self._times[i] in self._results['q']:
-            # q_prof = self._results['q'][self._times[i]]
-            # ax_q.plot(q_prof['x'], q_prof['y'], 'b-', linewidth=2, label = 'TX')
-            ax_q.plot(self._state['q_prof_tx'][i]['x'], self._state['q_prof_tx'][i]['y'], 'b--', label='TX', linewidth=1)
-            ax_q.plot(self._state['q_prof_tm'][i]['x'], self._state['q_prof_tm'][i]['y'], 'r--', label='TM', linewidth=2)  
-            ax_q.set_xlabel(r'$\hat{\psi}$')
-            ax_q.set_ylabel('q')
-            ax_q.legend(fontsize=9)  
-        else:
-            ax_q.text(0.5, 0.5, 'No q profile', ha='center', va='center')
-            ax_q.set_xticks([])
-            ax_q.set_yticks([])
+        ax_q.plot(self._state['q_prof_tx'][i]['x'], self._state['q_prof_tx'][i]['y'], 'b--', label='TX', linewidth=1)
+        ax_q.plot(self._state['q_prof_tm'][i]['x'], self._state['q_prof_tm'][i]['y'], 'r--', label='TM', linewidth=2)  
+        ax_q.set_xlabel(r'$\hat{\psi}$')
+        ax_q.set_ylabel('q')
+        ax_q.legend(fontsize=9)  
+
 
         # (3,1): Ti and Te profiles (same panel)
         ax_temp = axes[3,1]
@@ -1602,7 +1594,7 @@ class TokTox:
         # TORAX values at this timestep
         Ip_tx        = abs(float(self._state['Ip'][i]))
         pax_tx       = abs(float(self._state['pax'][i]))
-        psi_lcfs_tx  = float(self._state['psi_lcfs'][i])
+        psi_lcfs_tx  = float(self._state['psi_lcfs_tx'][i])
         q95_tx       = float(self._state['q95'][i])
         q0_tx        = float(self._state['q0'][i])
         vloop_tx     = float(self._state['vloop_tx'][i])
@@ -1633,7 +1625,7 @@ class TokTox:
                 ['psi_lcfs',
                  f'{psi_lcfs_seed:.4f} Wb/rad',
                  f'{psi_lcfs_tx:.4f} Wb/rad',
-                 f'{float(self._state["psi_lcfs"][i]):.4f} Wb/rad'],
+                 f'{float(self._state["psi_lcfs_tm"][i]):.4f} Wb/rad'],
             ]
             diag_rows = [
                 ['Parameter', 'Init EQDSK', 'TORAX', 'TokaMaker'],
@@ -1714,9 +1706,8 @@ class TokTox:
                 ax_q_tm.plot(psi_geo, q_tm_vals, 'r--', linewidth=2, label='TokaMaker')
             except Exception:
                 pass
-            if self._times[i] in self._results.get('q', {}):
-                q_tx = self._results['q'][self._times[i]]
-                ax_q_tm.plot(q_tx['x'], q_tx['y'], 'b-', linewidth=2, label='TORAX')
+
+            ax_q_tm.plot(self._state['q_prof_tx'][i]['x'], self._state['q_prof_tx'][i]['y'], 'b-', linewidth=2, label='TORAX')
             ax_q_tm.set_title('q profile (TM vs TORAX)', fontsize=10)
             ax_q_tm.set_xlabel(r'$\hat{\psi}$')
             ax_q_tm.set_ylabel('q')
@@ -1970,64 +1961,59 @@ class TokTox:
         ax_00.grid(True, alpha=0.3)
         ax_00.legend(fontsize=8)
 
-        # (0,1): psi_lcfs (TM & TX) with psi_axis on secondary axis
+        # (0,1): psi_lcfs and psi_axis (TM & TX) 
         ax_01 = axes[0,1]
         ax_01.set_title(r'$\psi_{lcfs}$ & $\psi_{axis}$ (TM & TX)')
-        if 'psi_lcfs_tm' in self._results:
-            ax_01.plot(self._results['psi_lcfs_tm']['x'], self._results['psi_lcfs_tm']['y'], '-', color='tab:blue', label=r'$\psi_{lcfs}$ TM')
-        if 'psi_lcfs_torax' in self._results:
-            ax_01.plot(self._results['psi_lcfs_torax']['x'], self._results['psi_lcfs_torax']['y'], '--', color='tab:blue', label=r'$\psi_{lcfs}$ TX')
+        ax_01.plot(self._times, self._state['psi_lcfs_tm'], '-', color='tab:blue', label=r'$\psi_{lcfs}$ TM')
+        ax_01.plot(self._times, self._state['psi_lcfs_tx'], '--', color='tab:blue', label=r'$\psi_{lcfs}$ TX')
+        ax_01.plot(self._times, self._state['psi_axis_tm'], '-', color='tab:orange', label=r'$\psi_{axis}$ TM')
+        ax_01.plot(self._times, self._state['psi_axis_tx'], '--', color='tab:orange', label=r'$\psi_{axis}$ TX')
+        ax_01.set_ylabel(r'$\psi_{axis}$ [Wb/rad]', color='tab:orange')
+        ax_01.tick_params(axis='y', labelcolor='tab:orange')
+        ax_01.legend(fontsize=8, loc='upper right')
         ax_01.set_xlabel('Time [s]')
         ax_01.set_ylabel(r'$\psi_{lcfs}$ [Wb/rad]', color='tab:blue')
         ax_01.tick_params(axis='y', labelcolor='tab:blue')
         ax_01.legend(fontsize=8, loc='upper left')
         ax_01.grid(True, alpha=0.3)
-        # Secondary axis: psi at axis (psi_N = 0)
-        ax2_01 = ax_01.twinx()
-        if 'psi_axis_tm' in self._results:
-            ax2_01.plot(self._results['psi_axis_tm']['x'], self._results['psi_axis_tm']['y'], '-', color='tab:orange', label=r'$\psi_{axis}$ TM')
-        if 'psi_axis_torax' in self._results:
-            ax2_01.plot(self._results['psi_axis_torax']['x'], self._results['psi_axis_torax']['y'], '--', color='tab:orange', label=r'$\psi_{axis}$ TX')
-        ax2_01.set_ylabel(r'$\psi_{axis}$ [Wb/rad]', color='tab:orange')
-        ax2_01.tick_params(axis='y', labelcolor='tab:orange')
-        ax2_01.legend(fontsize=8, loc='upper right')
+
 
         # (0,2): V_loop comparison with ratio
         ax_02 = axes[0,2]
         ax_02.set_title('V_loop (TM vs TX) [V]')
         ax_02.plot(self._times, self._state['vloop_tm'], '-o', markersize=3, label='TokaMaker')
-        if 'v_loop_lcfs' in self._results:
-            rx = self._results['v_loop_lcfs']['x']
-            ry = self._results['v_loop_lcfs']['y']
-            ax_02.plot(rx, ry, '--o', markersize=3, label='TORAX')
-            # Secondary axis for vloop ratio (TokaMaker / TORAX)
-            tm_vloop = np.array(self._state['vloop_tm'])
-            tx_vloop = np.array(ry)
-            # Interpolate TokaMaker vloop to TORAX time points if needed
-            if len(tm_vloop) == len(tx_vloop):
-                ratio = tm_vloop / tx_vloop
-                ratio_times = np.array(self._times)
-            else:
-                interp_tm = interp1d(self._times, tm_vloop, bounds_error=False, fill_value=np.nan)
-                ratio = interp_tm(rx) / tx_vloop
-                ratio_times = np.array(rx)
-            ax2_02 = ax_02.twinx()
-            ax2_02.plot(ratio_times, ratio, 'g-s', markersize=3, label='TM/TX ratio')
-            ax2_02.set_ylim(0,30)
-            ax2_02.set_ylabel('V_loop ratio (TM/TX)', color='g')
-            ax2_02.tick_params(axis='y', labelcolor='g')
-            ax2_02.legend(fontsize=8, loc='upper right')
-            # Print average vloop and ratio between 300 and 400 seconds
-            mask = (ratio_times >= 300) & (ratio_times <= 400)
-            if np.any(mask):
-                avg_ratio = np.nanmean(ratio[mask])
-                # Get averages for both codes
-                mask_tm = (np.array(self._times) >= 300) & (np.array(self._times) <= 400)
-                mask_tx = (np.array(rx) >= 300) & (np.array(rx) <= 400)
-                avg_vloop_tm = np.mean(tm_vloop[mask_tm]) if np.any(mask_tm) else np.nan
-                avg_vloop_tx = np.mean(tx_vloop[mask_tx]) if np.any(mask_tx) else np.nan
-                self._print_out(f"V_loop (300-400s): TokaMaker avg={avg_vloop_tm:.3f} V, TORAX avg={avg_vloop_tx:.3f} V, ratio={avg_ratio:.4f}")
-                ax2_02.text(0.5, 0.9, f'Avg ratio (300-400s): {avg_ratio:.4f}', transform=ax2_02.transAxes, color='g', fontsize=8, ha='center')
+
+        rx = self._times
+        ry = self._state['vloop_tx']
+        ax_02.plot(rx, ry, '--o', markersize=3, label='TORAX')
+        # Secondary axis for vloop ratio (TokaMaker / TORAX)
+        tm_vloop = np.array(self._state['vloop_tm'])
+        tx_vloop = np.array(ry)
+        # Interpolate TokaMaker vloop to TORAX time points if needed
+        if len(tm_vloop) == len(tx_vloop):
+            ratio = tm_vloop / tx_vloop
+            ratio_times = np.array(self._times)
+        else:
+            interp_tm = interp1d(self._times, tm_vloop, bounds_error=False, fill_value=np.nan)
+            ratio = interp_tm(rx) / tx_vloop
+            ratio_times = np.array(rx)
+        ax2_02 = ax_02.twinx()
+        ax2_02.plot(ratio_times, ratio, 'g-s', markersize=3, label='TM/TX ratio')
+        ax2_02.set_ylim(0,30)
+        ax2_02.set_ylabel('V_loop ratio (TM/TX)', color='g')
+        ax2_02.tick_params(axis='y', labelcolor='g')
+        ax2_02.legend(fontsize=8, loc='upper right')
+        # Print average vloop and ratio between 150 and 200 seconds
+        mask = (ratio_times >= 150) & (ratio_times <= 200)
+        if np.any(mask):
+            avg_ratio = np.nanmean(ratio[mask])
+            # Get averages for both codes
+            mask_tm = (np.array(self._times) >= 150) & (np.array(self._times) <= 200)
+            mask_tx = (np.array(rx) >= 150) & (np.array(rx) <= 200)
+            avg_vloop_tm = np.mean(tm_vloop[mask_tm]) if np.any(mask_tm) else np.nan
+            avg_vloop_tx = np.mean(tx_vloop[mask_tx]) if np.any(mask_tx) else np.nan
+            self._print_out(f"V_loop 150-200: TokaMaker avg={avg_vloop_tm:.3f} V, TORAX avg={avg_vloop_tx:.3f} V, ratio={avg_ratio:.4f}")
+            ax2_02.text(0.5, 0.9, f'Avg ratio (150-200s): {avg_ratio:.4f}', transform=ax2_02.transAxes, color='g', fontsize=8, ha='center')
         ax_02.set_xlabel('Time [s]')
         ax_02.grid(True, alpha=0.3)
         ax_02.legend(fontsize=8, loc='upper left')
@@ -2177,7 +2163,7 @@ class TokTox:
 
 
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=5, out='results.json', run_name = 'tmp'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp'):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
