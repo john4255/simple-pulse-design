@@ -7,279 +7,190 @@ sys.path.append('/Users/fsheehan/fsheehan_drive/02_areas/Columbia/01_Columbia_pr
 from toktox import TokTox
 
 
-CONFIG = {'plasma_composition': {'Z_eff': 1.2, 'main_ion': 'D', 'impurity': 'Ne'},
- 'profile_conditions': {'Ip': {0.5: 500000.0,
-                               1.0: 1000000.0,
-                               2.0: 2000000.0,
-                               3.0: 3000000.0,
-                               6.0: 3000000.0,
-                               7.0: 2500000.0,
-                               8.0: 2000000.0,
-                               9.0: 1500000.0,
-                               10.0: 1000000.0},
-                        'initial_psi_from_j': True,
-                        'initial_j_is_total_current': True,
-                        'current_profile_nu': 1,
-                        'T_i': ([0.0, 0.05, 0.1, 0.15000000000000002, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9,0.95, 1.0],
-                                [0.3, 0.29792388374709483, 0.2917813431349045, 0.28182391884404273, 0.26845179504431094, 0.25218712300035157,
-                                 0.23364023492142144,
-                                 0.21347179087253906,
-                                 0.19235411652898635,
-                                 0.17093484741927686,
-                                 0.14980553657978285,
-                                 0.12947718614795842,
-                                 0.11036383235143267,
-                                 0.09277445788000312,
-                                 0.07691272700592366,
-                                 0.06288341614532934,
-                                 0.0507039946218198,
-                                 0.040319613189864725,
-                                 0.03161976736855929,
-                                 0.024455081587406856,
-                                 0.018652957206634894]),
-                        'T_i_right_bc': 0.09,
-                        'T_e': ([0.0,
-                                 0.05,
-                                 0.1,
-                                 0.15000000000000002,
-                                 0.2,
-                                 0.25,
-                                 0.30000000000000004,
-                                 0.35000000000000003,
-                                 0.4,
-                                 0.45,
-                                 0.5,
-                                 0.55,
-                                 0.6000000000000001,
-                                 0.65,
-                                 0.7000000000000001,
-                                 0.75,
-                                 0.8,
-                                 0.8500000000000001,
-                                 0.9,
-                                 0.9500000000000001,
-                                 1.0],
-                                [0.3,
-                                 0.29792388374709483,
-                                 0.2917813431349045,
-                                 0.28182391884404273,
-                                 0.26845179504431094,
-                                 0.25218712300035157,
-                                 0.23364023492142144,
-                                 0.21347179087253906,
-                                 0.19235411652898635,
-                                 0.17093484741927686,
-                                 0.14980553657978285,
-                                 0.12947718614795842,
-                                 0.11036383235143267,
-                                 0.09277445788000312,
-                                 0.07691272700592366,
-                                 0.06288341614532934,
-                                 0.0507039946218198,
-                                 0.040319613189864725,
-                                 0.03161976736855929,
-                                 0.024455081587406856,
-                                 0.018652957206634894]),
-                        'T_e_right_bc': 0.09,
-                        'n_e_nbar_is_fGW': False,
-                        'normalize_n_e_to_nbar': False,
-                        'n_e': ([0.0, 3.0, 7.0, 10.0],
-                                [0.0,
-                                 0.05,
-                                 0.1,
-                                 0.15000000000000002,
-                                 0.2,
-                                 0.25,
-                                 0.30000000000000004,
-                                 0.35000000000000003,
-                                 0.4,
-                                 0.45,
-                                 0.5,
-                                 0.55,
-                                 0.6000000000000001,
-                                 0.65,
-                                 0.7000000000000001,
-                                 0.75,
-                                 0.8,
-                                 0.8500000000000001,
-                                 0.9,
-                                 0.9500000000000001,
-                                 1.0],
-                                [[1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19,
-                                  1.2e+19],
-                                 [1.8e+20,
-                                  1.7988149993378634e+20,
-                                  1.795277720628512e+20,
-                                  1.7894408926449592e+20,
-                                  1.781390941822708e+20,
-                                  1.771245862989109e+20,
-                                  1.7591523419733695e+20,
-                                  1.7452822281543038e+20,
-                                  1.7298284754535773e+20,
-                                  1.7130006856247778e+20,
-                                  1.695020397372368e+20,
-                                  1.6761162686000287e+20,
-                                  1.656519296972764e+20,
-                                  1.636458216303663e+20,
-                                  1.6161551936231296e+20,
-                                  1.5958219349487606e+20,
-                                  1.575656287702632e+20,
-                                  1.5558394054770246e+20,
-                                  1.5365335175274896e+20,
-                                  1.5178803220520295e+20,
-                                  1.5e+20],
-                                 [1.8e+20,
-                                  1.7988149993378634e+20,
-                                  1.795277720628512e+20,
-                                  1.7894408926449592e+20,
-                                  1.781390941822708e+20,
-                                  1.771245862989109e+20,
-                                  1.7591523419733695e+20,
-                                  1.7452822281543038e+20,
-                                  1.7298284754535773e+20,
-                                  1.7130006856247778e+20,
-                                  1.695020397372368e+20,
-                                  1.6761162686000287e+20,
-                                  1.656519296972764e+20,
-                                  1.636458216303663e+20,
-                                  1.6161551936231296e+20,
-                                  1.5958219349487606e+20,
-                                  1.575656287702632e+20,
-                                  1.5558394054770246e+20,
-                                  1.5365335175274896e+20,
-                                  1.5178803220520295e+20,
-                                  1.5e+20],
-                                 [1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20,
-                                  1e+20]]),
-                        'n_e_right_bc': ([0.0, 3.0, 7.0, 10.0],
-                                         [1.2e+19, 1.5e+20, 1.5e+20, 1e+20])},
- 'numerics': {'t_initial': 0.5,
-              't_final': 10.0,
-              'exact_t_final': True,
-              'fixed_dt': 0.2,
-              'evolve_ion_heat': True,
-              'evolve_electron_heat': True,
-              'evolve_current': True,
-              'evolve_density': False,
-              'adaptive_T_source_prefactor': 1000000000000.0,
-              'adaptive_n_source_prefactor': 100000000.0,
-              'resistivity_multiplier': 1},
- 'neoclassical': {'bootstrap_current': {'bootstrap_multiplier': 1.0}},
- 'sources': {'ecrh': {},
-             'ohmic': {},
-             'fusion': {},
-             'ei_exchange': {},
-             'impurity_radiation': {},
-             'generic_heat': {'gaussian_location': 0.11,
-                              'gaussian_width': 0.29,
-                              'P_total': ({0: 0.0,
-                                           3.0: 0.0,
-                                           3.5: 4000000.0,
-                                           6.0: 4000000.0,
-                                           6.5: 0.0,
-                                           10.0: 0.0},
-                                          'PIECEWISE_LINEAR'),
-                              'electron_heat_fraction': 0.5}},
- 'pedestal': {'set_pedestal': False},
- 'transport': {'model_name': 'qlknn',
-               'chi_min': 0.1,
-               'chi_max': 100.0,
-               'D_e_min': 0.05,
-               'D_e_max': 100.0,
-               'V_e_min': -50.0,
-               'V_e_max': 50.0,
-               'chi_i_inner': 0.2,
-               'chi_e_inner': 0.2,
-               'chi_i_outer': 0.2,
-               'chi_e_outer': 0.2,
-               'rho_inner': 0.2,
-               'rho_outer': 0.95,
-               'apply_inner_patch': True,
-               'apply_outer_patch': False,
-               'smoothing_width': 0.1,
-               'smooth_everywhere': True,
-               'include_ITG': True,
-               'include_TEM': True,
-               'include_ETG': True,
-               'DV_effective': True,
-               'An_min': 0.05,
-               'avoid_big_negative_s': True,
-               'smag_alpha_correction': True,
-               'q_sawtooth_proxy': False,
-               'ITG_flux_ratio_correction': 1.0,
-               'ETG_correction_factor': 1.0},
- 'solver': {'solver_type': 'newton_raphson',
-            'theta_implicit': 1.0,
-            'use_predictor_corrector': True,
-            'n_corrector_steps': 2,
-            'convection_dirichlet_mode': 'ghost',
-            'convection_neumann_mode': 'ghost',
-            'use_pereverzev': True,
-            'chi_pereverzev': 20.0,
-            'D_pereverzev': 10.0,
-            'log_iterations': False},
- 'time_step_calculator': {'calculator_type': 'fixed'},
- 'geometry': {'geometry_type': 'circular',
-              'R_major': 1.85,
-              'a_minor': 0.57,
-              'B_0': 12.2,
-              'n_rho': 100}}
+def get_torax_config() -> dict[str, object]:
+    """Get the Torax configuration for SPARC pulse."""
+    # Radial grid for transport profiles : toroidal normalized grid
+    rho = np.linspace(0, 1, 21)
+
+    # Calculate initial temperature profiles [keV]
+    electron_temp_axis = 0.3
+    ion_temp_axis = 0.3
+    temp_width = 0.6
+    electron_temp_initial_values = electron_temp_axis * np.exp(-(rho**2) / temp_width**2)
+    ion_temp_initial_values = ion_temp_axis * np.exp(-(rho**2) / temp_width**2)
+    # Lists for torax_config
+    electron_temp_initial = (rho, electron_temp_initial_values)
+    ion_temp_initial = (rho, ion_temp_initial_values)
+
+    # Calculate prescribed density profiles as in PPW-Matlab [10^20 m^-3]
+    ne_time_grid = np.array([0.0, 3.0, 7.0, 10.0])
+    ne_sep =       np.array([1.2, 15.0, 15.0, 10.0]) * 1e19
+    ne_0 =         np.array([1.2, 18.0, 18.0, 10.0]) * 1e19
+    ne_width =     np.array([1.0, 1.0, 1.0, 1.0])
+    ne_profiles =  np.zeros((len(ne_time_grid), len(rho)))
+    # Loop through the time grid
+    for ii in range(len(ne_time_grid)):
+        # Gaussian-like profiles
+        ne_shape = np.exp(-(rho**2) / (ne_width[ii] ** 2))
+        ne_bc = np.exp(-1.0 / (ne_width[ii] ** 2))  # Value at separatrix
+        # Scale to get correct boundary conditions
+        ne_scl = ne_sep[ii] + (ne_0[ii] - ne_sep[ii]) * ((ne_shape - ne_bc) / (1.0 - ne_bc))
+        ne_profiles[ii, :] = ne_scl  # Fill the column
+
+    ne = (ne_time_grid, rho, ne_profiles)
+    nbr_values = ne_profiles[:, -1]
+    ne_bound_right = (ne_time_grid, nbr_values)
+
+    return {
+        "plasma_composition": {
+            "Z_eff": 1.2,
+            "main_ion": "D",
+            "impurity": "Ne",
+        },
+        "profile_conditions": {
+            "Ip": {0.5: 0.5e6, 1.0: 1.0e6, 2.0: 2.0e6, 3.0: 3.0e6, 6.0: 3.0e6, 7.0: 2.5e6, 8.0: 2.0e6, 9.0: 1.5e6, 10.0: 1.0e6},
+            "initial_psi_from_j": True,
+            "initial_j_is_total_current": True,
+            "current_profile_nu": 1,
+            "T_i": ion_temp_initial,  # Initial condition only
+            "T_i_right_bc": 0.09,
+            "T_e": electron_temp_initial,  # Initial condition only
+            "T_e_right_bc": 0.09,
+            "n_e_nbar_is_fGW": False,
+            "normalize_n_e_to_nbar": False,
+            "n_e": ne,
+            "n_e_right_bc": ne_bound_right,
+            "initial_psi_from_j": True,
+            "initial_j_is_total_current": True,
+        },
+        "numerics": {
+            "t_initial": 0.5,
+            "t_final": 10.0,
+            "exact_t_final": True,
+            "fixed_dt": 0.2,
+            "evolve_ion_heat": True,
+            "evolve_electron_heat": True,
+            "evolve_current": True,
+            "evolve_density": False,
+            "adaptive_T_source_prefactor": 1.0e12,
+            "adaptive_n_source_prefactor": 1.0e8,
+            "resistivity_multiplier": 1,
+        },
+        "neoclassical": {
+            "bootstrap_current": {
+                "bootstrap_multiplier": 1.0,
+            }
+        },
+        "sources": {
+            "ecrh": {},
+            "ohmic": {},
+            "fusion": {},
+            "ei_exchange": {},
+            "impurity_radiation": {},
+            "generic_heat": {  # radial deposition
+                # radial deposition
+                "gaussian_location": 0.11,
+                # Gaussian width in normalized radial coordinate
+                "gaussian_width": 0.29,
+                # total heating (including accounting for radiation)
+                "P_total": (
+                    {
+                        0: 0.0,
+                        3.0: 0.0,
+                        3.5: 0.8 * 5.0e6,
+                        6.0: 0.8 * 5.0e6,
+                        6.5: 0.0,
+                        10.0: 0.0,
+                    },
+                    "PIECEWISE_LINEAR",
+                ),
+                # electron heating fraction
+                "electron_heat_fraction": 0.5,
+            },
+            "generic_current": {},
+        },
+        "pedestal": {
+            "set_pedestal": False,
+        },
+        "transport": {
+            "model_name": "qlknn",
+            "chi_min": 0.1,
+            "chi_max": 100.0,
+            "D_e_min": 0.05,
+            "D_e_max": 100.0,
+            "V_e_min": -50.0,
+            "V_e_max": 50.0,
+            "chi_i_inner": 0.2,
+            "chi_e_inner": 0.2,
+            "chi_i_outer": 0.2,
+            "chi_e_outer": 0.2,
+            "rho_inner": 0.2,
+            "rho_outer": 0.95,
+            "apply_inner_patch": True,
+            "apply_outer_patch": False,
+            "smoothing_width": 0.1,
+            "smooth_everywhere": True,
+            "include_ITG": True,
+            "include_TEM": True,
+            "include_ETG": True,
+            "DV_effective": True,
+            "An_min": 0.05,
+            "avoid_big_negative_s": True,
+            "smag_alpha_correction": True,
+            "q_sawtooth_proxy": False,
+            "ITG_flux_ratio_correction": 1.0,
+            "ETG_correction_factor": 1.0,
+        },
+        "solver": {
+            "solver_type": "newton_raphson",
+            "theta_implicit": 1.0,
+            "use_predictor_corrector": True,
+            "n_corrector_steps": 2,
+            "convection_dirichlet_mode": "ghost",
+            "convection_neumann_mode": "ghost",
+            "use_pereverzev": True,
+            "chi_pereverzev": 20.0,
+            "D_pereverzev": 10.0,
+            "log_iterations": False,
+        },
+        "time_step_calculator": {"calculator_type": "fixed"},
+        "geometry": {
+            # "geometry_type": "circular",
+            # # SPARC geometry: from rBt = 12.2 * 1.85 T-m in MOSAIC gspulse config
+            # "R_major": 1.85,   # major radius [m]
+            # "a_minor": 0.57,   # minor radius [m] (SPARC V2)
+            # "B_0": 12.2,       # toroidal field on axis [T]
+            "n_rho": 100,
+        },
+    }
 
 
-num_eqdsk = 10
 
-geqdsk_arr = [f'eqdsk_{i}.eqdsk' for i in range(num_eqdsk)]
-eqtimes = np.linspace(0, 10, num_eqdsk)
+CONFIG = get_torax_config()
+
+
+num_eqdsk = 11
+
+geqdsk_arr = [f'sparc_lmode_eqdsk_{i}.eqdsk' for i in range(num_eqdsk)]
+eqtimes = np.array([0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]) # couldn't get 0.5 equil to converge
 
 mysim = TokTox(t_init=0.5, 
                t_final=CONFIG['numerics']['t_final'], \
                dt=CONFIG['numerics']['fixed_dt'], \
-               eqdsk_times=eqtimes,\
-               eqdsk_files=geqdsk_arr, \
+               eqtimes=eqtimes,\
+               g_eqdsk_arr=geqdsk_arr, \
                last_surface_factor=0.99, \
-               n_rho=100)
+               n_rho=CONFIG['geometry']['n_rho'])
 
-mysim.initialize_gs('SPARC_mesh-240613.h5', vsc='VS')
-coil_names = ['PF1', 'PF2', ...]
+# mysim.set_evolve(density=False)
+mysim.load_config(CONFIG)
+
+
+
+
+mysim.initialize_gs('SPARC_mesh-240613.h5', vsc='VSC')
+coil_names = ['VSC', 'CS1U', 'CS1L', 'CS2U', 'CS2L', 'CS3U', 'CS3L', 'PF1U', 'PF1L', 'PF2U', 'PF2L', 'PF3U', 'PF3L', 'PF4U', 'PF4L', 'DV1U', 'DV1L', 'DV2U', 'DV2L']
 target_currents = {coil: 0.0 for coil in coil_names}
-mysim.set_coil_reg(targets=target_currents, stric_limit=1.e8)
+mysim.set_coil_reg(targets=target_currents, strict_limit=1.e8)
 
-mysim.fly(save_states=False, graph=False, run_name='tmp')
+mysim.fly(save_states=False, graph=True, run_name='tmp')

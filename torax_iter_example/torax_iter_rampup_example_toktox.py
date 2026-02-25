@@ -23,18 +23,18 @@ CONFIG = {
         'Ip': {0: 3e6, 80: 10.5e6},  # total plasma current in A
         # boundary + initial conditions for T and n
         # initial condition ion temperature for r=0 and r=a_minor
-        'T_i': {0.0: {0.0: 6.0, 1.0: 0.1}},
+        'T_i': {0.0: {0.0: 1.5, 1.0: 0.1}},
         'T_i_right_bc': 0.1,  # boundary condition ion temperature for r=a_minor
         # initial condition electron temperature for r=0 and r=a_minor
-        'T_e': {0.0: {0.0: 6.0, 1.0: 0.1}},
+        'T_e': {0.0: {0.0: 1.5, 1.0: 0.1}},
         'T_e_right_bc': 0.1,  # boundary condition electron temp for r=a_minor
         'n_e_right_bc_is_fGW': True,
         # boundary condition density for r=a_minor
         'n_e_right_bc': {0: 0.1, 80: 0.3},
         # set initial condition density according to Greenwald fraction.
         'n_e_nbar_is_fGW': True,
-        'nbar': 1,
-        'n_e': {0: {0.0: 1.5, 1.0: 1.0}},  # Initial electron density profile
+        'nbar': 0.5,
+        'n_e': {0: {0.0: 1.2, 1.0: 0.8}},  # Initial electron density profile
     },
     'numerics': {
         # simulation control
@@ -129,7 +129,7 @@ CONFIG = {
     },
     'pedestal': {
         'model_name': 'set_T_ped_n_ped',
-        'set_pedestal': True,
+        'set_pedestal': False,
         'T_i_ped': 1.0,  # ion pedestal top temperature in keV for T_i
         'T_e_ped': 1.0,  # electron pedestal top temperature in keV for T_e
         'n_e_ped_is_fGW': True,

@@ -333,7 +333,7 @@ class TokTox:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
 
-        self._gs.settings.maxits = 500
+        self._gs.settings.maxits = 100
         # self._gs.settings.pm = False
 
         if vsc is not None:
@@ -605,14 +605,10 @@ class TokTox:
         @param step Iteration number of the Torax-Tokamaker simulation loop.
         @return Torax config object.
         '''
-        # self._print_out(f'Step {step}: TX input: psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
-        # self._print_out(f'\tTX input: pax: min = {np.min(self._state["pax"]):.1f}, max = {np.max(self._state["pax"]):.1f} Pa')
-        # self._print_out(f'\tTX input: pax at t=0: {self._state["pax"][0]:.1f} Pa, t=end: {self._state["pax"][-1]:.1f} Pa')
 
         myconfig = copy.deepcopy(BASE_CONFIG)
         if self._baseconfig:
             myconfig = self._baseconfig.copy()
-
         myconfig['numerics'] = {
             't_initial': self._t_init,
             't_final': self._t_final,  # length of simulation time in seconds
@@ -622,7 +618,6 @@ class TokTox:
             'evolve_current': self._evolve_current, # solve current equation
             'evolve_density': self._evolve_density, # solve density equation
         }
-
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': os.getcwd(),
@@ -635,10 +630,8 @@ class TokTox:
             'n_rho': self._n_rho, 
         }
         if step > 1:
-            # Build geometry_configs covering ALL simulation times.
             # For times where TM succeeded last step, use the TM-solved EQDSK.
             # For times where TM failed, fall back to the nearest seed EQDSK and
-            # reset psi_axis/psi_lcfs to seed values to prevent drift accumulation.
             eqtimes_arr = np.array(self._eqtimes)
             full_eqdsk_map = {}
             n_tm = 0
@@ -652,7 +645,7 @@ class TokTox:
                     # TM failed: use nearest seed EQDSK and reset psi to seed values
                     seed_idx = int(np.argmin(np.abs(eqtimes_arr - t)))
                     full_eqdsk_map[t] = self._init_files[seed_idx]
-                    self._state['psi_axis'][i] = self._psi_axis_seed[i] #TODO need to flip this to match torax current sign convention? i.e. subtract/add 2*flux swing to lcfs?
+                    self._state['psi_axis'][i] = self._psi_axis_seed[i] 
                     self._state['psi_lcfs'][i] = self._psi_lcfs_seed[i]
             if n_tm == 0:
                 print(f'Warning: Step {step}: no valid TM EQDSKs from step {step-1}, using all seed EQDSKs.')
@@ -663,9 +656,10 @@ class TokTox:
             }
 
         myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
-            t: {0.0: (2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times) 
-        } # TODO have to convert this to TORAX Ip sign convention? i.e. psi_axis < psi_lcfs or vice versa? 
-        
+            # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
+            # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
+            # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
+            t: {0.0: (2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
         if self._n_e:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
@@ -1009,7 +1003,7 @@ class TokTox:
                 # ffp_prof=self._state['ffp_prof'][i],
                 # ffp_prof=self._state['j_tot'][i], 
                 # pp_prof=self._state['pp_prof'][i],
-                ffp_NI_prof=self._state['ffpni_prof'][i], 
+                ffp_NI_prof=self._state['ffpni_prof'][i]
             )
 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
@@ -1038,9 +1032,12 @@ class TokTox:
             eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step, i))
             
             fail_msg = None
+            equals = '='*50
             try:
+                print(f'{equals} trying first solve')
                 err_flag = self._gs.solve()
                 print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
+                print(f'{equals} first solve succeeded!')
                 self._gs.save_eqdsk(eq_name,
                                     lcfs_pad=0.01,run_info='TokaMaker EQDSK',
                                     cocos=2, nr=200, nz=200)
@@ -1049,11 +1046,29 @@ class TokTox:
                 solve_succeeded = True
             except Exception as e:
                 fail_msg = str(e)
-                print(f'\tGS solve failed: {e}')
-                self._eqdsk_skip.append(eq_name)
-                skip_coil_update = True
-                self._print_out(f'TM: Solve failed at t={t}.')
-                solve_succeeded = False
+                print(f'\t{equals} GS solve with raw TX profiles failed: {e}')
+                
+                try:
+                    print(f'{equals} trying second solve')
+                    ffp_prof = self.tier1_sign_flip(ffp_prof)
+                    pp_prof = self.tier1_sign_flip(pp_prof)
+                    self._gs.set_profiles(ffp_prof=ffp_prof, 
+                                          pp_prof=pp_prof,
+                                          ffp_NI_prof=self._state['ffpni_prof'][i])
+                    err_flag = self._gs.solve()
+                    print(f'{equals}sign flipping worked!!')
+                    self._gs.save_eqdsk(eq_name,
+                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
+                                    cocos=2, nr=200, nz=200)
+                    self._gs_update(i)
+
+                    solve_succeeded = True
+                except Exception as e2:
+                    print(f'{equals} second solve didnt work :( — {e2}')
+                    self._eqdsk_skip.append(eq_name)
+                    skip_coil_update = True
+                    self._print_out(f'TM: Solve failed at t={t}.')
+                    solve_succeeded = False
             
             self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
@@ -1068,7 +1083,6 @@ class TokTox:
                     ax.set_title(f't={self._times[i]}')
                     plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
                     plt.close(fig)
-                    # plt.show()
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -1082,6 +1096,13 @@ class TokTox:
 
         return consumed_flux, consumed_flux_integral
         
+    def tier1_sign_flip(self, _ffp_prof):
+        y = _ffp_prof['y']
+        sign = 1 if np.sum(y > 0) >= np.sum(y < 0) else -1
+        y_new = np.clip(y, 0, None) if sign > 0 else np.clip(y, None, 0)
+        return {**_ffp_prof, 'y': y_new}
+
+
     def _gs_update(self, i):
         r'''! Update internal state and coil current results based on results of GS solver.
         @param i Timestep of the solve.
@@ -2081,7 +2102,7 @@ class TokTox:
         ax_20.set_xlabel('Time [s]')
         ax_20.legend(fontsize=8)
         ax_20.grid(True, alpha=0.3)
-        ax_20.set_ylim(0,1E8)
+        # ax_20.set_ylim(0,1E8)
 
         # (2,1): beta_N (TX and TM)
         ax_21 = axes[2,1]
