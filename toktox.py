@@ -118,6 +118,8 @@ class TokTox:
         self._state['T_i'] = {}
         self._state['n_e'] = {}
         self._state['n_i'] = {}
+        self._state['f_GW'] = np.zeros(len(self._times))
+        self._state['f_GW_vol'] = np.zeros(len(self._times))
         self._state['ptot'] = {}
         self._state['ffpni_prof'] = {}
         self._state['ffpni_sub_prof'] = {}
@@ -870,6 +872,11 @@ class TokTox:
         self._state['T_e'][i] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='state', normalize=False)
         self._state['n_i'][i] = self._pull_torax_onto_psi(data_tree, 'n_i', t, load_into_state='state', normalize=False)
         self._state['n_e'][i] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='state', normalize=False)
+        # ne_bar = data_tree.scalars.n_e_line_avg.sel(time=t, method='nearest').item()
+        # n_GW = self._state['Ip'][i] / (np.pi * self._state['a'][i]**2)  # GW density based on line-averaged density
+        # self._state['f_GW'][i] = ne_bar / n_GW if n_GW > 0 else 0.0
+        self._state['f_GW'][i] = data_tree.scalars.fgw_n_e_line_avg.sel(time=t, method='nearest').item()
+        self._state['f_GW_vol'][i] = data_tree.scalars.fgw_n_e_volume_avg.sel(time=t, method='nearest').item()
 
         self._state['ptot'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state', normalize=False)
 
@@ -2070,6 +2077,12 @@ class TokTox:
         ne_edge_y = [self._state['n_e'][ii]['y'][-1] if ii in self._state.get('n_e', {}) else np.nan for ii in range(len(self._times))]
         ax_11.plot(ne_edge_x, ne_edge_y, ':', marker='s', markersize=3, label='n_e edge')
         ax_11.set_xlabel('Time [s]')
+        ax_11_02 = ax_11.twinx()
+        ax_11_02.plot(self._times, self._state['f_GW'], 'm--', markersize=3, label='f_GW_line') # f_GW using line averaged ne
+        ax_11_02.plot(self._times, self._state['f_GW_vol'], 'c--', markersize=3, label='f_GW_vol') # f_GW using volume averaged ne
+        ax_11_02.set_ylabel('f_GW')
+        ax_11_02.set_ylim(0,2)
+        ax_11_02.legend(fontsize=8)
         ax_11.legend(fontsize=8)
         ax_11.grid(True, alpha=0.3)
 
