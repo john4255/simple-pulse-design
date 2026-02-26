@@ -30,16 +30,16 @@ CONFIG = {
         'T_e_right_bc': 0.1,  # boundary condition electron temp for r=a_minor
         'n_e_right_bc_is_fGW': False,
         # boundary condition density for r=a_minor
-        'n_e_right_bc': {0: 0.1e18, 80: .1e19},
+        'n_e_right_bc': {0: 1e19, 80: 5e19},
         # set initial condition density according to Greenwald fraction.
         # 'n_e_nbar_is_fGW': False,
         # 'nbar': 0.5,
-        'n_e': {0: {0.0: 1e18, 1.0: 0.1e18}},  # Initial electron density profile
+        'n_e': {0: {0.0: 1e19, 1.0: 0.1e20}},  # Initial electron density profile
     },
     'numerics': {
         # simulation control
-        't_final': 200,  # length of simulation time in seconds
-        'fixed_dt': 2,
+        't_final': 500,  # length of simulation time in seconds
+        'fixed_dt': 5,
         # 1/multiplication factor for sigma (conductivity) to reduce current
         # diffusion timescale to be closer to heat diffusion timescale.
         'resistivity_multiplier': 1,
@@ -134,7 +134,7 @@ CONFIG = {
         'T_e_ped': 1.0,  # electron pedestal top temperature in keV for T_e
         'n_e_ped_is_fGW': False, # used to be True
         
-        'n_e_ped': {0: 0.1e19, 80: 0.5e19},
+        'n_e_ped': {0: 1e19, 80: 6e19},
         'rho_norm_ped_top': 0.9,  # set ped top location in normalized radius
     },
     'transport': {
@@ -196,7 +196,10 @@ CONFIG = {
 geqdsk_arr_rampup = [f'eqdsk_{i}.eqdsk' for i in range(10)]  # t=0 to t=80 in 10s increments
 geqdsk_arr_flattop = [f'eqdsk_9.eqdsk']*11
 geqdsk_arr = geqdsk_arr_rampup + geqdsk_arr_flattop
-eqtimes = np.linspace(0, 200, len(geqdsk_arr))
+
+eqtimes_rampup = np.linspace(0, 80, 9)
+eqtimes_flattop = np.linspace(80,500, 11)
+eqtimes = np.concatenate((eqtimes_rampup, eqtimes_flattop))
 
 mysim = TokTox(t_init=0, t_final=CONFIG['numerics']['t_final'], eqtimes=eqtimes, g_eqdsk_arr=geqdsk_arr, dt=CONFIG['numerics']['fixed_dt'], last_surface_factor=0.99)
 mysim.load_config(CONFIG)
@@ -205,4 +208,4 @@ coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3
 target_currents = {coil: 0.0 for coil in coil_names}
 mysim.set_coil_reg(targets=target_currents, strict_limit=1.0E8)
 
-mysim.fly(save_states=True, graph=True, run_name='tmp', max_step=5)
+mysim.fly(save_states=True, graph=True, run_name='tmp', max_step=10)
