@@ -1,10 +1,13 @@
+import sys
+sys.path.append('/Users/johnl/Desktop/discharge-model')
+
 import os
 import json
 
 import numpy as np
-from model import DISMAL
+from toktox import TokTox
 
-eqdsk_names = sorted(os.listdir('163303/eqs_safe'))
+eqdsk_names = sorted(os.listdir('163303/eqs_200'))
 eqdsk = []
 eqtimes = []
 for fname in eqdsk_names:
@@ -14,7 +17,7 @@ for fname in eqdsk_names:
     _, t = tag.split('-')
     t = float(t) / 1e3
     eqtimes.append(t)
-    eqdsk.append(f'163303/eqs_safe/{fname}')
+    eqdsk.append(f'163303/eqs_200/{fname}')
 eqtimes_1 = eqtimes.copy()
 
 prof_names = sorted(os.listdir('163303/profs'))
@@ -27,7 +30,7 @@ for fname in prof_names:
     if t <= 1.0:
         prof_t.append(t)
 
-extra_eq_names = sorted(os.listdir('163303/eqs_cocos2'))
+extra_eq_names = sorted(os.listdir('163303/eqs'))
 for fname in extra_eq_names:
     if 'OMFIT' in fname or 'DS_Store' in fname:
         continue
@@ -37,7 +40,7 @@ for fname in extra_eq_names:
     eqtimes.append(t)
 alltimes = np.append(prof_t[::10], eqtimes)
 
-mysim = DISMAL(0.1, 5.0, eqtimes_1, eqdsk, dt=1.0E-2, times=alltimes)
+mysim = TokTox(0.1, 5.0, eqtimes_1, eqdsk, dt=1.0E-2, times=alltimes)
 mysim.initialize_gs('163303/DIIID_mesh.h5')
 
 target_currents = {
@@ -188,7 +191,7 @@ Ti_init = {0.1: Ti[0.1]}
 ne_init = {0.1: ne[0.1]}
 mysim.set_Te(Te_init)
 mysim.set_Ti(Ti_init)
-mysim.set_density(ne_init)
+mysim.set_ne(ne_init)
 # mysim.set_density(ne)
 # mysim.set_evolve(density=False)
 

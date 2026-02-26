@@ -39,7 +39,7 @@ class MyEncoder(json.JSONEncoder):
 class TokTox:
     '''! TokaMaker + TORAX Coupled Pulse Simulation Code'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.99, n_rho=50, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -622,14 +622,29 @@ class TokTox:
             'geometry_type': 'eqdsk',
             'geometry_directory': os.getcwd(),
             'last_surface_factor': self._last_surface_factor,
-            'n_surfaces': 100,
+            'n_surfaces': 50,
             'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
-            'geometry_configs': {
-                t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
-            },
+            # 'geometry_configs': {
+            #     t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
+            # },
             'n_rho': self._n_rho, 
         }
-        if step > 1:
+        if step == 1:
+            self._print_out('hello')
+            eq_safe = []
+            t_safe = []
+            for i, t in enumerate(self._eqtimes):
+                eq = self._init_files[i]
+                if self._test_eqdsk(eq):
+                    self._print_out(f'Using eqdsk at t={t}')
+                    eq_safe.append(eq)
+                    t_safe.append(t)
+                else:
+                    self._print_out(f'Skipping eqdsk at t={t}')
+            myconfig['geometry']['geometry_configs'] = {
+                t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
+            }
+        else:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
             # For times where TM failed, fall back to the nearest seed EQDSK and
             eqtimes_arr = np.array(self._eqtimes)
@@ -745,7 +760,8 @@ class TokTox:
             try:
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
-            except:
+            except Exception as e:
+                self._print_out(e)
                 return False
 
     def _run_transport(self, step, graph=False):
