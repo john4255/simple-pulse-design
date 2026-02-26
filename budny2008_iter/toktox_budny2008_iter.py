@@ -1,4 +1,7 @@
 import numpy as np
+import sys
+sys.path.append('/Users/fsheehan/fsheehan_drive/02_areas/Columbia/01_Columbia_projects/2026-01_TokTox/2026-01-08_simple-pulse-design')
+
 from toktox import TokTox
 from omfit_classes.utils_fusion import Hmode_profiles, Lmode_profiles
 
@@ -17,12 +20,12 @@ n_rampup_eqdsk = 9
 # ~18s, then step through i=1..9 more gradually.  This keeps the GS constraint
 # (LCFS shape) compatible with the low pressure TORAX produces for pure-Ohmic rampup.
 _ramp_eqdsks = (
-    ['budny2008_iter/budny2008_iter_i=0.eqdsk'] * 3         # t=0,8.9,17.8  – circular
-    + [f'budny2008_iter/budny2008_iter_i={i}.eqdsk' for i in range(2, 8)]  # t=26.7..71.1
-    + ['budny2008_iter/budny2008_iter_i=9.eqdsk']           # t=80
+    ['budny2008_iter_i=0.eqdsk'] * 3         # t=0,8.9,17.8  – circular
+    + [f'budny2008_iter_i={i}.eqdsk' for i in range(2, 8)]  # t=26.7..71.1
+    + ['budny2008_iter_i=9.eqdsk']           # t=80
 )
 g_arr_rampup  = _ramp_eqdsks
-g_arr_flattop = [f'budny2008_iter/budny2008_iter_flattop.eqdsk'] * 10
+g_arr_flattop = [f'budny2008_iter_flattop.eqdsk'] * 10
 g_arr_rampdown = list(reversed(_ramp_eqdsks))
 g_arr = g_arr_rampup + g_arr_flattop + g_arr_rampdown
 

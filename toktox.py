@@ -315,6 +315,8 @@ class TokTox:
 
         self._targets = None
         self._baseconfig = None
+        self._tx_grid_type = None
+        self._tx_grid = None
         self._prof_mix_ratio = 1.0
         self._prof_smoothing = False
         self._eqdsk_skip = []
@@ -325,6 +327,18 @@ class TokTox:
         '''
         self._baseconfig = config
         
+    def set_tx_grid(self, type, grid):
+        r'''! Set TORAX grid type and grid points.
+        @param type Grid type ('n_rho' or 'face_centers').
+        @param grid Grid points (integer or np.array).
+        '''
+        self._tx_grid_type = type
+        self._tx_grid = grid
+        if type not in ['n_rho', 'face_centers']:
+            raise ValueError(f'Invalid grid type: {type}. Must be "n_rho" or "face_centers".')
+
+
+
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
         @param mesh Filename of reactor mesh.
@@ -627,8 +641,13 @@ class TokTox:
             'geometry_configs': {
                 t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
             },
-            'n_rho': self._n_rho, 
         }
+
+        if self._tx_grid_type == 'n_rho':
+            myconfig['geometry']['n_rho'] = self._tx_grid
+        elif self._tx_grid_type == 'face_centers':
+            myconfig['geometry']['face_centers'] = self._tx_grid
+
         if step > 1:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
             # For times where TM failed, fall back to the nearest seed EQDSK and

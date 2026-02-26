@@ -203,6 +203,12 @@ eqtimes = np.concatenate((eqtimes_rampup, eqtimes_flattop))
 
 mysim = TokTox(t_init=0, t_final=CONFIG['numerics']['t_final'], eqtimes=eqtimes, g_eqdsk_arr=geqdsk_arr, dt=CONFIG['numerics']['fixed_dt'], last_surface_factor=0.99)
 mysim.load_config(CONFIG)
+core_grid = np.linspace(0,0.8, 40)
+edge_grid = np.linspace(0.8,1.0, 40)[1:]
+tx_grid = np.concatenate((core_grid, edge_grid))
+mysim.set_tx_grid(type='face_centers', grid=tx_grid)
+
+
 mysim.initialize_gs('ITER_mesh.h5', vsc='VS')
 coil_names = ['CS3U', 'CS2U', 'CS1U', 'CS1L', 'CS2L', 'CS3L', 'PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'PF6']
 target_currents = {coil: 0.0 for coil in coil_names}
