@@ -642,17 +642,16 @@ class TokTox:
             'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
         }
         if step == 1:
-            self._print_out('hello')
             eq_safe = []
             t_safe = []
             for i, t in enumerate(self._eqtimes):
                 eq = self._init_files[i]
                 if self._test_eqdsk(eq):
-                    self._print_out(f'Using eqdsk at t={t}')
+                    self._print_out(f'\tTX: Using eqdsk at t={t}')
                     eq_safe.append(eq)
                     t_safe.append(t)
                 else:
-                    self._print_out(f'Skipping eqdsk at t={t}')
+                    self._print_out(f'\tTX: Skipping eqdsk at t={t}')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
             }
@@ -779,7 +778,7 @@ class TokTox:
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except Exception as e:
-                self._print_out(e)
+                # self._print_out(e)
                 return False
 
     def _run_transport(self, step, graph=False):
@@ -1085,6 +1084,7 @@ class TokTox:
                 err_flag = self._gs.solve()
                 print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
                 print(f'{equals} first solve succeeded!')
+                self._print_out(f'\tTM: Solve succeeded at t={t} (first attempt).')
                 solve_succeeded = True
             except Exception as e:
                 fail_msg = str(e)
@@ -1101,11 +1101,12 @@ class TokTox:
                     print(f'{equals}sign flipping worked!!')
 
                     solve_succeeded = True
+                    self._print_out(f'\tTM: Solve succeeded at t={t} (second attempt).')
                 except Exception as e2:
                     print(f'{equals} second solve didnt work :( — {e2}')
                     self._eqdsk_skip.append(eq_name)
                     skip_coil_update = True
-                    self._print_out(f'TM: Solve failed at t={t}.')
+                    self._print_out(f'\tTM: Solve failed at t={t}.')
                     solve_succeeded = False
             
             # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
