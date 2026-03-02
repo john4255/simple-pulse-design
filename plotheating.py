@@ -3,11 +3,13 @@ import numpy as np
 
 import json
 
-fname = 'tmp/res.json'
+fname = 'toktox_outputs/tmp/results/results.json'
 
 res = None
 with open(fname, 'r') as f:
     res = json.loads(f.read())
+
+max_t = res['E_fusion']['x'][-1]
 
 fig, ax = plt.subplots(3, 2) #, figsize=(20,10))
 
@@ -64,12 +66,12 @@ ax[1,1].plot(res['T_i_line_avg']['x'], res['T_i_line_avg']['y'], label='T_i')
 ax[1,1].grid(True)
 ax[1,1].legend()
 
-ax[0,0].set_xticks(np.linspace(0, 600, 7))
-ax[0,1].set_xticks(np.linspace(0, 600, 7))
-ax[1,0].set_xticks(np.linspace(0, 600, 7))
-ax[1,1].set_xticks(np.linspace(0, 600, 7))
-ax[2,0].set_xticks(np.linspace(0, 600, 7))
-ax[2,1].set_xticks(np.linspace(0, 600, 7))
+ax[0,0].set_xticks(np.linspace(0, max_t, 7))
+ax[0,1].set_xticks(np.linspace(0, max_t, 7))
+ax[1,0].set_xticks(np.linspace(0, max_t, 7))
+ax[1,1].set_xticks(np.linspace(0, max_t, 7))
+ax[2,0].set_xticks(np.linspace(0, max_t, 7))
+ax[2,1].set_xticks(np.linspace(0, max_t, 7))
 
 ax[0,0].set_xlabel('time (s)')
 ax[1,0].set_xlabel('time (s)')
