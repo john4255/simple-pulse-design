@@ -1072,11 +1072,6 @@ class TokTox:
                 err_flag = self._gs.solve()
                 print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
                 print(f'{equals} first solve succeeded!')
-                self._gs.save_eqdsk(eq_name,
-                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                    cocos=2, nr=200, nz=200)
-                self._gs_update(i)
-
                 solve_succeeded = True
             except Exception as e:
                 fail_msg = str(e)
@@ -1091,10 +1086,6 @@ class TokTox:
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
                     print(f'{equals}sign flipping worked!!')
-                    self._gs.save_eqdsk(eq_name,
-                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                    cocos=2, nr=200, nz=200)
-                    self._gs_update(i)
 
                     solve_succeeded = True
                 except Exception as e2:
@@ -1104,9 +1095,13 @@ class TokTox:
                     self._print_out(f'TM: Solve failed at t={t}.')
                     solve_succeeded = False
             
-            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
+            # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
             if solve_succeeded:
+                self._gs.save_eqdsk(eq_name,
+                    lcfs_pad=0.001,run_info='TokaMaker EQDSK',
+                    cocos=2, nr=200, nz=200, truncate_eq=False)
+                self._gs_update(i)
                 self._profile_plot(step, i, t)
 
                 if graph:
@@ -1117,6 +1112,8 @@ class TokTox:
                     ax.set_title(f't={self._times[i]}')
                     plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
                     plt.close(fig)
+                
+            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
             if self._prescribed_currents:
                 if i < len(self._times):

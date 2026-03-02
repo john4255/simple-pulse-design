@@ -1,8 +1,0 @@
----------------------------------------
----- Step 1 ---- 
-
-Step 1 TORAX:
-Step 1 TokaMaker:
-TM: Solve failed at t=1.0.
-TM: Solve failed at t=2.0.
-TM: Solve failed at t=10.0.
