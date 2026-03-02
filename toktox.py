@@ -640,17 +640,23 @@ class TokTox:
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 50,
             'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
-            'geometry_configs': {
-                t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
-            },
         }
-
-        if self._tx_grid_type == 'n_rho':
-            myconfig['geometry']['n_rho'] = self._tx_grid
-        elif self._tx_grid_type == 'face_centers':
-            myconfig['geometry']['face_centers'] = self._tx_grid
-
-        if step > 1:
+        if step == 1:
+            self._print_out('hello')
+            eq_safe = []
+            t_safe = []
+            for i, t in enumerate(self._eqtimes):
+                eq = self._init_files[i]
+                if self._test_eqdsk(eq):
+                    self._print_out(f'Using eqdsk at t={t}')
+                    eq_safe.append(eq)
+                    t_safe.append(t)
+                else:
+                    self._print_out(f'Skipping eqdsk at t={t}')
+            myconfig['geometry']['geometry_configs'] = {
+                t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
+            }
+        else:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
             # For times where TM failed, fall back to the nearest seed EQDSK and
             eqtimes_arr = np.array(self._eqtimes)
@@ -675,6 +681,12 @@ class TokTox:
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
             }
+
+        if self._tx_grid_type == 'n_rho':
+            myconfig['geometry']['n_rho'] = self._tx_grid
+        elif self._tx_grid_type == 'face_centers':
+            myconfig['geometry']['face_centers'] = self._tx_grid
+
 
         myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
             # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
