@@ -118,6 +118,8 @@ class TokTox:
         self._state['T_i'] = {}
         self._state['n_e'] = {}
         self._state['n_i'] = {}
+        self._state['f_GW'] = np.zeros(len(self._times))
+        self._state['f_GW_vol'] = np.zeros(len(self._times))
         self._state['ptot'] = {}
         self._state['ffpni_prof'] = {}
         self._state['ffpni_sub_prof'] = {}
@@ -315,6 +317,8 @@ class TokTox:
 
         self._targets = None
         self._baseconfig = None
+        self._tx_grid_type = None
+        self._tx_grid = None
         self._prof_mix_ratio = 1.0
         self._prof_smoothing = False
         self._eqdsk_skip = []
@@ -325,6 +329,18 @@ class TokTox:
         '''
         self._baseconfig = config
         
+    def set_tx_grid(self, type, grid):
+        r'''! Set TORAX grid type and grid points.
+        @param type Grid type ('n_rho' or 'face_centers').
+        @param grid Grid points (integer or np.array).
+        '''
+        self._tx_grid_type = type
+        self._tx_grid = grid
+        if type not in ['n_rho', 'face_centers']:
+            raise ValueError(f'Invalid grid type: {type}. Must be "n_rho" or "face_centers".')
+
+
+
     def initialize_gs(self, mesh, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
         @param mesh Filename of reactor mesh.
@@ -624,27 +640,17 @@ class TokTox:
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 50,
             'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
-            # 'geometry_configs': {
-            #     t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
-            # },
-            'n_rho': self._n_rho, 
+            'geometry_configs': {
+                t: {'geometry_file': self._init_files[i], 'cocos': 2} for i, t in enumerate(self._eqtimes)
+            },
         }
-        if step == 1:
-            self._print_out('hello')
-            eq_safe = []
-            t_safe = []
-            for i, t in enumerate(self._eqtimes):
-                eq = self._init_files[i]
-                if self._test_eqdsk(eq):
-                    self._print_out(f'Using eqdsk at t={t}')
-                    eq_safe.append(eq)
-                    t_safe.append(t)
-                else:
-                    self._print_out(f'Skipping eqdsk at t={t}')
-            myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
-            }
-        else:
+
+        if self._tx_grid_type == 'n_rho':
+            myconfig['geometry']['n_rho'] = self._tx_grid
+        elif self._tx_grid_type == 'face_centers':
+            myconfig['geometry']['face_centers'] = self._tx_grid
+
+        if step > 1:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
             # For times where TM failed, fall back to the nearest seed EQDSK and
             eqtimes_arr = np.array(self._eqtimes)
@@ -867,6 +873,11 @@ class TokTox:
         self._state['T_e'][i] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='state', normalize=False)
         self._state['n_i'][i] = self._pull_torax_onto_psi(data_tree, 'n_i', t, load_into_state='state', normalize=False)
         self._state['n_e'][i] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='state', normalize=False)
+        # ne_bar = data_tree.scalars.n_e_line_avg.sel(time=t, method='nearest').item()
+        # n_GW = self._state['Ip'][i] / (np.pi * self._state['a'][i]**2)  # GW density based on line-averaged density
+        # self._state['f_GW'][i] = ne_bar / n_GW if n_GW > 0 else 0.0
+        self._state['f_GW'][i] = data_tree.scalars.fgw_n_e_line_avg.sel(time=t, method='nearest').item()
+        self._state['f_GW_vol'][i] = data_tree.scalars.fgw_n_e_volume_avg.sel(time=t, method='nearest').item()
 
         self._state['ptot'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state', normalize=False)
 
@@ -1062,11 +1073,6 @@ class TokTox:
                 err_flag = self._gs.solve()
                 print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
                 print(f'{equals} first solve succeeded!')
-                self._gs.save_eqdsk(eq_name,
-                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                    cocos=2, nr=200, nz=200)
-                self._gs_update(i)
-
                 solve_succeeded = True
             except Exception as e:
                 fail_msg = str(e)
@@ -1081,10 +1087,6 @@ class TokTox:
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
                     print(f'{equals}sign flipping worked!!')
-                    self._gs.save_eqdsk(eq_name,
-                                    lcfs_pad=0.01,run_info='TokaMaker EQDSK',
-                                    cocos=2, nr=200, nz=200)
-                    self._gs_update(i)
 
                     solve_succeeded = True
                 except Exception as e2:
@@ -1094,9 +1096,13 @@ class TokTox:
                     self._print_out(f'TM: Solve failed at t={t}.')
                     solve_succeeded = False
             
-            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
+            # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
             if solve_succeeded:
+                self._gs.save_eqdsk(eq_name,
+                    lcfs_pad=0.001,run_info='TokaMaker EQDSK',
+                    cocos=2, nr=200, nz=200, truncate_eq=False)
+                self._gs_update(i)
                 self._profile_plot(step, i, t)
 
                 if graph:
@@ -1107,6 +1113,8 @@ class TokTox:
                     ax.set_title(f't={self._times[i]}')
                     plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
                     plt.close(fig)
+                
+            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -2067,6 +2075,12 @@ class TokTox:
         ne_edge_y = [self._state['n_e'][ii]['y'][-1] if ii in self._state.get('n_e', {}) else np.nan for ii in range(len(self._times))]
         ax_11.plot(ne_edge_x, ne_edge_y, ':', marker='s', markersize=3, label='n_e edge')
         ax_11.set_xlabel('Time [s]')
+        ax_11_02 = ax_11.twinx()
+        ax_11_02.plot(self._times, self._state['f_GW'], 'm--', markersize=3, label='f_GW_line') # f_GW using line averaged ne
+        ax_11_02.plot(self._times, self._state['f_GW_vol'], 'c--', markersize=3, label='f_GW_vol') # f_GW using volume averaged ne
+        ax_11_02.set_ylabel('f_GW')
+        ax_11_02.set_ylim(0,2)
+        ax_11_02.legend(fontsize=8)
         ax_11.legend(fontsize=8)
         ax_11.grid(True, alpha=0.3)
 
