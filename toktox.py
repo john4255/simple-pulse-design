@@ -13,7 +13,7 @@ from datetime import datetime
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
 from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
-from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
+from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 
 from baseconfig import BASE_CONFIG
 
@@ -1104,10 +1104,22 @@ class TokTox:
                     self._print_out(f'\tTM: Solve succeeded at t={t} (second attempt).')
                 except Exception as e2:
                     print(f'{equals} second solve didnt work :( — {e2}')
-                    self._eqdsk_skip.append(eq_name)
-                    skip_coil_update = True
-                    self._print_out(f'\tTM: Solve failed at t={t}.')
-                    solve_succeeded = False
+
+                    try:
+                        ffp_prof = create_power_flux_fun(N_PSI,1.5,2.0)
+                        pp_prof = create_power_flux_fun(N_PSI,4.0,1.0)
+
+                        self._gs.set_profiles(ffp_prof=ffp_prof, 
+                                          pp_prof=pp_prof,
+                                          ffp_NI_prof=self._state['ffpni_prof'][i])
+                        err_flag = self._gs.solve()
+                        solve_succeeded = True
+                        self._print_out(f'\tTM: Solve succeeded at t={t} (third attempt).')
+                    except Exception as e3:
+                        self._eqdsk_skip.append(eq_name)
+                        skip_coil_update = True
+                        self._print_out(f'\tTM: Solve failed at t={t}.')
+                        solve_succeeded = False
             
             # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
