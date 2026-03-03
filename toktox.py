@@ -2201,12 +2201,18 @@ class TokTox:
         ax_31.legend(fontsize=8)
         ax_31.grid(True, alpha=0.3)
 
-        # (3,2): B0
+        # (3,2): Flux Consumption (psi_lcfs change * 2pi)
         ax_32 = axes[3,2]
-        ax_32.set_title('B0 [T]')
-        ax_32.plot(self._times, self._state['B0'], '-o', markersize=3, label='B0')
+        ax_32.set_title('Flux Consumption [Wb]')
+        # Calculate flux consumption: (psi_lcfs(t) - psi_lcfs(t=0))*2pi
+        psi_lcfs_tm_arr = np.array(self._state['psi_lcfs_tm'])
+        psi_lcfs_tx_arr = np.array(self._state['psi_lcfs_tx'])
+        flux_consumption_tm = (psi_lcfs_tm_arr - psi_lcfs_tm_arr[0]) * 2 * np.pi
+        flux_consumption_tx = (psi_lcfs_tx_arr - psi_lcfs_tx_arr[0]) * 2 * np.pi
+        ax_32.plot(self._times, flux_consumption_tm, '-o', markersize=3, label='Flux consumption TM')
+        ax_32.plot(self._times, flux_consumption_tx, '--o', markersize=3, label='Flux consumption TX')
         ax_32.set_xlabel('Time [s]')
-        ax_32.set_ylabel('B0 [T]')
+        ax_32.set_ylabel('Flux Consumption [Wb]')
         ax_32.legend(fontsize=8)
         ax_32.grid(True, alpha=0.3)
 
