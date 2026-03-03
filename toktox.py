@@ -382,62 +382,62 @@ class TokTox:
         '''
         self._T_i = T_i
 
-    def set_pressure(self, p_profiles, n_e_profiles, Ti_Te_ratio=1.0):
-        r'''! Set initial T_e and T_i profiles from pressure and density profiles.
+    # def set_pressure(self, p_profiles, n_e_profiles, Ti_Te_ratio=1.0):
+    #     r'''! Set initial T_e and T_i profiles from pressure and density profiles.
         
-        Computes temperature from P = n_e * (T_e + T_i) = n_e * T_e * (1 + Ti_Te_ratio).
-        Sets both T_e and T_i as time-varying-array dicts for TORAX.
+    #     Computes temperature from P = n_e * (T_e + T_i) = n_e * T_e * (1 + Ti_Te_ratio).
+    #     Sets both T_e and T_i as time-varying-array dicts for TORAX.
         
-        @param p_profiles Pressure profiles in Pa. Dict of {time: {rho: P_Pa, ...}, ...}.
-        @param n_e_profiles Density profiles in m^-3. Dict of {time: {rho: n_e, ...}, ...}.
-        @param Ti_Te_ratio Ratio of T_i to T_e (default 1.0, i.e. T_i = T_e).
-        '''
-        eV_to_J = 1.602e-19  # 1 eV in Joules
-        keV_to_J = 1.602e-16  # 1 keV in Joules
+    #     @param p_profiles Pressure profiles in Pa. Dict of {time: {rho: P_Pa, ...}, ...}.
+    #     @param n_e_profiles Density profiles in m^-3. Dict of {time: {rho: n_e, ...}, ...}.
+    #     @param Ti_Te_ratio Ratio of T_i to T_e (default 1.0, i.e. T_i = T_e).
+    #     '''
+    #     eV_to_J = 1.602e-19  # 1 eV in Joules
+    #     keV_to_J = 1.602e-16  # 1 keV in Joules
         
-        T_e_profiles = {}
-        T_i_profiles = {}
+    #     T_e_profiles = {}
+    #     T_i_profiles = {}
         
-        for t in sorted(p_profiles.keys()):
-            p_dict = p_profiles[t]
-            n_dict = n_e_profiles[t] if t in n_e_profiles else n_e_profiles[max(k for k in n_e_profiles.keys() if k <= t)]
+    #     for t in sorted(p_profiles.keys()):
+    #         p_dict = p_profiles[t]
+    #         n_dict = n_e_profiles[t] if t in n_e_profiles else n_e_profiles[max(k for k in n_e_profiles.keys() if k <= t)]
             
-            T_e_prof = {}
-            T_i_prof = {}
+    #         T_e_prof = {}
+    #         T_i_prof = {}
             
-            # Get sorted rho values from pressure profile
-            rho_vals = sorted(p_dict.keys())
-            for rho in rho_vals:
-                P_Pa = p_dict[rho]
-                # Interpolate n_e at this rho from the density profile
-                n_rho_vals = sorted(n_dict.keys())
-                n_vals = [n_dict[r] for r in n_rho_vals]
-                n_e_at_rho = np.interp(rho, n_rho_vals, n_vals)
+    #         # Get sorted rho values from pressure profile
+    #         rho_vals = sorted(p_dict.keys())
+    #         for rho in rho_vals:
+    #             P_Pa = p_dict[rho]
+    #             # Interpolate n_e at this rho from the density profile
+    #             n_rho_vals = sorted(n_dict.keys())
+    #             n_vals = [n_dict[r] for r in n_rho_vals]
+    #             n_e_at_rho = np.interp(rho, n_rho_vals, n_vals)
                 
-                if n_e_at_rho > 0 and P_Pa > 0:
-                    # P = n_e * T_e * (1 + Ti_Te_ratio) in Joules
-                    # T_e [keV] = P / (n_e * (1 + ratio) * keV_to_J)
-                    T_e_keV = P_Pa / (n_e_at_rho * (1.0 + Ti_Te_ratio) * keV_to_J)
-                    T_i_keV = T_e_keV * Ti_Te_ratio
-                else:
-                    T_e_keV = 0.01  # minimum temperature
-                    T_i_keV = 0.01
+    #             if n_e_at_rho > 0 and P_Pa > 0:
+    #                 # P = n_e * T_e * (1 + Ti_Te_ratio) in Joules
+    #                 # T_e [keV] = P / (n_e * (1 + ratio) * keV_to_J)
+    #                 T_e_keV = P_Pa / (n_e_at_rho * (1.0 + Ti_Te_ratio) * keV_to_J)
+    #                 T_i_keV = T_e_keV * Ti_Te_ratio
+    #             else:
+    #                 T_e_keV = 0.01  # minimum temperature
+    #                 T_i_keV = 0.01
                 
-                T_e_prof[rho] = T_e_keV
-                T_i_prof[rho] = T_i_keV
+    #             T_e_prof[rho] = T_e_keV
+    #             T_i_prof[rho] = T_i_keV
             
-            T_e_profiles[t] = T_e_prof
-            T_i_profiles[t] = T_i_prof
+    #         T_e_profiles[t] = T_e_prof
+    #         T_i_profiles[t] = T_i_prof
         
-        self._T_e = T_e_profiles
-        self._T_i = T_i_profiles
+    #     self._T_e = T_e_profiles
+    #     self._T_i = T_i_profiles
         
-        self._print_out(f'set_pressure: Computed T_e and T_i from pressure and density at times {sorted(p_profiles.keys())}')
-        for t in sorted(p_profiles.keys()):
-            rho_0 = min(T_e_profiles[t].keys())
-            rho_1 = max(T_e_profiles[t].keys())
-            self._print_out(f'  t={t}: T_e(0)={T_e_profiles[t][rho_0]:.2f} keV, T_e(1)={T_e_profiles[t][rho_1]:.4f} keV, '
-                          f'T_i(0)={T_i_profiles[t][rho_0]:.2f} keV, T_i(1)={T_i_profiles[t][rho_1]:.4f} keV')
+    #     self._print_out(f'set_pressure: Computed T_e and T_i from pressure and density at times {sorted(p_profiles.keys())}')
+    #     for t in sorted(p_profiles.keys()):
+    #         rho_0 = min(T_e_profiles[t].keys())
+    #         rho_1 = max(T_e_profiles[t].keys())
+    #         self._print_out(f'  t={t}: T_e(0)={T_e_profiles[t][rho_0]:.2f} keV, T_e(1)={T_e_profiles[t][rho_1]:.4f} keV, '
+    #                       f'T_i(0)={T_i_profiles[t][rho_0]:.2f} keV, T_i(1)={T_i_profiles[t][rho_1]:.4f} keV')
 
     def set_Zeff(self, Zeff):
         r'''! Set plasma effective charge.
@@ -651,6 +651,8 @@ class TokTox:
                     eq_safe.append(eq)
                     t_safe.append(t)
                 else:
+                    if not self._skip_bad_init_eqdsks:
+                        raise ValueError(f'Bad initial gEQDSK at t={t}: {eq}')
                     self._print_out(f'\tTX: Skipping eqdsk at t={t}')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
@@ -2218,13 +2220,16 @@ class TokTox:
 
 
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp'):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
         @param graph Whether to display psi and profile graphs at each iteration (for testing).
         @param max_step Maximum number of simulation iterations allowed.
+        @param skip_bad_init_eqdsks If True, silently skip broken initial gEQDSK files; if False, raise an error when one is found.
         '''
+
+        self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         if run_name == 'tmp':
