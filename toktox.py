@@ -321,6 +321,14 @@ class TokTox:
         self._tx_grid = None
         self._prof_mix_ratio = 1.0
         self._prof_smoothing = False
+
+        # Ordered list of profile-transform tiers for GS solve fallback.
+        # Each entry: callable(ffp_prof, pp_prof, i) -> (ffp_prof, pp_prof)
+        self._profile_tiers = [
+            self._tier0_raw,
+            self._tier1_sign_flip,
+            # self._tier2_power_flux,
+        ]
         self._eqdsk_skip = []
     
     def load_config(self, config):
@@ -1000,6 +1008,7 @@ class TokTox:
         self._print_out(f"Step {step} TokaMaker:")
 
         self._eqdsk_skip = []
+        _step_tier_log = []
         for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
@@ -1008,6 +1017,7 @@ class TokTox:
             P0_target = abs(self._state['pax'][i])
             
             self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs 
+            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
 
             def mix_profiles(prev, curr, ratio=1.0):
@@ -1033,8 +1043,8 @@ class TokTox:
             #               'type': self._state['pp_prof'][i]['type']}
             # else:
             #     profile_strategy = f"mixed (ratio={self._prof_mix_ratio:.2f})"
-            ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
-            pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
+            # ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
+            # pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
             
             
             if self._prof_smoothing:
@@ -1044,17 +1054,6 @@ class TokTox:
             # Normalize profiles
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
-
-            self._gs.set_profiles(
-                ffp_prof=ffp_prof,
-                pp_prof=pp_prof,
-                # ffp_prof=self._state['ffp_prof'][i],
-                # ffp_prof=self._state['j_tot'][i], 
-                # pp_prof=self._state['pp_prof'][i],
-                ffp_NI_prof=self._state['ffpni_prof'][i]
-            )
-
-            self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
             lcfs = self._state['lcfs_geo'][i]
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
@@ -1078,50 +1077,40 @@ class TokTox:
 
             skip_coil_update = False
             eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step, i))
-            
-            fail_msg = None
+
             equals = '='*50
-            try:
-                print(f'{equals} trying first solve')
-                err_flag = self._gs.solve()
-                print(f'Ip_NI from TX = {self._state["Ip_NI_tx"][i]:.3f} A')
-                print(f'{equals} first solve succeeded!')
-                self._print_out(f'\tTM: Solve succeeded at t={t} (first attempt).')
-                solve_succeeded = True
-            except Exception as e:
-                fail_msg = str(e)
-                print(f'\t{equals} GS solve with raw TX profiles failed: {e}')
-                
+            solve_succeeded = False
+            tier_attempts = []
+
+            ffp_prof_raw = copy.deepcopy(ffp_prof)
+            pp_prof_raw  = copy.deepcopy(pp_prof)
+
+            for tier_idx, tier_fn in enumerate(self._profile_tiers):
+                tier_name = tier_fn.__doc__ or tier_fn.__name__
+                ffp_tier, pp_tier = tier_fn(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
                 try:
-                    print(f'{equals} trying second solve')
-                    ffp_prof = self.tier1_sign_flip(ffp_prof)
-                    pp_prof = self.tier1_sign_flip(pp_prof)
-                    self._gs.set_profiles(ffp_prof=ffp_prof, 
-                                          pp_prof=pp_prof,
+                    print(f'{equals} trying tier {tier_idx} solve ({tier_name})')
+                    self._gs.set_profiles(ffp_prof=ffp_tier, pp_prof=pp_tier,
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
-                    print(f'{equals}sign flipping worked!!')
-
+                    print(f'{equals} tier {tier_idx} solve succeeded!')
+                    self._print_out(f'\tTM: Solve succeeded at t={t} (tier {tier_idx}: {tier_name}).')
+                    tier_attempts.append({'tier': tier_idx, 'name': tier_name,
+                                          'ffp': ffp_tier, 'pp': pp_tier,
+                                          'succeeded': True, 'error': None})
+                    ffp_prof, pp_prof = ffp_tier, pp_tier
                     solve_succeeded = True
-                    self._print_out(f'\tTM: Solve succeeded at t={t} (second attempt).')
-                except Exception as e2:
-                    print(f'{equals} second solve didnt work :( — {e2}')
+                    break
+                except Exception as e:
+                    print(f'\t{equals} tier {tier_idx} solve failed: {e}')
+                    tier_attempts.append({'tier': tier_idx, 'name': tier_name,
+                                          'ffp': ffp_tier, 'pp': pp_tier,
+                                          'succeeded': False, 'error': str(e)})
 
-                    try:
-                        ffp_prof = create_power_flux_fun(N_PSI,1.5,2.0)
-                        pp_prof = create_power_flux_fun(N_PSI,4.0,1.0)
-
-                        self._gs.set_profiles(ffp_prof=ffp_prof, 
-                                          pp_prof=pp_prof,
-                                          ffp_NI_prof=self._state['ffpni_prof'][i])
-                        err_flag = self._gs.solve()
-                        solve_succeeded = True
-                        self._print_out(f'\tTM: Solve succeeded at t={t} (third attempt).')
-                    except Exception as e3:
-                        self._eqdsk_skip.append(eq_name)
-                        skip_coil_update = True
-                        self._print_out(f'\tTM: Solve failed at t={t}.')
-                        solve_succeeded = False
+            if not solve_succeeded:
+                self._eqdsk_skip.append(eq_name)
+                skip_coil_update = True
+                self._print_out(f'\tTM: Solve failed at t={t} (all tiers attempted).')
             
             # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
@@ -1141,7 +1130,15 @@ class TokTox:
                     plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
                     plt.close(fig)
                 
-            self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
+            self._tm_diagnostic_plot(step, i, t, tier_attempts, solve_succeeded)
+
+            _winning = next((a for a in tier_attempts if a['succeeded']), None)
+            _step_tier_log.append({
+                'i': i, 't': t,
+                'succeeded': solve_succeeded,
+                'tier': _winning['tier'] if _winning else None,
+                'tier_name': _winning['name'] if _winning else None,
+            })
 
             if self._prescribed_currents:
                 if i < len(self._times):
@@ -1151,16 +1148,39 @@ class TokTox:
                 self.set_coil_reg(targets=coil_targets)
 
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
-        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:]) 
+        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
+
+        self._gs_step_summary_plot(step, _step_tier_log)
 
         return consumed_flux, consumed_flux_integral
         
-    def tier1_sign_flip(self, _ffp_prof):
-        y = _ffp_prof['y']
-        sign = 1 if np.sum(y > 0) >= np.sum(y < 0) else -1
-        y_new = np.clip(y, 0, None) if sign > 0 else np.clip(y, None, 0)
-        return {**_ffp_prof, 'y': y_new}
+    # ── Profile tier functions ──────────────────────────────────────────
+    # Each tier takes (self, ffp_prof, pp_prof, i) and returns (ffp_prof, pp_prof).
+    # All tiers receive deep copies of the raw TORAX profiles (not cumulative).
+    # Tier 0 is always identity. Add new tiers by appending to self._profile_tiers.
 
+    def _tier0_raw(self, ffp_prof, pp_prof, i):
+        r'''! Raw TORAX profiles passed through unchanged.'''
+        return ffp_prof, pp_prof
+
+    def _tier1_sign_flip(self, ffp_prof, pp_prof, i):
+        r'''! Sign-flip clipping: clip each profile to its dominant sign.'''
+        def _clip(prof):
+            y = prof['y']
+            sign = 1 if np.sum(y > 0) >= np.sum(y < 0) else -1
+            y_new = np.clip(y, 0, None) if sign > 0 else np.clip(y, None, 0)
+            return {**prof, 'y': y_new}
+        return _clip(ffp_prof), _clip(pp_prof)
+
+    def _tier2_power_flux(self, ffp_prof, pp_prof, i):
+        r'''! Generic power-flux shape, sign matched to raw profile means.'''
+        ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
+        pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
+        ffp_out = create_power_flux_fun(N_PSI, 1.5, 2.0)
+        pp_out  = create_power_flux_fun(N_PSI, 4.0, 1.0)
+        ffp_out = {**ffp_out, 'y': ffp_out['y'] * ffp_sign}
+        pp_out  = {**pp_out,  'y': pp_out['y']  * pp_sign}
+        return ffp_out, pp_out
 
     def _gs_update(self, i):
         r'''! Update internal state and coil current results based on results of GS solver.
@@ -1184,8 +1204,15 @@ class TokTox:
         self._state['psi_axis_tm'][i] = self._gs.psi_bounds[1] 
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
-
-        self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
+        try:
+            self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
+        except ValueError:
+            # TokaMaker wrapper raises ValueError for any negative Vloop, including the
+            # physically valid case where Ip_NI > Ip (NI current exceeds total plasma current),
+            # which makes the denominator (itor - Ip_NI) negative.  Fall back to TORAX vloop.
+            print(f'\tWARNING: calc_loopvoltage failed at t-idx {i} '
+                  f'(likely Ip_NI > Ip); using TORAX vloop as fallback.')
+            self._state['vloop_tm'][i] = float(self._state['vloop_tx'][i])
         
         # store TokaMaker pressure profile from get_profiles()
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
@@ -1601,22 +1628,42 @@ class TokTox:
         plt.close(fig)
 
 
-    def _tm_diagnostic_plot(self, step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=None):
+    def _tm_diagnostic_plot(self, step, i, t, tier_attempts, solve_succeeded):
         r'''! Create and save a compact TokaMaker input/output diagnostic plot.
 
+        Plots all attempted tier profiles, highlighting which succeeded and which failed.
         Both success and failure saves go to tm_plots/. Filename prefix tm_OK_ vs tm_FAIL_
         and suptitle color (green/red) distinguish the two cases.
 
-        Tables include three columns: Init EQDSK | TORAX | TokaMaker (success only).
-
-        @param step Current iteration step number.
-        @param i   Time index within self._times.
-        @param t   Physical time value (s).
-        @param ffp_prof  Normalized FF\' profile dict passed into TokaMaker.
-        @param pp_prof   Normalized p\' profile dict passed into TokaMaker.
-        @param solve_succeeded Whether TokaMaker solve succeeded.
-        @param fail_msg Failure exception message string (only used when solve failed).
+        @param step          Current iteration step number.
+        @param i             Time index within self._times.
+        @param t             Physical time value (s).
+        @param tier_attempts List of dicts from the tier loop: {tier, name, ffp, pp, succeeded, error}.
+        @param solve_succeeded Whether any tier succeeded.
         '''
+
+        # Extract winning / last-attempted profiles for scalar tables and TM output panels
+        _winning = next((a for a in tier_attempts if a['succeeded']), None)
+        _last    = tier_attempts[-1] if tier_attempts else {}
+        ffp_prof = _winning['ffp'] if _winning else _last.get('ffp')
+        pp_prof  = _winning['pp']  if _winning else _last.get('pp')
+        fail_msg = _last.get('error') if not solve_succeeded else None
+
+        # Color/style helper: plots every attempted tier on ax for profile key 'ffp' or 'pp'
+        _tier_colors = plt.cm.tab10.colors
+        def _plot_tiers(ax, key, seed_x=None, seed_y=None, seed_label=None):
+            for attempt in tier_attempts:
+                color = _tier_colors[attempt['tier'] % len(_tier_colors)]
+                if attempt['succeeded']:
+                    ax.plot(attempt[key]['x'], attempt[key]['y'],
+                            color='forestgreen', linewidth=2.5, zorder=5,
+                            label=f"Tier {attempt['tier']}: {attempt['name']} \u2713")
+                else:
+                    ax.plot(attempt[key]['x'], attempt[key]['y'],
+                            color=color, linewidth=1.2, linestyle='--', alpha=0.6,
+                            label=f"Tier {attempt['tier']}: {attempt['name']} \u2717")
+            if seed_x is not None:
+                ax.plot(seed_x, seed_y, 'k--', linewidth=1.5, alpha=0.7, label=seed_label)
 
         def render_table(ax, rows, title):
             """Render a table on a matplotlib axis. rows[0] is the header row."""
@@ -1702,21 +1749,19 @@ class TokTox:
             ax_tbl1   = fig.add_subplot(gs_layout[0, 4:6])
             ax_tbl2   = fig.add_subplot(gs_layout[1:3, 4:6])
 
-            # TX input plots
-            ax_ffp_tx.plot(ffp_prof['x'], ffp_prof['y'], 'b-', linewidth=2, label="FF\' total (norm)")
+            # TX input plots — all attempted tiers
+            _plot_tiers(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
             ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
                            'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp_tx.plot(_seed_psi_n, _seed_ffp_norm, 'k--', linewidth=1.5, alpha=0.7, label="FF\' seed EQDSK (norm)")
-            ax_ffp_tx.set_title("FF\' input to TM (normalized)", fontsize=10)
+            ax_ffp_tx.set_title("FF\' tried tiers (normalized)", fontsize=10)
             ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
             ax_ffp_tx.set_ylabel("FF\' (norm / real)")
             ax_ffp_tx.legend(fontsize=8)
             ax_ffp_tx.grid(True, alpha=0.3)
             ax_ffp_tx.axhline(0, color='k', linewidth=0.5)
 
-            ax_pp_tx.plot(pp_prof['x'], pp_prof['y'], 'b-', linewidth=2, label="p\' total (norm)")
-            ax_pp_tx.plot(_seed_psi_n, _seed_pp_norm, 'k--', linewidth=1.5, alpha=0.7, label="p\' seed EQDSK (norm)")
-            ax_pp_tx.set_title("p\' input to TM (normalized)", fontsize=10)
+            _plot_tiers(ax_pp_tx, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
+            ax_pp_tx.set_title("p\' tried tiers (normalized)", fontsize=10)
             ax_pp_tx.set_xlabel(r'$\hat{\psi}$')
             ax_pp_tx.set_ylabel("p\' (norm)")
             ax_pp_tx.legend(fontsize=8)
@@ -1801,20 +1846,18 @@ class TokTox:
             ax_tbl2 = fig.add_subplot(gs_layout[1, 2:4])
             ax_fail = fig.add_subplot(gs_layout[2, 2:4])
 
-            ax_ffp.plot(ffp_prof['x'], ffp_prof['y'], 'b-', linewidth=2, label="FF\' total (norm)")
+            _plot_tiers(ax_ffp, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
             ax_ffp.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
                         'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp.plot(_seed_psi_n, _seed_ffp_norm, 'k--', linewidth=1.5, alpha=0.7, label="FF\' seed EQDSK (norm)")
-            ax_ffp.set_title("FF\' input to TM (normalized)", fontsize=10)
+            ax_ffp.set_title("FF\' tried tiers (normalized)", fontsize=10)
             ax_ffp.set_xlabel(r'$\hat{\psi}$')
             ax_ffp.set_ylabel("FF\' (norm / real)")
             ax_ffp.legend(fontsize=8)
             ax_ffp.grid(True, alpha=0.3)
             ax_ffp.axhline(0, color='k', linewidth=0.5)
 
-            ax_pp.plot(pp_prof['x'], pp_prof['y'], 'b-', linewidth=2, label="p\' total (norm)")
-            ax_pp.plot(_seed_psi_n, _seed_pp_norm, 'k--', linewidth=1.5, alpha=0.7, label="p\' seed EQDSK (norm)")
-            ax_pp.set_title("p\' input to TM (normalized)", fontsize=10)
+            _plot_tiers(ax_pp, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
+            ax_pp.set_title("p\' tried tiers (normalized)", fontsize=10)
             ax_pp.set_xlabel(r'$\hat{\psi}$')
             ax_pp.set_ylabel("p\' (norm)")
             ax_pp.legend(fontsize=8)
@@ -1849,6 +1892,66 @@ class TokTox:
             )
             out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{step:03}.{i:03}_FAIL.png')
 
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+
+    def _gs_step_summary_plot(self, step, step_tier_log):
+        r'''! Save a summary figure for the completed GS step showing per-timestep solve outcomes.
+
+        Each row is a timestep. Columns: time index, time (s), outcome (SUCCESS Tier N / FAILED).
+        Color-coded green for success, red for failure.
+
+        @param step          Current iteration step number.
+        @param step_tier_log List of dicts {i, t, succeeded, tier, tier_name} from _run_gs.
+        '''
+        n = len(step_tier_log)
+        if n == 0:
+            return
+
+        fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * n + 1.5)))
+        ax.axis('off')
+
+        col_labels = ['t-idx', 't (s)', 'Outcome', 'Tier']
+        rows = []
+        cell_colors = []
+        for entry in step_tier_log:
+            if entry['succeeded']:
+                outcome = 'SUCCESS'
+                tier_str = f"{entry['tier']}: {entry['tier_name']}"
+                row_color = ['#d4edda'] * 4
+            else:
+                outcome = 'FAILED'
+                tier_str = '\u2014'
+                row_color = ['#f8d7da'] * 4
+            rows.append([str(entry['i']), f"{entry['t']:.3f}", outcome, tier_str])
+            cell_colors.append(row_color)
+
+        tbl = ax.table(
+            cellText=rows,
+            colLabels=col_labels,
+            cellColours=cell_colors,
+            loc='center', cellLoc='center',
+            bbox=[0.0, 0.0, 1.0, 1.0],
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(1, 1.4)
+        for (row, col), cell in tbl.get_celld().items():
+            if row == 0:
+                cell.set_facecolor('#d0e4f7')
+                cell.set_text_props(fontweight='bold')
+
+        n_ok   = sum(1 for e in step_tier_log if e['succeeded'])
+        n_fail = n - n_ok
+        plt.suptitle(
+            f'GS Step {step} Summary \u2014 {n_ok}/{n} timesteps succeeded, {n_fail} failed',
+            fontsize=12, fontweight='bold',
+            color='darkgreen' if n_fail == 0 else ('darkred' if n_ok == 0 else 'darkorange'),
+        )
+
+        os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
+        out_path = os.path.join(self._out_dir, 'tm_plots', f'step_{step:03}_summary.png')
         plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
