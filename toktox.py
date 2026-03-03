@@ -322,8 +322,6 @@ class TokTox:
         self._baseconfig = None
         self._tx_grid_type = None
         self._tx_grid = None
-        self._prof_mix_ratio = 1.0
-        self._prof_smoothing = False
 
         self._eqdsk_skip = []
     
@@ -668,12 +666,6 @@ class TokTox:
     
     def set_validation_density(self, ne):
         self._validation_ne = ne
-    
-    def set_prof_mix_ratio(self, ratio):
-        self._prof_mix_ratio = ratio
-    
-    def set_prof_smoothing(self, smoothing):
-        self._prof_smoothing = smoothing
 
     def _pull_torax_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'): # TODO adjust interpolation to account for last_surface_factor<1
         r'''! Load TORAX variable onto psi_norm grid.
@@ -1142,34 +1134,6 @@ class TokTox:
             
             self._gs.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs 
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
-
-
-            # def mix_profiles(prev, curr, ratio=1.0):
-            #     my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
-            #     for i, x in enumerate(curr['x']):
-            #         my_prof['x'][i] = x
-            #         my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
-            #     return my_prof
-
-            # def make_smooth(x, y):
-            #     spline = make_smoothing_spline(x, y)
-            #     smoothed = spline(x)
-            #     return smoothed
-
-            # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet)
-            # profile_strategy = "original gEQDSK"
-            # if step == 1:
-            #     ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(), 
-            #                'y': self._state['ffp_prof'][i]['y'].copy(), 
-            #                'type': self._state['ffp_prof'][i]['type']}
-            #     pp_prof = {'x': self._state['pp_prof'][i]['x'].copy(), 
-            #               'y': self._state['pp_prof'][i]['y'].copy(), 
-            #               'type': self._state['pp_prof'][i]['type']}
-            # else:
-            #     profile_strategy = f"mixed (ratio={self._prof_mix_ratio:.2f})"
-            # ffp_prof=mix_profiles(self._state['ffp_prof_save'][i], self._state['ffp_prof'][i], ratio=self._prof_mix_ratio)
-            # pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
-            
             
 
             ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(),
