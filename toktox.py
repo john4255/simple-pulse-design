@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import scipy.io as sio
 from scipy.interpolate import make_smoothing_spline
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 import torax
 import copy
 import json
@@ -129,7 +130,9 @@ class TokTox:
         self._state['ffp_prof_tm'] = {}
         self._state['pp_prof_tm'] = {}
         self._state['p_prof_tm'] = {} 
+        self._state['p_prof_tx'] = {}
         self._state['f_prof_tm'] = {}
+        
         self._state['test'] = {}
 
         # self._state['R_avg_tx'] = {}
@@ -277,10 +280,10 @@ class TokTox:
 
         self._normalize_to_nbar = False
 
-        self._nbi_heating = {t_init: 0, t_final: 0}
-        self._eccd_heating = {t_init: 0, t_final: 0}
-        self._eccd_loc = 0.1
-        self._nbi_loc = 0.25
+        self._nbi_heating = None
+        self._eccd_heating = None
+        self._eccd_loc = None
+        self._nbi_loc = None
         self._ohmic_power = None
 
         self._evolve_density = True
@@ -322,20 +325,133 @@ class TokTox:
         self._prof_mix_ratio = 1.0
         self._prof_smoothing = False
 
-        # Ordered list of profile-transform tiers for GS solve fallback.
-        # Each entry: callable(ffp_prof, pp_prof, i) -> (ffp_prof, pp_prof)
-        self._profile_tiers = [
-            self._tier0_raw,
-            self._tier1_sign_flip,
-            # self._tier2_power_flux,
-        ]
         self._eqdsk_skip = []
     
     def load_config(self, config):
         r'''! Load a base config for torax.
+        
+        When a config is loaded, all settings in it override TokTox defaults.
+        Geometry is excluded (set dynamically by TokaMaker equilibria).
+        
         @param config Dictionary object to be converted to torax config.
         '''
         self._baseconfig = config
+        self._extract_config_to_attributes(config)
+        
+    def _extract_config_to_attributes(self, config):
+        r'''! Extract settings from a loaded config and set internal attributes.
+        
+        This ensures that loaded config values override TokTox defaults for all
+        settings except geometry (which is set dynamically by TokaMaker).
+        
+        @param config TORAX config dictionary
+        '''
+        # --- Profile conditions ---
+        pc = config.get('profile_conditions', {})
+        if 'n_e' in pc:
+            self._n_e = pc['n_e']
+        if 'T_i' in pc:
+            self._T_i = pc['T_i']
+        if 'T_e' in pc:
+            self._T_e = pc['T_e']
+        if 'normalize_n_e_to_nbar' in pc:
+            self._normalize_to_nbar = pc['normalize_n_e_to_nbar']
+        if 'nbar' in pc:
+            self._nbar = pc['nbar']
+        if 'n_e_right_bc' in pc:
+            self._ne_right_bc = pc['n_e_right_bc']
+        if 'T_i_right_bc' in pc:
+            self._Ti_right_bc = pc['T_i_right_bc']
+        if 'T_e_right_bc' in pc:
+            self._Te_right_bc = pc['T_e_right_bc']
+        
+        # --- Numerics (evolve flags) ---
+        num = config.get('numerics', {})
+        if 'evolve_density' in num:
+            self._evolve_density = num['evolve_density']
+        if 'evolve_current' in num:
+            self._evolve_current = num['evolve_current']
+        if 'evolve_ion_heat' in num:
+            self._evolve_Ti = num['evolve_ion_heat']
+        if 'evolve_electron_heat' in num:
+            self._evolve_Te = num['evolve_electron_heat']
+        
+        # --- Pedestal ---
+        ped = config.get('pedestal', {})
+        if 'set_pedestal' in ped:
+            self._set_pedestal = ped['set_pedestal']
+        if 'T_i_ped' in ped:
+            self._T_i_ped = ped['T_i_ped']
+        if 'T_e_ped' in ped:
+            self._T_e_ped = ped['T_e_ped']
+        if 'n_e_ped' in ped:
+            self._n_e_ped = ped['n_e_ped']
+        if 'rho_norm_ped_top' in ped:
+            self._ped_top = ped['rho_norm_ped_top']
+        
+        # --- Sources ---
+        src = config.get('sources', {})
+        
+        # ECRH/ECCD
+        ecrh = src.get('ecrh', {})
+        if 'P_total' in ecrh:
+            p_total = ecrh['P_total']
+            # Handle both dict and tuple (dict, mode) formats from MOSAIC
+            if isinstance(p_total, tuple) and len(p_total) >= 1:
+                p_total = p_total[0]
+            if isinstance(p_total, dict):
+                self._eccd_heating = p_total
+        if 'gaussian_location' in ecrh:
+            self._eccd_loc = ecrh['gaussian_location']
+        
+        # Generic heat (NBI proxy)
+        gen_heat = src.get('generic_heat', {})
+        if 'P_total' in gen_heat:
+            p_total = gen_heat['P_total']
+            # Handle both dict and tuple (dict, mode) formats from MOSAIC
+            if isinstance(p_total, tuple) and len(p_total) >= 1:
+                p_total = p_total[0]
+            if isinstance(p_total, dict):
+                self._nbi_heating = p_total
+        if 'gaussian_location' in gen_heat:
+            self._nbi_loc = gen_heat['gaussian_location']
+        
+        # Ohmic
+        ohmic = src.get('ohmic', {})
+        if 'prescribed_values' in ohmic:
+            pv = ohmic['prescribed_values']
+            # Handle both dict and tuple formats
+            if isinstance(pv, tuple) and len(pv) >= 1:
+                pv = pv[0]
+            if isinstance(pv, dict):
+                self._ohmic_power = pv
+        
+        # Gas puff
+        gp = src.get('gas_puff', {})
+        if 'S_total' in gp:
+            self._gp_s = gp['S_total']
+        if 'puff_decay_length' in gp:
+            self._gp_dl = gp['puff_decay_length']
+        
+        # --- Transport ---
+        trn = config.get('transport', {})
+        if 'chi_min' in trn:
+            self._chi_min = trn['chi_min']
+        if 'chi_max' in trn:
+            self._chi_max = trn['chi_max']
+        if 'D_e_min' in trn:
+            self._De_min = trn['D_e_min']
+        if 'D_e_max' in trn:
+            self._De_max = trn['D_e_max']
+        if 'V_e_min' in trn:
+            self._Ve_min = trn['V_e_min']
+        if 'V_e_max' in trn:
+            self._Ve_max = trn['V_e_max']
+        
+        # --- Plasma composition ---
+        pc_comp = config.get('plasma_composition', {})
+        if 'Z_eff' in pc_comp:
+            self._Zeff = pc_comp['Z_eff']
         
     def set_tx_grid(self, type, grid):
         r'''! Set TORAX grid type and grid points.
@@ -714,18 +830,24 @@ class TokTox:
         if self._Zeff:
             myconfig['plasma_composition']['Z_eff'] = self._Zeff
 
-        myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
-        myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
+        if self._eccd_loc:
+            myconfig['sources'].setdefault('ecrh', {})
+            myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
+            myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
 
         if self._ohmic_power:
+            myconfig['sources'].setdefault('ohmic', {})
             myconfig['sources']['ohmic']['mode'] = 'PRESCRIBED'
             myconfig['sources']['ohmic']['prescribed_values'] = self._ohmic_power
 
-        nbi_times, nbi_pow = zip(*self._nbi_heating.items())
-        myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
-        myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
-        myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
-        myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
+        if self._nbi_heating:
+            nbi_times, nbi_pow = zip(*self._nbi_heating.items())    
+            myconfig['sources'].setdefault('generic_heat', {})
+            myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
+            myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
+            myconfig['sources'].setdefault('generic_current', {})
+            myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
+            myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
         if self._T_i_ped:
             myconfig['pedestal']['T_i_ped'] = self._T_i_ped
@@ -874,6 +996,8 @@ class TokTox:
         self._state['pp_prof_tx'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state', normalize=False)
         self._state['pp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
 
+        self._state['p_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state', normalize=False)
+
         self._state['vloop_tx'][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
         
         self._state['q_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='state', normalize=False)
@@ -1008,7 +1132,7 @@ class TokTox:
         self._print_out(f"Step {step} TokaMaker:")
 
         self._eqdsk_skip = []
-        _step_tier_log = []
+        _step_level_log = []
         for i, t in enumerate(self._times):
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
@@ -1020,17 +1144,17 @@ class TokTox:
             self._gs.set_resistivity(eta_prof=self._state['eta_prof'][i])
 
 
-            def mix_profiles(prev, curr, ratio=1.0):
-                my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
-                for i, x in enumerate(curr['x']):
-                    my_prof['x'][i] = x
-                    my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
-                return my_prof
+            # def mix_profiles(prev, curr, ratio=1.0):
+            #     my_prof = {'x': np.zeros(len(curr['x'])), 'y': np.zeros(len(curr['x'])), 'type': 'linterp'}
+            #     for i, x in enumerate(curr['x']):
+            #         my_prof['x'][i] = x
+            #         my_prof['y'][i] = (1.0 - ratio) * prev['y'][i] + ratio * curr['y'][i]
+            #     return my_prof
 
-            def make_smooth(x, y):
-                spline = make_smoothing_spline(x, y)
-                smoothed = spline(x)
-                return smoothed
+            # def make_smooth(x, y):
+            #     spline = make_smoothing_spline(x, y)
+            #     smoothed = spline(x)
+            #     return smoothed
 
             # For step 1, use original profiles directly (no mixing since _prof_save doesn't exist yet)
             # profile_strategy = "original gEQDSK"
@@ -1047,10 +1171,14 @@ class TokTox:
             # pp_prof=mix_profiles(self._state['pp_prof_save'][i], self._state['pp_prof'][i], ratio=self._prof_mix_ratio)
             
             
-            if self._prof_smoothing:
-                ffp_prof['y'] = make_smooth(ffp_prof['x'], ffp_prof['y'])
-                pp_prof['y'] = make_smooth(pp_prof['x'], pp_prof['y'])
 
+            ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(),
+                           'y': self._state['ffp_prof'][i]['y'].copy(),
+                           'type': self._state['ffp_prof'][i]['type']}
+            pp_prof = {'x': self._state['pp_prof'][i]['x'].copy(),
+                          'y': self._state['pp_prof'][i]['y'].copy(),
+                          'type': self._state['pp_prof'][i]['type']}
+            
             # Normalize profiles
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
@@ -1080,37 +1208,59 @@ class TokTox:
 
             equals = '='*50
             solve_succeeded = False
-            tier_attempts = []
+            level_attempts = []
 
             ffp_prof_raw = copy.deepcopy(ffp_prof)
             pp_prof_raw  = copy.deepcopy(pp_prof)
+            
+            # Pre-calculate all level profiles
+            level_profiles = []
+            
+            # Level 0: raw
+            ffp_0, pp_0 = self._level0_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            level_profiles.append({'ffp': ffp_0, 'pp': pp_0, 'name': 'lv0: raw'})
+            
+            # Level 1: sign flip
+            ffp_1, pp_1 = self._level1_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: sign_flip'})
+            
+            # Level 2: pedestal smoothing (takes p_profile as input)
+            ffp_2, pp_2 = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i]), i)
+            level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
+            
+            # Level 3: power flux
+            # ffp_3, pp_3 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            # level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: power_flux'})
 
-            for tier_idx, tier_fn in enumerate(self._profile_tiers):
-                tier_name = tier_fn.__doc__ or tier_fn.__name__
-                ffp_tier, pp_tier = tier_fn(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            # Try each level
+            for level_idx, level_prof in enumerate(level_profiles):
+                level_name = level_prof['name']
+                ffp_level = level_prof['ffp']
+                pp_level = level_prof['pp']
                 try:
-                    print(f'{equals} trying tier {tier_idx} solve ({tier_name})')
-                    self._gs.set_profiles(ffp_prof=ffp_tier, pp_prof=pp_tier,
+                    print(f'{equals} trying level {level_idx} solve ({level_name})')
+                    self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
-                    print(f'{equals} tier {tier_idx} solve succeeded!')
-                    self._print_out(f'\tTM: Solve succeeded at t={t} (tier {tier_idx}: {tier_name}).')
-                    tier_attempts.append({'tier': tier_idx, 'name': tier_name,
-                                          'ffp': ffp_tier, 'pp': pp_tier,
+                    print(f'{equals} level {level_idx} solve succeeded!')
+                    self._print_out(f'\tTM: Solve succeeded at t={t} (level {level_idx}: {level_name}).')
+
+                    level_attempts.append({'level': level_idx, 'name': level_name,
+                                          'ffp': ffp_level, 'pp': pp_level,
                                           'succeeded': True, 'error': None})
-                    ffp_prof, pp_prof = ffp_tier, pp_tier
+                    ffp_prof, pp_prof = ffp_level, pp_level
                     solve_succeeded = True
                     break
                 except Exception as e:
-                    print(f'\t{equals} tier {tier_idx} solve failed: {e}')
-                    tier_attempts.append({'tier': tier_idx, 'name': tier_name,
-                                          'ffp': ffp_tier, 'pp': pp_tier,
+                    print(f'\t{equals} level {level_idx} solve failed: {e}')
+                    level_attempts.append({'level': level_idx, 'name': level_name,
+                                          'ffp': ffp_level, 'pp': pp_level,
                                           'succeeded': False, 'error': str(e)})
 
             if not solve_succeeded:
                 self._eqdsk_skip.append(eq_name)
                 skip_coil_update = True
-                self._print_out(f'\tTM: Solve failed at t={t} (all tiers attempted).')
+                self._print_out(f'\tTM: Solve failed at t={t} (all levels attempted).')
             
             # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
@@ -1130,14 +1280,16 @@ class TokTox:
                     plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
                     plt.close(fig)
                 
-            self._tm_diagnostic_plot(step, i, t, tier_attempts, solve_succeeded)
+            self._tm_diagnostic_plot(step, i, t, level_attempts, solve_succeeded)
 
-            _winning = next((a for a in tier_attempts if a['succeeded']), None)
-            _step_tier_log.append({
+            _winning = next((a for a in level_attempts if a['succeeded']), None)
+            _last_attempt = level_attempts[-1] if level_attempts else {}
+            _step_level_log.append({
                 'i': i, 't': t,
                 'succeeded': solve_succeeded,
-                'tier': _winning['tier'] if _winning else None,
-                'tier_name': _winning['name'] if _winning else None,
+                'level': _winning['level'] if _winning else None,
+                'level_name': _winning['name'] if _winning else None,
+                'error': _last_attempt.get('error') if not solve_succeeded else None,
             })
 
             if self._prescribed_currents:
@@ -1150,20 +1302,20 @@ class TokTox:
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
 
-        self._gs_step_summary_plot(step, _step_tier_log)
+        self._gs_step_summary_plot(step, _step_level_log)
 
         return consumed_flux, consumed_flux_integral
         
-    # ── Profile tier functions ──────────────────────────────────────────
-    # Each tier takes (self, ffp_prof, pp_prof, i) and returns (ffp_prof, pp_prof).
-    # All tiers receive deep copies of the raw TORAX profiles (not cumulative).
-    # Tier 0 is always identity. Add new tiers by appending to self._profile_tiers.
+    # ── Profile level functions ──────────────────────────────────────────
+    # Each level takes (self, ffp_prof, pp_prof, i) and returns (ffp_prof, pp_prof).
+    # All levels receive deep copies of the raw TORAX profiles (not cumulative).
+    # Level 0 is always identity. Add new levels by appending to self._profile_levels.
 
-    def _tier0_raw(self, ffp_prof, pp_prof, i):
+    def _level0_raw(self, ffp_prof, pp_prof, i):
         r'''! Raw TORAX profiles passed through unchanged.'''
         return ffp_prof, pp_prof
 
-    def _tier1_sign_flip(self, ffp_prof, pp_prof, i):
+    def _level1_sign_flip(self, ffp_prof, pp_prof, i):
         r'''! Sign-flip clipping: clip each profile to its dominant sign.'''
         def _clip(prof):
             y = prof['y']
@@ -1172,7 +1324,30 @@ class TokTox:
             return {**prof, 'y': y_new}
         return _clip(ffp_prof), _clip(pp_prof)
 
-    def _tier2_power_flux(self, ffp_prof, pp_prof, i):
+    def _level2_pedestal_smoothing(self, ffp_prof, p_prof, i):
+        r'''! Pedestal smoothing with Gaussian filter: smooth p profile and take derivative for pp_prof.'''
+        # Use provided p_profile, normalize it
+        p_prof_y = p_prof['y'].copy()
+        if p_prof_y[0] != 0:
+            p_prof_y = p_prof_y / p_prof_y[0]
+        
+        # Apply Gaussian filter for smoothing
+        sigma = 2.0  # smoothing parameter
+        p_smooth = gaussian_filter1d(p_prof_y, sigma=sigma)
+        
+        # Ensure pressure is 0 at edge (psi_N = 1)
+        p_smooth[-1] = 0.0
+        
+        # Take derivative to get pp_prof (pressure gradient)
+        pp_smooth = np.gradient(p_smooth, p_prof['x'])
+        
+        # Create output profiles
+        pp_out = {**p_prof, 'y': pp_smooth}
+        
+        # Return ffp_prof unchanged
+        return ffp_prof, pp_out
+
+    def _level3_power_flux(self, ffp_prof, pp_prof, i):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
         ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
         pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
@@ -1628,7 +1803,7 @@ class TokTox:
         plt.close(fig)
 
 
-    def _tm_diagnostic_plot(self, step, i, t, tier_attempts, solve_succeeded):
+    def _tm_diagnostic_plot(self, step, i, t, level_attempts, solve_succeeded):
         r'''! Create and save a compact TokaMaker input/output diagnostic plot.
 
         Plots all attempted tier profiles, highlighting which succeeded and which failed.
@@ -1638,30 +1813,35 @@ class TokTox:
         @param step          Current iteration step number.
         @param i             Time index within self._times.
         @param t             Physical time value (s).
-        @param tier_attempts List of dicts from the tier loop: {tier, name, ffp, pp, succeeded, error}.
-        @param solve_succeeded Whether any tier succeeded.
+        @param level_attempts List of dicts from the level loop: {level, name, ffp, pp, succeeded, error}.
+        @param solve_succeeded Whether any level succeeded.
         '''
 
         # Extract winning / last-attempted profiles for scalar tables and TM output panels
-        _winning = next((a for a in tier_attempts if a['succeeded']), None)
-        _last    = tier_attempts[-1] if tier_attempts else {}
+        _winning = next((a for a in level_attempts if a['succeeded']), None)
+        _last    = level_attempts[-1] if level_attempts else {}
         ffp_prof = _winning['ffp'] if _winning else _last.get('ffp')
         pp_prof  = _winning['pp']  if _winning else _last.get('pp')
         fail_msg = _last.get('error') if not solve_succeeded else None
 
-        # Color/style helper: plots every attempted tier on ax for profile key 'ffp' or 'pp'
-        _tier_colors = plt.cm.tab10.colors
-        def _plot_tiers(ax, key, seed_x=None, seed_y=None, seed_label=None):
-            for attempt in tier_attempts:
-                color = _tier_colors[attempt['tier'] % len(_tier_colors)]
+        # Color/style helper: plots every attempted level on ax for profile key 'ffp' or 'pp'
+        # Normalizes profiles by dividing by core value (first element)
+        _level_colors = plt.cm.tab10.colors
+        def _plot_levels(ax, key, seed_x=None, seed_y=None, seed_label=None):
+            for attempt in level_attempts:
+                color = _level_colors[attempt['level'] % len(_level_colors)]
+                # Normalize profile by dividing by core value (first element)
+                y_data = attempt[key]['y'].copy()
+                if y_data[0] != 0:
+                    y_data = y_data / y_data[0]
                 if attempt['succeeded']:
-                    ax.plot(attempt[key]['x'], attempt[key]['y'],
+                    ax.plot(attempt[key]['x'], y_data,
                             color='forestgreen', linewidth=2.5, zorder=5,
-                            label=f"Tier {attempt['tier']}: {attempt['name']} \u2713")
+                            label=f"Level {attempt['level']}: {attempt['name']} \u2713")
                 else:
-                    ax.plot(attempt[key]['x'], attempt[key]['y'],
+                    ax.plot(attempt[key]['x'], y_data,
                             color=color, linewidth=1.2, linestyle='--', alpha=0.6,
-                            label=f"Tier {attempt['tier']}: {attempt['name']} \u2717")
+                            label=f"Level {attempt['level']}: {attempt['name']} \u2717")
             if seed_x is not None:
                 ax.plot(seed_x, seed_y, 'k--', linewidth=1.5, alpha=0.7, label=seed_label)
 
@@ -1749,22 +1929,24 @@ class TokTox:
             ax_tbl1   = fig.add_subplot(gs_layout[0, 4:6])
             ax_tbl2   = fig.add_subplot(gs_layout[1:3, 4:6])
 
-            # TX input plots — all attempted tiers
-            _plot_tiers(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
+            # TX input plots — all attempted levels
+            _plot_levels(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
             ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
                            'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp_tx.set_title("FF\' tried tiers (normalized)", fontsize=10)
+            ax_ffp_tx.set_title("FF\' tried levels (normalized)", fontsize=10)
             ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
             ax_ffp_tx.set_ylabel("FF\' (norm / real)")
-            ax_ffp_tx.legend(fontsize=8)
+            ax_ffp_tx.set_ylim([0, 1])
+            ax_ffp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_ffp_tx.grid(True, alpha=0.3)
             ax_ffp_tx.axhline(0, color='k', linewidth=0.5)
 
-            _plot_tiers(ax_pp_tx, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
-            ax_pp_tx.set_title("p\' tried tiers (normalized)", fontsize=10)
+            _plot_levels(ax_pp_tx, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
+            ax_pp_tx.set_title("p\' tried levels (normalized)", fontsize=10)
             ax_pp_tx.set_xlabel(r'$\hat{\psi}$')
             ax_pp_tx.set_ylabel("p\' (norm)")
-            ax_pp_tx.legend(fontsize=8)
+            ax_pp_tx.set_ylim([0, 1])
+            ax_pp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_pp_tx.grid(True, alpha=0.3)
 
             ax_eta.plot(self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'], 'r-', linewidth=2)
@@ -1846,21 +2028,23 @@ class TokTox:
             ax_tbl2 = fig.add_subplot(gs_layout[1, 2:4])
             ax_fail = fig.add_subplot(gs_layout[2, 2:4])
 
-            _plot_tiers(ax_ffp, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
+            _plot_levels(ax_ffp, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
             ax_ffp.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
                         'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp.set_title("FF\' tried tiers (normalized)", fontsize=10)
+            ax_ffp.set_title("FF\' tried levels (normalized)", fontsize=10)
             ax_ffp.set_xlabel(r'$\hat{\psi}$')
             ax_ffp.set_ylabel("FF\' (norm / real)")
-            ax_ffp.legend(fontsize=8)
+            ax_ffp.set_ylim([0, 1])
+            ax_ffp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_ffp.grid(True, alpha=0.3)
             ax_ffp.axhline(0, color='k', linewidth=0.5)
 
-            _plot_tiers(ax_pp, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
-            ax_pp.set_title("p\' tried tiers (normalized)", fontsize=10)
+            _plot_levels(ax_pp, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
+            ax_pp.set_title("p\' tried levels (normalized)", fontsize=10)
             ax_pp.set_xlabel(r'$\hat{\psi}$')
             ax_pp.set_ylabel("p\' (norm)")
-            ax_pp.legend(fontsize=8)
+            ax_pp.set_ylim([0, 1])
+            ax_pp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_pp.grid(True, alpha=0.3)
 
             ax_eta.plot(self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'], 'r-', linewidth=2)
@@ -1896,38 +2080,46 @@ class TokTox:
         plt.close(fig)
 
 
-    def _gs_step_summary_plot(self, step, step_tier_log):
+    def _gs_step_summary_plot(self, step, step_level_log):
         r'''! Save a summary figure for the completed GS step showing per-timestep solve outcomes.
 
-        Each row is a timestep. Columns: time index, time (s), outcome (SUCCESS Tier N / FAILED).
-        Color-coded green for success, red for failure.
+        Each row is a timestep. Columns: time index, time (s), outcome (SUCCESS Level N / FAILED).
+        Color-coded green for success, red for failure. Includes a legend of available levels.
 
         @param step          Current iteration step number.
-        @param step_tier_log List of dicts {i, t, succeeded, tier, tier_name} from _run_gs.
+        @param step_level_log List of dicts {i, t, succeeded, level, level_name} from _run_gs.
         '''
-        n = len(step_tier_log)
+        n = len(step_level_log)
         if n == 0:
             return
 
-        fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * n + 1.5)))
-        ax.axis('off')
+        fig = plt.figure(figsize=(10, max(5, 0.4 * n + 3.5)))
+        gs = fig.add_gridspec(2, 1, height_ratios=[0.85, 0.15], hspace=0.4)
+        
+        ax_table = fig.add_subplot(gs[0])
+        ax_legend = fig.add_subplot(gs[1])
+        ax_table.axis('off')
+        ax_legend.axis('off')
 
-        col_labels = ['t-idx', 't (s)', 'Outcome', 'Tier']
+        col_labels = ['t-idx', 't (s)', 'Result']
         rows = []
         cell_colors = []
-        for entry in step_tier_log:
+        for entry in step_level_log:
             if entry['succeeded']:
-                outcome = 'SUCCESS'
-                tier_str = f"{entry['tier']}: {entry['tier_name']}"
-                row_color = ['#d4edda'] * 4
+                result = f"Lvl {entry['level']}"
+                row_color = ['#d4edda'] * 3
             else:
-                outcome = 'FAILED'
-                tier_str = '\u2014'
-                row_color = ['#f8d7da'] * 4
-            rows.append([str(entry['i']), f"{entry['t']:.3f}", outcome, tier_str])
+                # Abbreviate error message
+                error_msg = entry['error'] if entry['error'] else 'Unknown error'
+                if len(error_msg) > 50:
+                    result = error_msg[:47] + '...'
+                else:
+                    result = error_msg
+                row_color = ['#f8d7da'] * 3
+            rows.append([str(entry['i']), f"{entry['t']:.3f}", result])
             cell_colors.append(row_color)
 
-        tbl = ax.table(
+        tbl = ax_table.table(
             cellText=rows,
             colLabels=col_labels,
             cellColours=cell_colors,
@@ -1942,7 +2134,20 @@ class TokTox:
                 cell.set_facecolor('#d0e4f7')
                 cell.set_text_props(fontweight='bold')
 
-        n_ok   = sum(1 for e in step_tier_log if e['succeeded'])
+        # Create legend of available levels
+        level_descriptions = [
+            "Level 0: Raw TORAX profiles",
+            "Level 1: Sign-flip clipping",
+            "Level 2: Pedestal smoothing",
+            "Level 3: Power-flux shape",
+        ]
+        
+        legend_text = "Levels: " + " | ".join(level_descriptions)
+        ax_legend.text(0.5, 0.5, legend_text, ha='center', va='center', fontsize=9,
+                      transform=ax_legend.transAxes,
+                      bbox=dict(boxstyle='round,pad=0.8', facecolor='#f0f0f0', edgecolor='gray', linewidth=1))
+
+        n_ok   = sum(1 for e in step_level_log if e['succeeded'])
         n_fail = n - n_ok
         plt.suptitle(
             f'GS Step {step} Summary \u2014 {n_ok}/{n} timesteps succeeded, {n_fail} failed',
@@ -2209,7 +2414,7 @@ class TokTox:
         ax_11_02.plot(self._times, self._state['f_GW'], 'm--', markersize=3, label='f_GW_line') # f_GW using line averaged ne
         ax_11_02.plot(self._times, self._state['f_GW_vol'], 'c--', markersize=3, label='f_GW_vol') # f_GW using volume averaged ne
         ax_11_02.set_ylabel('f_GW')
-        ax_11_02.set_ylim(0,2)
+        ax_11_02.set_ylim(0,1)
         ax_11_02.legend(fontsize=8)
         ax_11.legend(fontsize=8)
         ax_11.grid(True, alpha=0.3)
