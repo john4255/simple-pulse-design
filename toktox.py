@@ -731,12 +731,14 @@ class TokTox:
         myconfig['numerics']['fixed_dt'] = self._dt
 
         # ── 5. Psi profile (always computed from TokaMaker state) ──────────
-        myconfig.setdefault('profile_conditions', {})
-        myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
-            # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
-            # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
-            # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
-            t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
+        # myconfig.setdefault('profile_conditions', {})
+        # myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
+        #     # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
+        #     # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
+        #     # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
+        #     t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
+
+        myconfig['profile_conditions']['initial_psi_mode'] = 'geometry'
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
         #    Only applied when the attribute is not None (i.e. the user made
@@ -897,6 +899,25 @@ class TokTox:
         # self._print_out(f'Step {self._current_step}: TX output (w/ /2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
 
         self._res_update(data_tree)
+
+
+
+        # power channels plot for testing
+        fig, ax = plt.subplots()
+        ax.set_title('Power channels [W]')
+        ax.plot(self._results['P_ohmic_e']['x'], self._results['P_ohmic_e']['y'], 'r-o', markersize=3, label='P_ohmic_e')
+        ax.plot(self._results['P_radiation_e']['x'], self._results['P_radiation_e']['y'], 'm--o', markersize=3, label='P_radiation_e')
+        ax.plot(self._results['P_SOL_total']['x'], self._results['P_SOL_total']['y'], 'c--o', markersize=3, label='P_SOL_total')
+        ax.plot(self._results['P_alpha_total']['x'], self._results['P_alpha_total']['y'], 'g-.o', markersize=3, label='P_alpha_total')
+        ax.plot(self._results['P_aux_total']['x'], self._results['P_aux_total']['y'], 'y-.o', markersize=3, label='P_aux_total')
+        ax.set_xlabel('Time [s]')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xbound(0, 1)
+        # ax_20.set_ylim(0,1E8)
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'torax_powers_{self._current_step}.png'), dpi=300)
+        plt.close(fig)
+
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(v_loops[0:], self._times[0:]) 
@@ -1156,7 +1177,7 @@ class TokTox:
             level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: sign_flip'})
             
             # Level 2: pedestal smoothing (takes p_profile as input)
-            ffp_2, pp_2 = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i]), i)
+            ffp_2, pp_2, p_2_smooth = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i]), i)
             level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
             
             # Level 3: power flux
@@ -1276,7 +1297,7 @@ class TokTox:
         pp_out = {**p_prof, 'y': pp_smooth}
         
         # Return ffp_prof unchanged
-        return ffp_prof, pp_out
+        return ffp_prof, pp_out, p_smooth
 
     def _level3_power_flux(self, ffp_prof, pp_prof, i):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
@@ -1311,6 +1332,7 @@ class TokTox:
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
         try:
+            print(f'TORAX Ip_NI = {self._state["Ip_NI_tx"][i]:.3f} A, \t loop voltage = {self._state["vloop_tx"][i]:.3f} V')
             self._state['vloop_tm'][i] = self._gs.calc_loopvoltage()
         except ValueError:
             # TokaMaker wrapper raises ValueError for any negative Vloop, including the
@@ -1861,12 +1883,12 @@ class TokTox:
 
             # TX input plots — all attempted levels
             _plot_levels(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
-            ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
-                           'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp_tx.set_title("FF\' tried levels (normalized)", fontsize=10)
+            # ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
+                        #    'g--', linewidth=1.5, label="FF\'_NI (real)")
+            ax_ffp_tx.set_title("FF\' tried levels (norm)", fontsize=10)
             ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
-            ax_ffp_tx.set_ylabel("FF\' (norm / real)")
-            ax_ffp_tx.set_ylim([0, 1])
+            ax_ffp_tx.set_ylabel("FF\' (norm)")
+            # ax_ffp_tx.set_ylim([0, 1])
             ax_ffp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_ffp_tx.grid(True, alpha=0.3)
             ax_ffp_tx.axhline(0, color='k', linewidth=0.5)
@@ -1875,7 +1897,7 @@ class TokTox:
             ax_pp_tx.set_title("p\' tried levels (normalized)", fontsize=10)
             ax_pp_tx.set_xlabel(r'$\hat{\psi}$')
             ax_pp_tx.set_ylabel("p\' (norm)")
-            ax_pp_tx.set_ylim([0, 1])
+            # ax_pp_tx.set_ylim([0, 1])
             ax_pp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_pp_tx.grid(True, alpha=0.3)
 
@@ -1959,21 +1981,21 @@ class TokTox:
             ax_fail = fig.add_subplot(gs_layout[2, 2:4])
 
             _plot_levels(ax_ffp, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
-            ax_ffp.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
-                        'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp.set_title("FF\' tried levels (normalized)", fontsize=10)
+            # ax_ffp.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
+            #             'g--', linewidth=1.5, label="FF\'_NI (real)")
+            ax_ffp.set_title("FF\' tried levels (norm)", fontsize=10)
             ax_ffp.set_xlabel(r'$\hat{\psi}$')
-            ax_ffp.set_ylabel("FF\' (norm / real)")
-            ax_ffp.set_ylim([0, 1])
+            ax_ffp.set_ylabel("FF\' (norm)")
+            # ax_ffp.set_ylim([0, 1])
             ax_ffp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_ffp.grid(True, alpha=0.3)
             ax_ffp.axhline(0, color='k', linewidth=0.5)
 
             _plot_levels(ax_pp, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
-            ax_pp.set_title("p\' tried levels (normalized)", fontsize=10)
+            ax_pp.set_title("p\' tried levels (norm)", fontsize=10)
             ax_pp.set_xlabel(r'$\hat{\psi}$')
             ax_pp.set_ylabel("p\' (norm)")
-            ax_pp.set_ylim([0, 1])
+            # ax_pp.set_ylim([0, 1])
             ax_pp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
             ax_pp.grid(True, alpha=0.3)
 
