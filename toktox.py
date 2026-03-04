@@ -732,9 +732,8 @@ class TokTox:
         else:
             return data_on_psi
         
-    def _get_torax_config(self, step):
+    def _get_torax_config(self):
         r'''! Generate config object for Torax simulation. Modifies BASE_CONFIG based on current simulation state.
-        @param step Iteration number of the Torax-Tokamaker simulation loop.
         @return Torax config object.
         '''
 
@@ -757,7 +756,7 @@ class TokTox:
             'n_surfaces': 50,
             'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
         }
-        if step == 1:
+        if self._current_step == 1:
             eq_safe = []
             t_safe = []
             for i, t in enumerate(self._eqtimes):
@@ -780,7 +779,7 @@ class TokTox:
             full_eqdsk_map = {}
             n_tm = 0
             for i, t in enumerate(self._times):
-                eqdsk = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step - 1, i))
+                eqdsk = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step - 1, i))
                 tm_ok = (eqdsk not in self._eqdsk_skip) and self._test_eqdsk(eqdsk)
                 if tm_ok:
                     full_eqdsk_map[t] = eqdsk
@@ -792,9 +791,9 @@ class TokTox:
                     self._state['psi_axis_tm'][i] = self._psi_axis_seed[i] 
                     self._state['psi_lcfs_tm'][i] = self._psi_lcfs_seed[i]
             if n_tm == 0:
-                print(f'Warning: Step {step}: no valid TM EQDSKs from step {step-1}, using all seed EQDSKs.')
+                print(f'Warning: Step {self._current_step}: no valid TM EQDSKs from step {self._current_step-1}, using all seed EQDSKs.')
             else:
-                print(f'Step {step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
+                print(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
             }
@@ -905,13 +904,12 @@ class TokTox:
                 # self._print_out(e)
                 return False
 
-    def _run_transport(self, step, graph=False):
+    def _run_transport(self, graph=False):
         r'''! Run the Torax simulation.
-        @param step Iteration number of the Torax-Tokamaker simulation loop.
         @param graph Whether to display profiles at each iteration (for testing).
         @return Consumed flux.
         '''
-        myconfig = self._get_torax_config(step)
+        myconfig = self._get_torax_config()
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
 
         # save data_tree object
@@ -924,22 +922,22 @@ class TokTox:
         
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
-            self._transport_update(step, i, data_tree)
+            self._transport_update(i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
-        # self._print_out(f'Step {step}: TX output (w/ /2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
+        # self._print_out(f'Step {self._current_step}: TX output (w/ /2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
 
         self._res_update(data_tree)
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(v_loops[0:], self._times[0:]) 
-        self._print_out(f"Step {step} TORAX:")
+        self._print_out(f"Step {self._current_step} TORAX:")
         # self._print_out(f"\tTX: vloop: min={v_loops.min():.3f}, max={v_loops.max():.3f}, mean={v_loops.mean():.3f} V")
         # self._print_out(f"\tTX: psi_lcfs: start={self._state['psi_lcfs'][0]:.3f}, end={self._state['psi_lcfs'][-1]:.3f} Wb/rad")
         # self._print_out(f'\tTX: psi_bound consumed flux={consumed_flux:.3f} Wb')
         # self._print_out(f'\tTX: int v_loop consumed flux w/o t=0 ={consumed_flux_integral:.3f} Wb')
         return consumed_flux, consumed_flux_integral
 
-    def _transport_update(self, step, i, data_tree, smooth=True):
+    def _transport_update(self, i, data_tree, smooth=True):
         r'''! Update the simulation state and simulation results based on results of the Torax simulation.
         @param i Timestep of the solve.
         @param data_tree Result object from Torax.
@@ -1115,13 +1113,12 @@ class TokTox:
         # Pass regularization terms to TokaMaker
         self._gs.set_coil_reg(reg_terms=regularization_terms)
 
-    def _run_gs(self, step, graph=False):
+    def _run_gs(self, graph=False):
         r'''! Run the GS solve across n timesteps using TokaMaker.
-        @param step Iteration number of the Torax-Tokamaker simulation loop.
         @param graph Whether to display psi graphs at each iteration (for testing).
         @return Consumed flux.
         '''
-        self._print_out(f"Step {step} TokaMaker:")
+        self._print_out(f"Step {self._current_step} TokaMaker:")
 
         self._eqdsk_skip = []
         _step_level_log = []
@@ -1168,7 +1165,7 @@ class TokTox:
             self._gs.update_settings()
 
             skip_coil_update = False
-            eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(step, i))
+            eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i))
 
             equals = '='*50
             solve_succeeded = False
@@ -1233,7 +1230,7 @@ class TokTox:
                     lcfs_pad=0.001,run_info='TokaMaker EQDSK',
                     cocos=2, nr=200, nz=200, truncate_eq=False)
                 self._gs_update(i)
-                self._profile_plot(step, i, t)
+                self._profile_plot(i, t)
 
                 if graph:
                     fig, ax = plt.subplots(1,1)
@@ -1241,10 +1238,10 @@ class TokTox:
                     self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
                     ax.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r')
                     ax.set_title(f't={self._times[i]}')
-                    plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(step, i)))
+                    plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(self._current_step, i)))
                     plt.close(fig)
                 
-            self._tm_diagnostic_plot(step, i, t, level_attempts, solve_succeeded)
+            self._tm_diagnostic_plot(i, t, level_attempts, solve_succeeded)
 
             _winning = next((a for a in level_attempts if a['succeeded']), None)
             _last_attempt = level_attempts[-1] if level_attempts else {}
@@ -1266,7 +1263,7 @@ class TokTox:
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
 
-        self._gs_step_summary_plot(step, _step_level_log)
+        self._gs_step_summary_plot(_step_level_log)
 
         return consumed_flux, consumed_flux_integral
         
@@ -1543,7 +1540,7 @@ class TokTox:
             print(str, file=f)
     
 
-    def _profile_plot(self, step, i, t): 
+    def _profile_plot(self, i, t): 
         # plot and save profiles at each time step and iteration
         # called in _run_gs after successful GS solve
 
@@ -1573,7 +1570,7 @@ class TokTox:
         ffp_inductive = tm_ffp_prof - ffpni_on_tm
 
         fig, axes = plt.subplots(4, 3, figsize=(20, 16))
-        plt.suptitle(f'Step {step} - Time index {i}/{len(self._times)-1} - t = {t:.1f} s', fontsize=14)
+        plt.suptitle(f'Step {self._current_step} - Time index {i}/{len(self._times)-1} - t = {t:.1f} s', fontsize=14)
 
         # =======================
         # ROW 0: p' and FF' comparisons
@@ -1763,18 +1760,17 @@ class TokTox:
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.95, hspace=0.3, wspace=0.35)
-        plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_plot_{step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_plot_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
-    def _tm_diagnostic_plot(self, step, i, t, level_attempts, solve_succeeded):
+    def _tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded):
         r'''! Create and save a compact TokaMaker input/output diagnostic plot.
 
         Plots all attempted tier profiles, highlighting which succeeded and which failed.
         Both success and failure saves go to tm_plots/. Filename prefix tm_OK_ vs tm_FAIL_
         and suptitle color (green/red) distinguish the two cases.
 
-        @param step          Current iteration step number.
         @param i             Time index within self._times.
         @param t             Physical time value (s).
         @param level_attempts List of dicts from the level loop: {level, name, ffp, pp, succeeded, error}.
@@ -1960,11 +1956,11 @@ class TokTox:
             render_table(ax_tbl2, diag_rows,  'TORAX Diagnostics vs TokaMaker')
 
             plt.suptitle(
-                f'TM Diagnostic \u2014 Step {step}, t-idx {i}/{len(self._times)-1}, t = {t:.2f} s'
+                f'TM Diagnostic \u2014 Step {self._current_step}, t-idx {i}/{len(self._times)-1}, t = {t:.2f} s'
                 f'  |  TokaMaker: SUCCESS',
                 fontsize=13, color='darkgreen',
             )
-            out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{step:03}.{i:03}_OK.png')
+            out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{self._current_step:03}.{i:03}_OK.png')
 
         else:
             input_rows = [
@@ -2034,23 +2030,22 @@ class TokTox:
             ax_fail.set_title('Failure Reason', fontsize=10, fontweight='bold', pad=4, color='darkred')
 
             plt.suptitle(
-                f'TM Diagnostic \u2014 Step {step}, t-idx {i}/{len(self._times)-1}, t = {t:.2f} s'
+                f'TM Diagnostic \u2014 Step {self._current_step}, t-idx {i}/{len(self._times)-1}, t = {t:.2f} s'
                 f'  |  TokaMaker: FAILED',
                 fontsize=13, color='darkred', fontweight='bold',
             )
-            out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{step:03}.{i:03}_FAIL.png')
+            out_path = os.path.join(self._out_dir, 'tm_plots', f'tm_{self._current_step:03}.{i:03}_FAIL.png')
 
         plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
-    def _gs_step_summary_plot(self, step, step_level_log):
+    def _gs_step_summary_plot(self, step_level_log):
         r'''! Save a summary figure for the completed GS step showing per-timestep solve outcomes.
 
         Each row is a timestep. Columns: time index, time (s), outcome (SUCCESS Level N / FAILED).
         Color-coded green for success, red for failure. Includes a legend of available levels.
 
-        @param step          Current iteration step number.
         @param step_level_log List of dicts {i, t, succeeded, level, level_name} from _run_gs.
         '''
         n = len(step_level_log)
@@ -2114,22 +2109,21 @@ class TokTox:
         n_ok   = sum(1 for e in step_level_log if e['succeeded'])
         n_fail = n - n_ok
         plt.suptitle(
-            f'GS Step {step} Summary \u2014 {n_ok}/{n} timesteps succeeded, {n_fail} failed',
+            f'GS Step {self._current_step} Summary \u2014 {n_ok}/{n} timesteps succeeded, {n_fail} failed',
             fontsize=12, fontweight='bold',
             color='darkgreen' if n_fail == 0 else ('darkred' if n_ok == 0 else 'darkorange'),
         )
 
         os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
-        out_path = os.path.join(self._out_dir, 'tm_plots', f'step_{step:03}_summary.png')
+        out_path = os.path.join(self._out_dir, 'tm_plots', f'step_{self._current_step:03}_summary.png')
         plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
-    def _profile_evolution_plot(self, step):
+    def _profile_evolution_plot(self):
         r'''! Plot multiple profiles over time with color representing time.
         Creates a single figure with subplots for ne, Te, ni, Ti, p (TORAX), p (TokaMaker), q.
         Each subplot shows profiles at all time points with color mapped to time using plasma colormap.
-        @param step The step number (for labeling the saved figure).
         '''
         import matplotlib.cm as cm
         from matplotlib.colors import Normalize
@@ -2144,7 +2138,7 @@ class TokTox:
         
         # Create figure with 7 subplots (2 rows x 4 cols, last one empty or use 3+4 layout)
         fig, axes = plt.subplots(2, 4, figsize=(18, 10))
-        fig.suptitle(f'Profile Evolution Over Time (Step {step})', fontsize=14)
+        fig.suptitle(f'Profile Evolution Over Time (Step {self._current_step})', fontsize=14)
         
         # =======================
         # ROW 0
@@ -2257,15 +2251,14 @@ class TokTox:
         cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), shrink=0.8, aspect=30, pad=0.02)
         cbar.set_label('Time [s]', fontsize=12)
         
-        plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_evolution_step{step}.png'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_evolution_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
-    def _scalar_plot(self, step):
+    def _scalar_plot(self):
         r'''! Plot a grid of time-series scalars across the entire pulse for a given step.
         Produces a 4x3 grid with diagnostics including Ip, psi (TM/TORAX), V_loop comparison,
         Q, n_e_line_avg, T_e_line_avg, P_ohmic, beta_N, l_i, q95, pax.
-        @param step Step number used for filename/label.
         '''
         fig, axes = plt.subplots(4, 3, figsize=(16, 12))
 
@@ -2488,10 +2481,10 @@ class TokTox:
         ax_32.legend(fontsize=8)
         ax_32.grid(True, alpha=0.3)
 
-        plt.suptitle(f'Scalars Over Pulse (Step {step})', fontsize=14)
+        plt.suptitle(f'Scalars Over Pulse (Step {self._current_step})', fontsize=14)
         plt.tight_layout()
         plt.subplots_adjust(top=0.92)
-        plt.savefig(os.path.join(self._out_dir, 'plots', f'scalars_step{step}.png'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'scalars_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
 
 
@@ -2529,7 +2522,6 @@ class TokTox:
         self._fname_out = os.path.join(self._out_dir, 'results', out)
 
         err = convergence_threshold + 1.0
-        self._current_step = 0
         cflux_tx_prev = 0.0
         # records of flux consumption throughout steps
         tm_cflux_psi = []
@@ -2542,11 +2534,11 @@ class TokTox:
 
         while err > convergence_threshold and self._current_step < max_step:
             self._print_out(f'---- Step {self._current_step} ---- \n')
-            cflux_tx, cflux_tx_vloop = self._run_transport(self._current_step, graph=graph)
+            cflux_tx, cflux_tx_vloop = self._run_transport(graph=graph)
             if save_states:
                 self.save_state(os.path.join(self._out_dir, 'results', 'ts_state{}.json'.format(self._current_step)))
 
-            cflux_gs, cflux_gs_vloop = self._run_gs(self._current_step, graph=graph)
+            cflux_gs, cflux_gs_vloop = self._run_gs(graph=graph)
             if save_states:
                 self.save_state(os.path.join(self._out_dir, 'results', 'gs_state{}.json'.format(self._current_step)))
 
@@ -2567,8 +2559,8 @@ class TokTox:
 
             cflux_tx_prev = cflux_tx
 
-            self._profile_evolution_plot(self._current_step)
-            self._scalar_plot(self._current_step)
+            self._profile_evolution_plot()
+            self._scalar_plot()
 
             self._current_step += 1
         
