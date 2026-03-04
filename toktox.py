@@ -278,18 +278,11 @@ class TokTox:
         self._Ip = None
         self._Zeff = None
 
-        self._normalize_to_nbar = False
-
         self._nbi_heating = None
         self._eccd_heating = None
         self._eccd_loc = None
         self._nbi_loc = None
         self._ohmic_power = None
-
-        self._evolve_density = True
-        self._evolve_current = True
-        self._evolve_Ti = True
-        self._evolve_Te = True
 
         self._nbar = None
         self._n_e = None
@@ -300,7 +293,6 @@ class TokTox:
         self._T_i_ped = None
         self._T_e_ped = None
         self._n_e_ped = None
-        self._ped_top = 0.95
 
         self._Te_right_bc = None
         self._Ti_right_bc = None
@@ -311,145 +303,65 @@ class TokTox:
         self._gp_s = None
         self._gp_dl = None
 
-        self._chi_min = 0.05
-        self._chi_max = 100.0
-        self._De_min = 0.05
-        self._De_max = 50.0
-        self._Ve_min = -10.0
-        self._Ve_max = 10.0
+        # Transport / numerics overrides — None means "use value from
+        # loaded config (or base config if no loaded config)".  Only set
+        # to a real value when an explicit set_*() call is made AFTER
+        # load_config().
+        self._normalize_to_nbar = None
+        self._evolve_density = None
+        self._evolve_current = None
+        self._evolve_Ti = None
+        self._evolve_Te = None
+        self._ped_top = None
+        self._chi_min = None
+        self._chi_max = None
+        self._De_min = None
+        self._De_max = None
+        self._Ve_min = None
+        self._Ve_max = None
 
         self._targets = None
-        self._baseconfig = None
+        self._loaded_config = None   # set by load_config()
         self._tx_grid_type = None
         self._tx_grid = None
 
         self._eqdsk_skip = []
     
+    @staticmethod
+    def _config_merge(base, override):
+        r'''! Recursively merge override into base TORAX config (in-place).
+
+        For every key in override:
+          - If both values are dicts, recurse.
+          - Otherwise the override value wins.
+        Keys in base that are absent from override are kept as-is.
+
+        @param base     Dict to merge into (modified in-place).
+        @param override Dict whose keys take precedence.
+        @return base (for convenience).
+        '''
+        for key, val in override.items():
+            if key in base and isinstance(base[key], dict) and isinstance(val, dict):
+                TokTox._config_merge(base[key], val)
+            else:
+                base[key] = copy.deepcopy(val)
+        return base
+
     def load_config(self, config):
-        r'''! Load a base config for torax.
-        
-        When a config is loaded, all settings in it override TokTox defaults.
-        Geometry is excluded (set dynamically by TokaMaker equilibria).
-        
-        @param config Dictionary object to be converted to torax config.
+        r'''! Load a TORAX config dict.
+
+        The loaded config is deep-merged on top of BASE_CONFIG when the
+        simulation config is built.  Any key present in the loaded config
+        will override the corresponding BASE_CONFIG key; keys only in
+        BASE_CONFIG are kept as-is.  Geometry is always overwritten by
+        TokTox (eqdsk-based).
+
+        Explicit ``set_*()`` calls made *after* ``load_config()`` will
+        override both the base and the loaded config.
+
+        @param config Dictionary (TORAX config format).
         '''
-        self._baseconfig = config
-        self._extract_config_to_attributes(config)
-        
-    def _extract_config_to_attributes(self, config):
-        r'''! Extract settings from a loaded config and set internal attributes.
-        
-        This ensures that loaded config values override TokTox defaults for all
-        settings except geometry (which is set dynamically by TokaMaker).
-        
-        @param config TORAX config dictionary
-        '''
-        # --- Profile conditions ---
-        pc = config.get('profile_conditions', {})
-        if 'n_e' in pc:
-            self._n_e = pc['n_e']
-        if 'T_i' in pc:
-            self._T_i = pc['T_i']
-        if 'T_e' in pc:
-            self._T_e = pc['T_e']
-        if 'normalize_n_e_to_nbar' in pc:
-            self._normalize_to_nbar = pc['normalize_n_e_to_nbar']
-        if 'nbar' in pc:
-            self._nbar = pc['nbar']
-        if 'n_e_right_bc' in pc:
-            self._ne_right_bc = pc['n_e_right_bc']
-        if 'T_i_right_bc' in pc:
-            self._Ti_right_bc = pc['T_i_right_bc']
-        if 'T_e_right_bc' in pc:
-            self._Te_right_bc = pc['T_e_right_bc']
-        
-        # --- Numerics (evolve flags) ---
-        num = config.get('numerics', {})
-        if 'evolve_density' in num:
-            self._evolve_density = num['evolve_density']
-        if 'evolve_current' in num:
-            self._evolve_current = num['evolve_current']
-        if 'evolve_ion_heat' in num:
-            self._evolve_Ti = num['evolve_ion_heat']
-        if 'evolve_electron_heat' in num:
-            self._evolve_Te = num['evolve_electron_heat']
-        
-        # --- Pedestal ---
-        ped = config.get('pedestal', {})
-        if 'set_pedestal' in ped:
-            self._set_pedestal = ped['set_pedestal']
-        if 'T_i_ped' in ped:
-            self._T_i_ped = ped['T_i_ped']
-        if 'T_e_ped' in ped:
-            self._T_e_ped = ped['T_e_ped']
-        if 'n_e_ped' in ped:
-            self._n_e_ped = ped['n_e_ped']
-        if 'rho_norm_ped_top' in ped:
-            self._ped_top = ped['rho_norm_ped_top']
-        
-        # --- Sources ---
-        src = config.get('sources', {})
-        
-        # ECRH/ECCD
-        ecrh = src.get('ecrh', {})
-        if 'P_total' in ecrh:
-            p_total = ecrh['P_total']
-            # Handle both dict and tuple (dict, mode) formats from MOSAIC
-            if isinstance(p_total, tuple) and len(p_total) >= 1:
-                p_total = p_total[0]
-            if isinstance(p_total, dict):
-                self._eccd_heating = p_total
-        if 'gaussian_location' in ecrh:
-            self._eccd_loc = ecrh['gaussian_location']
-        
-        # Generic heat (NBI proxy)
-        gen_heat = src.get('generic_heat', {})
-        if 'P_total' in gen_heat:
-            p_total = gen_heat['P_total']
-            # Handle both dict and tuple (dict, mode) formats from MOSAIC
-            if isinstance(p_total, tuple) and len(p_total) >= 1:
-                p_total = p_total[0]
-            if isinstance(p_total, dict):
-                self._nbi_heating = p_total
-        if 'gaussian_location' in gen_heat:
-            self._nbi_loc = gen_heat['gaussian_location']
-        
-        # Ohmic
-        ohmic = src.get('ohmic', {})
-        if 'prescribed_values' in ohmic:
-            pv = ohmic['prescribed_values']
-            # Handle both dict and tuple formats
-            if isinstance(pv, tuple) and len(pv) >= 1:
-                pv = pv[0]
-            if isinstance(pv, dict):
-                self._ohmic_power = pv
-        
-        # Gas puff
-        gp = src.get('gas_puff', {})
-        if 'S_total' in gp:
-            self._gp_s = gp['S_total']
-        if 'puff_decay_length' in gp:
-            self._gp_dl = gp['puff_decay_length']
-        
-        # --- Transport ---
-        trn = config.get('transport', {})
-        if 'chi_min' in trn:
-            self._chi_min = trn['chi_min']
-        if 'chi_max' in trn:
-            self._chi_max = trn['chi_max']
-        if 'D_e_min' in trn:
-            self._De_min = trn['D_e_min']
-        if 'D_e_max' in trn:
-            self._De_max = trn['D_e_max']
-        if 'V_e_min' in trn:
-            self._Ve_min = trn['V_e_min']
-        if 'V_e_max' in trn:
-            self._Ve_max = trn['V_e_max']
-        
-        # --- Plasma composition ---
-        pc_comp = config.get('plasma_composition', {})
-        if 'Z_eff' in pc_comp:
-            self._Zeff = pc_comp['Z_eff']
+        self._loaded_config = copy.deepcopy(config)
         
     def set_tx_grid(self, type, grid):
         r'''! Set TORAX grid type and grid points.
@@ -733,22 +645,31 @@ class TokTox:
             return data_on_psi
         
     def _get_torax_config(self):
-        r'''! Generate config object for Torax simulation. Modifies BASE_CONFIG based on current simulation state.
+        r'''! Generate config object for Torax simulation.
+
+        Build order
+        -----------
+        1. Deep-copy BASE_CONFIG (from baseconfig.py).
+        2. Deep-merge the loaded config on top (if load_config() was called).
+           Every key in the loaded config overwrites the matching base key;
+           keys only in BASE_CONFIG are kept as-is.
+        3. Override geometry (always set by TokTox / TokaMaker equilibria).
+        4. Override t_initial / t_final / fixed_dt from __init__ params.
+        5. Apply psi profile (computed from TokaMaker state).
+        6. Apply any explicit set_*() overrides (only when the attribute is
+           not None, i.e. the user called the setter after load_config).
+
         @return Torax config object.
         '''
 
+        # ── 1. Start from base config ──────────────────────────────────────
         myconfig = copy.deepcopy(BASE_CONFIG)
-        if self._baseconfig:
-            myconfig = self._baseconfig.copy()
-        myconfig['numerics'] = {
-            't_initial': self._t_init,
-            't_final': self._t_final,  # length of simulation time in seconds
-            'fixed_dt': self._dt, # fixed timestep
-            'evolve_ion_heat': self._evolve_Ti, # solve ion heat equation
-            'evolve_electron_heat': self._evolve_Te, # solve electron heat equation
-            'evolve_current': self._evolve_current, # solve current equation
-            'evolve_density': self._evolve_density, # solve density equation
-        }
+
+        # ── 2. Deep-merge loaded config ────────────────────────────────────
+        if self._loaded_config is not None:
+            self._config_merge(myconfig, self._loaded_config)
+
+        # ── 3. Geometry (always set by TokTox) ─────────────────────────────
         myconfig['geometry'] = {
             'geometry_type': 'eqdsk',
             'geometry_directory': os.getcwd(),
@@ -803,36 +724,52 @@ class TokTox:
         elif self._tx_grid_type == 'face_centers':
             myconfig['geometry']['face_centers'] = self._tx_grid
 
+        # ── 4. Override t_initial / t_final / fixed_dt from __init__ ───────
+        myconfig.setdefault('numerics', {})
+        myconfig['numerics']['t_initial'] = self._t_init
+        myconfig['numerics']['t_final'] = self._t_final
+        myconfig['numerics']['fixed_dt'] = self._dt
 
+        # ── 5. Psi profile (always computed from TokaMaker state) ──────────
+        myconfig.setdefault('profile_conditions', {})
         myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
             # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
             # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
             # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
             t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
-        if self._n_e:
+
+        # ── 6. Explicit set_*() overrides ──────────────────────────────────
+        #    Only applied when the attribute is not None (i.e. the user made
+        #    an explicit setter call, or will be None if relying on the
+        #    loaded config / base config value).
+        if self._n_e is not None:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
-        if self._T_e:
+        if self._T_e is not None:
             myconfig['profile_conditions']['T_e'] = self._T_e
         
-        if self._T_i:
+        if self._T_i is not None:
             myconfig['profile_conditions']['T_i'] = self._T_i
         
-        if self._Zeff:
+        if self._Zeff is not None:
+            myconfig.setdefault('plasma_composition', {})
             myconfig['plasma_composition']['Z_eff'] = self._Zeff
 
-        if self._eccd_loc:
+        if self._eccd_loc is not None:
+            myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('ecrh', {})
             myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
             myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
 
-        if self._ohmic_power:
+        if self._ohmic_power is not None:
+            myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('ohmic', {})
             myconfig['sources']['ohmic']['mode'] = 'PRESCRIBED'
             myconfig['sources']['ohmic']['prescribed_values'] = self._ohmic_power
 
-        if self._nbi_heating:
+        if self._nbi_heating is not None:
             nbi_times, nbi_pow = zip(*self._nbi_heating.items())    
+            myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('generic_heat', {})
             myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
             myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
@@ -840,55 +777,88 @@ class TokTox:
             myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
             myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
-        if self._T_i_ped:
+        if self._T_i_ped is not None:
+            myconfig.setdefault('pedestal', {})
             myconfig['pedestal']['T_i_ped'] = self._T_i_ped
-        if self._T_e_ped:
+        if self._T_e_ped is not None:
+            myconfig.setdefault('pedestal', {})
             myconfig['pedestal']['T_e_ped'] = self._T_e_ped
-        
 
-        if self._n_e_ped:
+        if self._n_e_ped is not None:
+            myconfig.setdefault('pedestal', {})
             myconfig['pedestal']['n_e_ped_is_fGW'] = False
             myconfig['pedestal']['n_e_ped'] = self._n_e_ped
         
-        if self._set_pedestal:
+        if self._set_pedestal is not None:
+            myconfig.setdefault('pedestal', {})
             myconfig['pedestal']['set_pedestal'] = self._set_pedestal
-        myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
+        if self._ped_top is not None:
+            myconfig.setdefault('pedestal', {})
+            myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
         
-        myconfig['profile_conditions']['normalize_n_e_to_nbar'] = self._normalize_to_nbar # if on, normalizes ne profile to make nbar = input nbar
-        if self._nbar:
+        if self._nbar is not None:
             myconfig['profile_conditions']['nbar'] = self._nbar
+        if self._normalize_to_nbar is not None:
+            myconfig['profile_conditions']['normalize_n_e_to_nbar'] = self._normalize_to_nbar
 
-        if self._ne_right_bc:
+        if self._ne_right_bc is not None:
             myconfig['profile_conditions']['n_e_right_bc_is_fGW'] = False
             myconfig['profile_conditions']['n_e_right_bc'] = self._ne_right_bc
 
-        if self._Te_right_bc:
+        if self._Te_right_bc is not None:
             myconfig['profile_conditions']['T_e_right_bc'] = self._Te_right_bc
-        if self._Ti_right_bc:
+        if self._Ti_right_bc is not None:
             myconfig['profile_conditions']['T_i_right_bc'] = self._Ti_right_bc
+
+        if self._evolve_density is not None:
+            myconfig['numerics']['evolve_density'] = self._evolve_density
+        if self._evolve_current is not None:
+            myconfig['numerics']['evolve_current'] = self._evolve_current
+        if self._evolve_Ti is not None:
+            myconfig['numerics']['evolve_ion_heat'] = self._evolve_Ti
+        if self._evolve_Te is not None:
+            myconfig['numerics']['evolve_electron_heat'] = self._evolve_Te
                 
-        if self._gp_s and self._gp_dl:
+        if self._gp_s is not None and self._gp_dl is not None:
+            myconfig.setdefault('sources', {})
             myconfig['sources']['gas_puff'] = {
                 'S_total': self._gp_s,
                 'puff_decay_length': self._gp_dl,
             }
 
-        myconfig['transport']['chi_min'] = self._chi_min
-        myconfig['transport']['chi_max'] = self._chi_max
- 
-        myconfig['transport']['D_e_min'] = self._De_min
-        myconfig['transport']['D_e_max'] = self._De_max
-
-        myconfig['transport']['V_e_min'] = self._Ve_min
-        myconfig['transport']['V_e_max'] = self._Ve_max
+        myconfig.setdefault('transport', {})
+        if self._chi_min is not None:
+            myconfig['transport']['chi_min'] = self._chi_min
+        if self._chi_max is not None:
+            myconfig['transport']['chi_max'] = self._chi_max
+        if self._De_min is not None:
+            myconfig['transport']['D_e_min'] = self._De_min
+        if self._De_max is not None:
+            myconfig['transport']['D_e_max'] = self._De_max
+        if self._Ve_min is not None:
+            myconfig['transport']['V_e_min'] = self._Ve_min
+        if self._Ve_max is not None:
+            myconfig['transport']['V_e_max'] = self._Ve_max
 
         # with open('torax_config.json', 'w') as json_file:
         #     json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
+                # Save torax config to python file
+        import pprint
+        config_filename = os.path.join(self._out_dir, 'results', f'tx_config{self._current_step}.py')
+        with open(config_filename, 'w') as f:
+            f.write('# Torax configuration\n')
+            f.write(f'# Step {self._current_step}\n\n')
+            f.write('torax_config = ')
+            f.write(pprint.pformat(myconfig, width=100))
+
+
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
 
     def _test_eqdsk(self, eqdsk):
             myconfig = copy.deepcopy(BASE_CONFIG)
+            if self._loaded_config is not None:
+                self._config_merge(myconfig, self._loaded_config)
             myconfig['geometry'] = {
                 'geometry_type': 'eqdsk',
                 'geometry_directory': os.getcwd(),
@@ -909,7 +879,7 @@ class TokTox:
         @param graph Whether to display profiles at each iteration (for testing).
         @return Consumed flux.
         '''
-        myconfig = self._get_torax_config()
+        myconfig = self._get_torax_config()       
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
 
         # save data_tree object
