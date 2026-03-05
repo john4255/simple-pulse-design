@@ -4,6 +4,7 @@ import scipy.io as sio
 from scipy.interpolate import make_smoothing_spline
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
+from scipy.signal import savgol_filter
 import torax
 import copy
 import json
@@ -1169,15 +1170,15 @@ class TokTox:
             level_profiles = []
             
             # Level 0: raw
-            ffp_0, pp_0 = self._level0_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            ffp_0, pp_0 = self._level0_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
             level_profiles.append({'ffp': ffp_0, 'pp': pp_0, 'name': 'lv0: raw'})
             
             # Level 1: sign flip
-            ffp_1, pp_1 = self._level1_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
+            ffp_1, pp_1 = self._level1_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
             level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: sign_flip'})
             
-            # Level 2: pedestal smoothing (takes p_profile as input)
-            ffp_2, pp_2, p_2_smooth = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i]), i)
+            # Level 2: pedestal smoothing (takes p_profile as input) # TODO: read in actual n_rho_ped_top, have to add to state first
+            ffp_2, pp_2 = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i])) 
             level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
             
             # Level 3: power flux
@@ -1189,6 +1190,10 @@ class TokTox:
                 level_name = level_prof['name']
                 ffp_level = level_prof['ffp']
                 pp_level = level_prof['pp']
+                # # debugging
+                # if level_idx == 2:
+                #     self._print_out(f'p prof where lv2 was required: step{self._current_step}, time = {t}, p_prof_raw = {repr(self._state['p_prof_tx'][i])}, p_2_smooth = {repr(p_2_smooth)}')
+
                 try:
                     print(f'{equals} trying level {level_idx} solve ({level_name})')
                     self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
@@ -1263,11 +1268,11 @@ class TokTox:
     # All levels receive deep copies of the raw TORAX profiles (not cumulative).
     # Level 0 is always identity. Add new levels by appending to self._profile_levels.
 
-    def _level0_raw(self, ffp_prof, pp_prof, i):
+    def _level0_raw(self, ffp_prof, pp_prof):
         r'''! Raw TORAX profiles passed through unchanged.'''
         return ffp_prof, pp_prof
 
-    def _level1_sign_flip(self, ffp_prof, pp_prof, i):
+    def _level1_sign_flip(self, ffp_prof, pp_prof):
         r'''! Sign-flip clipping: clip each profile to its dominant sign.'''
         def _clip(prof):
             y = prof['y']
@@ -1276,28 +1281,31 @@ class TokTox:
             return {**prof, 'y': y_new}
         return _clip(ffp_prof), _clip(pp_prof)
 
-    def _level2_pedestal_smoothing(self, ffp_prof, p_prof, i):
-        r'''! Pedestal smoothing with Gaussian filter: smooth p profile and take derivative for pp_prof.'''
-        # Use provided p_profile, normalize it
-        p_prof_y = p_prof['y'].copy()
-        if p_prof_y[0] != 0:
-            p_prof_y = p_prof_y / p_prof_y[0]
+    def _level2_pedestal_smoothing(self, ffp_prof, pp_prof, p_prof, transition_psi_N = 0.6, gauss_sigma=8, blend_width=0.02, sav_window=41, sav_order=3):
+        r'''! Edge smoothing with Gaussian filter: smooth p profile and take derivative for pp_prof.'''
         
-        # Apply Gaussian filter for smoothing
-        sigma = 2.0  # smoothing parameter
-        p_smooth = gaussian_filter1d(p_prof_y, sigma=sigma)
+        # Extract pressure 'y' values and ensure they're 1D
+        p = np.atleast_1d(p_prof['y'])
         
-        # Ensure pressure is 0 at edge (psi_N = 1)
-        p_smooth[-1] = 0.0
+        # Handle case where input is empty or scalar
+        if p.size == 0:
+            return ffp_prof, pp_prof
         
-        # Take derivative to get pp_prof (pressure gradient)
-        pp_smooth = np.gradient(p_smooth, p_prof['x'])
-        
-        # Create output profiles
-        pp_out = {**p_prof, 'y': pp_smooth}
-        
-        # Return ffp_prof unchanged
-        return ffp_prof, pp_out, p_smooth
+        # First smooth entire profile
+        p_smooth = gaussian_filter1d(p, gauss_sigma, mode='nearest')
+
+        # Sigmoid blend weight: 0 = pure original, 1 = pure smoothed
+        # Centered at edge_psi, width controlled by blend_width
+        blend = 0.5 * (1 + np.tanh((self._psi_N - transition_psi_N) / blend_width))
+
+        # blend original and smoothed profiles so the value and slope are continuous across transition
+        p_new = (1 - blend) * p + blend * p_smooth
+
+        pp_new = np.gradient(p_new, self._psi_N)
+        pp_new_smooth = savgol_filter(pp_new, sav_window, sav_order)
+
+        # Return modified pp_prof with smoothed values, ffp_prof unchanged
+        return ffp_prof, {**pp_prof, 'y': pp_new_smooth}
 
     def _level3_power_flux(self, ffp_prof, pp_prof, i):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
