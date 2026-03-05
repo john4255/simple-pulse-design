@@ -275,6 +275,7 @@ class TokTox:
         self._psi_lcfs_seed = self._state['psi_lcfs_tm'].copy()
         self._Ip_seed       = self._state['Ip'].copy()
         self._pax_seed      = self._state['pax'].copy()
+        self._state['pax_tm'] = self._state['pax'].copy()
 
         self._Ip = None
         self._Zeff = None
@@ -715,7 +716,7 @@ class TokTox:
             if n_tm == 0:
                 print(f'Warning: Step {self._current_step}: no valid TM EQDSKs from step {self._current_step-1}, using all seed EQDSKs.')
             else:
-                print(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
+                self._print_out(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
             }
@@ -1136,11 +1137,11 @@ class TokTox:
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
 
-            lcfs = self._state['lcfs_geo'][i]
+            lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights) # sets target psi at LCFS
 
             # Initialize psi from geometry parameters
             # For step 0, using the seed EQDSK geometry should give a good initial guess
@@ -1182,15 +1183,20 @@ class TokTox:
             level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
             
             # Level 3: power flux
-            # ffp_3, pp_3 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), i)
-            # level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: power_flux'})
+            ffp_3, pp_3 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: power_flux'})
+
+            # Level 4: power flux + pax from initial eqdsk
+            ffp_4, pp_4 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_4, 'pp': pp_4, 'name': 'lv4: power_flux + pax'})
 
             # Try each level
             for level_idx, level_prof in enumerate(level_profiles):
                 level_name = level_prof['name']
                 ffp_level = level_prof['ffp']
                 pp_level = level_prof['pp']
-                # # debugging
+
+                # # debugging # TODO delete when done
                 # if level_idx == 2:
                 #     self._print_out(f'p prof where lv2 was required: step{self._current_step}, time = {t}, p_prof_raw = {repr(self._state['p_prof_tx'][i])}, p_2_smooth = {repr(p_2_smooth)}')
 
@@ -1307,14 +1313,14 @@ class TokTox:
         # Return modified pp_prof with smoothed values, ffp_prof unchanged
         return ffp_prof, {**pp_prof, 'y': pp_new_smooth}
 
-    def _level3_power_flux(self, ffp_prof, pp_prof, i):
+    def _level3_power_flux(self, ffp_prof, pp_prof):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
-        ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
-        pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
+        # ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
+        # pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
         ffp_out = create_power_flux_fun(N_PSI, 1.5, 2.0)
         pp_out  = create_power_flux_fun(N_PSI, 4.0, 1.0)
-        ffp_out = {**ffp_out, 'y': ffp_out['y'] * ffp_sign}
-        pp_out  = {**pp_out,  'y': pp_out['y']  * pp_sign}
+        ffp_out = {**ffp_out, 'y': ffp_out['y']}
+        pp_out  = {**pp_out,  'y': pp_out['y']}
         return ffp_out, pp_out
 
     def _gs_update(self, i):
@@ -1767,7 +1773,8 @@ class TokTox:
     def _tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded):
         r'''! Create and save a compact TokaMaker input/output diagnostic plot.
 
-        Plots all attempted tier profiles, highlighting which succeeded and which failed.
+        Plots all attempted tier profiles with distinct colors, highlighting which succeeded and which failed.
+        Uses consistent layout for both success and failure cases.
         Both success and failure saves go to tm_plots/. Filename prefix tm_OK_ vs tm_FAIL_
         and suptitle color (green/red) distinguish the two cases.
 
@@ -1786,19 +1793,24 @@ class TokTox:
 
         # Color/style helper: plots every attempted level on ax for profile key 'ffp' or 'pp'
         # Normalizes profiles by dividing by core value (first element)
-        _level_colors = plt.cm.tab10.colors
+        # Use tab20 for more distinct colors (20 colors instead of 10)
+        _level_colors = plt.cm.tab20.colors
         def _plot_levels(ax, key, seed_x=None, seed_y=None, seed_label=None):
             for attempt in level_attempts:
+                # Use distinct color for each level, cycling through tab20 if needed
                 color = _level_colors[attempt['level'] % len(_level_colors)]
                 # Normalize profile by dividing by core value (first element)
                 y_data = attempt[key]['y'].copy()
                 if y_data[0] != 0:
                     y_data = y_data / y_data[0]
                 if attempt['succeeded']:
+                    # Successful level: solid line with accent color marker/highlight
                     ax.plot(attempt[key]['x'], y_data,
-                            color='forestgreen', linewidth=2.5, zorder=5,
-                            label=f"Level {attempt['level']}: {attempt['name']} \u2713")
+                            color=color, linewidth=2.5, zorder=5,
+                            label=f"Level {attempt['level']}: {attempt['name']} \u2713",
+                            marker='o', markersize=3, markevery=max(len(attempt[key]['x'])//10, 1), alpha=0.8)
                 else:
+                    # Failed level: dashed line with level-specific color
                     ax.plot(attempt[key]['x'], y_data,
                             color=color, linewidth=1.2, linestyle='--', alpha=0.6,
                             label=f"Level {attempt['level']}: {attempt['name']} \u2717")
@@ -1849,6 +1861,46 @@ class TokTox:
         q0_seed_eq  = _seed_g['q0']
         q95_seed_eq = _seed_g['q95']
 
+        # Use consistent 3x6 layout for both success and failure
+        fig = plt.figure(figsize=(22, 12))
+        gs_layout = fig.add_gridspec(3, 6, hspace=0.70, wspace=0.55)
+
+        ax_ffp_tx = fig.add_subplot(gs_layout[0, 0:2])
+        ax_pp_tx  = fig.add_subplot(gs_layout[1, 0:2])
+        ax_eta    = fig.add_subplot(gs_layout[2, 0:2])
+        ax_ffp_tm = fig.add_subplot(gs_layout[0, 2:4])
+        ax_pp_tm  = fig.add_subplot(gs_layout[1, 2:4])
+        ax_q_tm   = fig.add_subplot(gs_layout[2, 2:4])
+        ax_tbl1   = fig.add_subplot(gs_layout[0, 4:6])
+        ax_tbl2   = fig.add_subplot(gs_layout[1:3, 4:6])
+
+        # TX input plots — all attempted levels
+        _plot_levels(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
+        # ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
+                        #    'g--', linewidth=1.5, label="FF\'_NI (real)")
+        ax_ffp_tx.set_title("FF\' tried levels (norm)", fontsize=10)
+        ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
+        ax_ffp_tx.set_ylabel("FF\' (norm)")
+        # ax_ffp_tx.set_ylim([0, 1])
+        ax_ffp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
+        ax_ffp_tx.grid(True, alpha=0.3)
+        ax_ffp_tx.axhline(0, color='k', linewidth=0.5)
+
+        _plot_levels(ax_pp_tx, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
+        ax_pp_tx.set_title("p\' tried levels (normalized)", fontsize=10)
+        ax_pp_tx.set_xlabel(r'$\hat{\psi}$')
+        ax_pp_tx.set_ylabel("p\' (norm)")
+        # ax_pp_tx.set_ylim([0, 1])
+        ax_pp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
+        ax_pp_tx.grid(True, alpha=0.3)
+
+        ax_eta.plot(self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'], 'r-', linewidth=2)
+        ax_eta.set_yscale('log')
+        ax_eta.set_title(r'Resistivity $\eta$ (input to TM)', fontsize=10)
+        ax_eta.set_xlabel(r'$\hat{\psi}$')
+        ax_eta.set_ylabel(r'$\eta$ [$\Omega\cdot$m]')
+        ax_eta.grid(True, alpha=0.3)
+
         if solve_succeeded:
             input_rows = [
                 ['Parameter', 'Init EQDSK', 'TORAX', 'TokaMaker'],
@@ -1876,46 +1928,6 @@ class TokTox:
                 ['l_i',      '\u2014', '\u2014',              f'{float(self._state["l_i_tm"][i]):.4f}'],
             ]
 
-            # Layout: 3 rows x 6 cols  (TX inputs | TM outputs | tables)
-            fig = plt.figure(figsize=(22, 12))
-            gs_layout = fig.add_gridspec(3, 6, hspace=0.48, wspace=0.55)
-
-            ax_ffp_tx = fig.add_subplot(gs_layout[0, 0:2])
-            ax_pp_tx  = fig.add_subplot(gs_layout[1, 0:2])
-            ax_eta    = fig.add_subplot(gs_layout[2, 0:2])
-            ax_ffp_tm = fig.add_subplot(gs_layout[0, 2:4])
-            ax_pp_tm  = fig.add_subplot(gs_layout[1, 2:4])
-            ax_q_tm   = fig.add_subplot(gs_layout[2, 2:4])
-            ax_tbl1   = fig.add_subplot(gs_layout[0, 4:6])
-            ax_tbl2   = fig.add_subplot(gs_layout[1:3, 4:6])
-
-            # TX input plots — all attempted levels
-            _plot_levels(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
-            # ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
-                        #    'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp_tx.set_title("FF\' tried levels (norm)", fontsize=10)
-            ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
-            ax_ffp_tx.set_ylabel("FF\' (norm)")
-            # ax_ffp_tx.set_ylim([0, 1])
-            ax_ffp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
-            ax_ffp_tx.grid(True, alpha=0.3)
-            ax_ffp_tx.axhline(0, color='k', linewidth=0.5)
-
-            _plot_levels(ax_pp_tx, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
-            ax_pp_tx.set_title("p\' tried levels (normalized)", fontsize=10)
-            ax_pp_tx.set_xlabel(r'$\hat{\psi}$')
-            ax_pp_tx.set_ylabel("p\' (norm)")
-            # ax_pp_tx.set_ylim([0, 1])
-            ax_pp_tx.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
-            ax_pp_tx.grid(True, alpha=0.3)
-
-            ax_eta.plot(self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'], 'r-', linewidth=2)
-            ax_eta.set_yscale('log')
-            ax_eta.set_title(r'Resistivity $\eta$ (input to TM)', fontsize=10)
-            ax_eta.set_xlabel(r'$\hat{\psi}$')
-            ax_eta.set_ylabel(r'$\eta$ [$\Omega\cdot$m]')
-            ax_eta.grid(True, alpha=0.3)
-
             # TM output plots
             ax_ffp_tm.plot(self._state['ffp_prof_tx'][i]['x'], self._state['ffp_prof_tx'][i]['y'],
                            'b--', linewidth=1.5, label="FF\' TX (real)")
@@ -1937,6 +1949,20 @@ class TokTox:
             ax_pp_tm.set_ylabel("p\'")
             ax_pp_tm.legend(fontsize=8)
             ax_pp_tm.grid(True, alpha=0.3)
+
+            # Add secondary axis for pressure profiles if available
+            if i in self._state['p_prof_tx'] and i in self._state['p_prof_tm']:
+                ax_pp_tm_2 = ax_pp_tm.twinx()
+                ax_pp_tm_2.plot(self._state['p_prof_tx'][i]['x'], self._state['p_prof_tx'][i]['y'],
+                               'c--', linewidth=1.5, alpha=0.7, label="p TX (step 2)")
+                ax_pp_tm_2.plot(self._state['p_prof_tm'][i]['x'], self._state['p_prof_tm'][i]['y'],
+                               'orange', linewidth=2, alpha=0.7, label="p TM (step 2)")
+                ax_pp_tm_2.set_ylabel("p [Pa]", color='orange')
+                ax_pp_tm_2.tick_params(axis='y', labelcolor='orange')
+                # Combine legends from both axes
+                lines1, labels1 = ax_pp_tm.get_legend_handles_labels()
+                lines2, labels2 = ax_pp_tm_2.get_legend_handles_labels()
+                ax_pp_tm.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc='upper left')
 
             # q profile: TM vs TORAX
             try:
@@ -1978,56 +2004,28 @@ class TokTox:
                 ['beta_N',   '\u2014', f'{beta_n_tx:.4f}'],
             ]
 
-            fig = plt.figure(figsize=(16, 12))
-            gs_layout = fig.add_gridspec(3, 4, hspace=0.5, wspace=0.55)
+            # Leave TM output plots blank for failed case
+            ax_ffp_tm.axis('off')
+            ax_ffp_tm.text(0.5, 0.5, 'N/A', ha='center', va='center', fontsize=11, 
+                          color='gray', transform=ax_ffp_tm.transAxes, fontweight='bold')
+            ax_ffp_tm.set_title("FF\' TM output vs TX input", fontsize=10)
 
-            ax_ffp  = fig.add_subplot(gs_layout[0, 0:2])
-            ax_pp   = fig.add_subplot(gs_layout[1, 0:2])
-            ax_eta  = fig.add_subplot(gs_layout[2, 0:2])
-            ax_tbl1 = fig.add_subplot(gs_layout[0, 2:4])
-            ax_tbl2 = fig.add_subplot(gs_layout[1, 2:4])
-            ax_fail = fig.add_subplot(gs_layout[2, 2:4])
+            ax_pp_tm.axis('off')
+            ax_pp_tm.text(0.5, 0.5, 'N/A', ha='center', va='center', fontsize=11, 
+                         color='gray', transform=ax_pp_tm.transAxes, fontweight='bold')
+            ax_pp_tm.set_title("p\' TM output vs TX input", fontsize=10)
 
-            _plot_levels(ax_ffp, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
-            # ax_ffp.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
-            #             'g--', linewidth=1.5, label="FF\'_NI (real)")
-            ax_ffp.set_title("FF\' tried levels (norm)", fontsize=10)
-            ax_ffp.set_xlabel(r'$\hat{\psi}$')
-            ax_ffp.set_ylabel("FF\' (norm)")
-            # ax_ffp.set_ylim([0, 1])
-            ax_ffp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
-            ax_ffp.grid(True, alpha=0.3)
-            ax_ffp.axhline(0, color='k', linewidth=0.5)
+            ax_q_tm.axis('off')
+            ax_q_tm.text(0.5, 0.5, 'N/A', ha='center', va='center', fontsize=11, 
+                        color='gray', transform=ax_q_tm.transAxes, fontweight='bold')
+            ax_q_tm.set_title('q profile (TM vs TORAX)', fontsize=10)
 
-            _plot_levels(ax_pp, 'pp', seed_x=_seed_psi_n, seed_y=_seed_pp_norm, seed_label="p\' seed EQDSK (norm)")
-            ax_pp.set_title("p\' tried levels (norm)", fontsize=10)
-            ax_pp.set_xlabel(r'$\hat{\psi}$')
-            ax_pp.set_ylabel("p\' (norm)")
-            # ax_pp.set_ylim([0, 1])
-            ax_pp.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.20), ncol=2)
-            ax_pp.grid(True, alpha=0.3)
-
-            ax_eta.plot(self._state['eta_prof'][i]['x'], self._state['eta_prof'][i]['y'], 'r-', linewidth=2)
-            ax_eta.set_yscale('log')
-            ax_eta.set_title(r'Resistivity $\eta$ (input to TM)', fontsize=10)
-            ax_eta.set_xlabel(r'$\hat{\psi}$')
-            ax_eta.set_ylabel(r'$\eta$ [$\Omega\cdot$m]')
-            ax_eta.grid(True, alpha=0.3)
-
-            render_table(ax_tbl1, input_rows, 'Scalar Inputs  (Init EQDSK vs TORAX)')
-            render_table(ax_tbl2, diag_rows,  'TORAX Diagnostics')
-
-            # Fail message panel
-            ax_fail.axis('off')
-            fail_text = f'{fail_msg}' if fail_msg else 'TokaMaker failed (unknown reason)'
-            ax_fail.text(
-                0.5, 0.5, fail_text,
-                ha='center', va='center', fontsize=9, color='darkred', fontweight='bold',
-                transform=ax_fail.transAxes,
-                wrap=True,
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='#fff3cd', edgecolor='darkred', linewidth=1.5),
-            )
-            ax_fail.set_title('Failure Reason', fontsize=10, fontweight='bold', pad=4, color='darkred')
+            render_table(ax_tbl1, input_rows, 'Scalar Inputs (Init EQDSK vs TORAX)')
+            
+            # Combine diagnostics and failure reason in second table area
+            diag_rows.append(['', '', ''])
+            diag_rows.append(['Failure Reason:', fail_msg if fail_msg else 'Unknown', ''])
+            render_table(ax_tbl2, diag_rows, 'TORAX Diagnostics & Failure Info')
 
             plt.suptitle(
                 f'TM Diagnostic \u2014 Step {self._current_step}, t-idx {i}/{len(self._times)-1}, t = {t:.2f} s'
