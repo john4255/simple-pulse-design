@@ -1191,8 +1191,15 @@ class TokTox:
         self._eqdsk_skip = []
         _step_level_log = []
         for i, t in enumerate(self._times):
+            # Clear isoflux, flux, and saddle targets from previous timepoint
             self._gs.set_isoflux(None)
             self._gs.set_flux(None,None)
+            self._gs.set_saddles(None)
+
+            # Set saddle-point (X-point) constraints during diverted phase
+            if self._diverted_times[i] and self._x_point_targets is not None:
+                saddle_weights = self._x_point_weight * np.ones(self._x_point_targets.shape[0])
+                self._gs.set_saddles(self._x_point_targets, saddle_weights)
 
             Ip_target = abs(self._state['Ip'][i])
             P0_target = abs(self._state['pax'][i])
@@ -1212,11 +1219,8 @@ class TokTox:
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
 
-            lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
-            isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights) # sets target psi at LCFS
+            # self._gs.set_isoflux(np.array(lcfs), isoflux_weights)
 
             # Initialize psi from geometry parameters
             # For step 0, using the seed EQDSK geometry should give a good initial guess
@@ -1238,8 +1242,14 @@ class TokTox:
                 self._print_out(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current step.')
                 self._gs.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
+            lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
+            isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
+            lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
-            self._gs.update_settings()
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights*2) # sets target psi at LCFS
+            
+            
+            self._gs.update_settings() # TODO what does this do?
 
             if i>0:
                 # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
@@ -1330,14 +1340,19 @@ class TokTox:
                 self._gs_update(i)
                 self._profile_plot(i, t)
 
+                # Store diverted/limited flag for this timestep
+                if not hasattr(self, '_diverted_flags'):
+                    self._diverted_flags = {}
+                self._diverted_flags[i] = self._gs.diverted
+
                 if graph:
-                    fig, ax = plt.subplots(1,1)
-                    self._gs.plot_machine(fig,ax,coil_colormap='seismic',coil_symmap=True,coil_scale=1.E-6,coil_clabel=r'$I_C$ [MA]')
-                    self._gs.plot_psi(fig,ax,xpoint_color='r',vacuum_nlevels=4)
-                    ax.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r')
-                    ax.set_title(f't={self._times[i]}')
-                    plt.savefig(os.path.join(self._out_dir, 'equil', 'equil_{:03}.{:03}.png'.format(self._current_step, i)))
-                    plt.close(fig)
+                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(6, 8))
+                    self._gs.plot_machine(fig_eq, ax_eq, coil_colormap='seismic', coil_symmap=True, coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+                    self._gs.plot_psi(fig_eq, ax_eq, xpoint_color='r', vacuum_nlevels=4)
+                    ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1)
+                    ax_eq.set_title(f't = {t:.2f} s')
+                    fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
+                    plt.close(fig_eq)
                 
             self._tm_diagnostic_plot(i, t, level_attempts, solve_succeeded)
 
@@ -2464,17 +2479,23 @@ class TokTox:
         ax2_02.set_ylabel('V_loop ratio (TM/TX)', color='g')
         ax2_02.tick_params(axis='y', labelcolor='g')
         ax2_02.legend(fontsize=8, loc='upper right')
-        # Print average vloop and ratio between 150 and 200 seconds
-        mask = (ratio_times >= 150) & (ratio_times <= 200)
-        if np.any(mask):
-            avg_ratio = np.nanmean(ratio[mask])
-            # Get averages for both codes
-            mask_tm = (np.array(self._times) >= 150) & (np.array(self._times) <= 200)
-            mask_tx = (np.array(rx) >= 150) & (np.array(rx) <= 200)
-            avg_vloop_tm = np.mean(tm_vloop[mask_tm]) if np.any(mask_tm) else np.nan
-            avg_vloop_tx = np.mean(tx_vloop[mask_tx]) if np.any(mask_tx) else np.nan
-            self._print_out(f"V_loop 150-200: TokaMaker avg={avg_vloop_tm:.3f} V, TORAX avg={avg_vloop_tx:.3f} V, ratio={avg_ratio:.4f}")
-            ax2_02.text(0.5, 0.9, f'Avg ratio (150-200s): {avg_ratio:.4f}', transform=ax2_02.transAxes, color='g', fontsize=8, ha='center')
+        # Print average vloop and ratio during flattop
+        ft = getattr(self, '_flattop', np.zeros(len(self._times), dtype=bool))
+        ft_mask_tm = ft.astype(bool)
+        if len(tm_vloop) == len(tx_vloop):
+            ft_mask_ratio = ft_mask_tm
+            ft_mask_tx = ft_mask_tm
+        else:
+            ft_mask_ratio = np.interp(ratio_times, self._times, ft.astype(float)) > 0.5
+            ft_mask_tx = np.interp(np.array(rx), self._times, ft.astype(float)) > 0.5
+        if np.any(ft_mask_ratio):
+            avg_ratio = np.nanmean(ratio[ft_mask_ratio])
+            avg_vloop_tm = np.mean(tm_vloop[ft_mask_tm]) if np.any(ft_mask_tm) else np.nan
+            avg_vloop_tx = np.mean(tx_vloop[ft_mask_tx]) if np.any(ft_mask_tx) else np.nan
+            ft_times = np.array(self._times)[ft_mask_tm]
+            ft_label = f'{ft_times[0]:.1f}-{ft_times[-1]:.1f}s' if len(ft_times) > 0 else 'flattop'
+            self._print_out(f"V_loop flattop ({ft_label}): TokaMaker avg={avg_vloop_tm:.3f} V, TORAX avg={avg_vloop_tx:.3f} V, ratio={avg_ratio:.4f}")
+            ax2_02.text(0.5, 0.9, f'Avg ratio (flattop): {avg_ratio:.4f}', transform=ax2_02.transAxes, color='g', fontsize=8, ha='center')
         ax_02.set_xlabel('Time [s]')
         ax_02.grid(True, alpha=0.3)
         ax_02.legend(fontsize=8, loc='upper left')
@@ -2636,16 +2657,47 @@ class TokTox:
 
 
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False):
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
+             diverted_eqdsk_idxs=None, x_point_targets=None, x_point_weight=100.0):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
         @param graph Whether to display psi and profile graphs at each iteration (for testing).
         @param max_step Maximum number of simulation iterations allowed.
         @param skip_bad_init_eqdsks If True, silently skip broken initial gEQDSK files; if False, raise an error when one is found.
+        @param diverted_eqdsk_indices List of eqdsk indices where the plasma should be diverted (e.g. [9,10,...,19]).
+        @param x_point_targets X-point target locations as array of shape (n_xpoints, 2) with [R, Z] pairs.
+              One pair for single null, two pairs for double null.
+        @param x_point_weight Weight for the saddle point constraints (default 100).
         '''
 
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
+
+        # ── Diverted / saddle-point configuration ──
+        if diverted_eqdsk_idxs is not None and x_point_targets is not None:
+            x_point_targets = np.atleast_2d(x_point_targets)
+            div_times = [self._eqtimes[j] for j in diverted_eqdsk_idxs]
+            t_div_start = min(div_times)
+            t_div_end   = max(div_times)
+            self._diverted_times = np.array([(t >= t_div_start and t <= t_div_end) for t in self._times])
+            self._x_point_targets = x_point_targets
+            self._x_point_weight  = x_point_weight
+        else:
+            self._diverted_times  = np.zeros(len(self._times), dtype=bool)
+            self._x_point_targets = None
+            self._x_point_weight  = x_point_weight
+
+        # ── Flattop detection ──
+        Ip_arr = np.array(self._state['Ip'])
+        Ip_max = np.max(Ip_arr)
+        flattop_threshold = 0.95 * Ip_max
+        above = Ip_arr >= flattop_threshold
+        if np.any(above):
+            ft_start = self._times[np.argmax(above)]
+            ft_end   = self._times[len(above) - 1 - np.argmax(above[::-1])]
+            self._flattop = np.array([(t >= ft_start and t <= ft_end) for t in self._times])
+        else:
+            self._flattop = np.zeros(len(self._times), dtype=bool)
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         if run_name == 'tmp':
@@ -2661,9 +2713,11 @@ class TokTox:
         os.makedirs(os.path.join(self._out_dir, 'plots'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
+        os.makedirs(os.path.join(self._out_dir, 'vid'), exist_ok=True)
         with open(self._log_file, 'w'):
             pass
 
+        self._run_name = run_name
         self._fname_out = os.path.join(self._out_dir, 'results', out)
 
         err = convergence_threshold + 1.0
@@ -2706,6 +2760,9 @@ class TokTox:
 
             self._profile_evolution_plot()
             self._scalar_plot()
+
+            from pulse_movie import generate_pulse_movie
+            generate_pulse_movie(self, self._current_step, run_name=run_name)
 
             self._current_step += 1
         
