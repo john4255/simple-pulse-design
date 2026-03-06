@@ -107,7 +107,7 @@ class TokTox:
         self._state['psi_axis_tx'] = np.zeros(len(self._times))
         self._state['psi_tx'] = {}  
         self._state['psi_tm'] = {}
-        self._state['psi_grid_tm_prev'] = None
+        self._state['psi_grid_prev_tm'] = np.zeros(len(self._times))
 
         self._state['lcfs_geo'] = {}
         self._state['ffp_prof'] = {}
@@ -1190,6 +1190,17 @@ class TokTox:
 
             self._gs.update_settings()
 
+            if i>0:
+                self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
+                if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
+                    self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
+                    self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
+            
+            
+            if i==0: # at beginning of every step reset this dict so it doesn't use previous step's values
+                self._print_out(f'\tTM: Resetting previous psi grid storage at beginning of step {self._current_step}.')
+                self._state['psi_grid_prev_tm'] = {} # TODO weird place to put this but works for now
+
             skip_coil_update = False
             eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i))
 
@@ -1257,6 +1268,7 @@ class TokTox:
                 self._eqdsk_skip.append(eq_name)
                 skip_coil_update = True
                 self._print_out(f'\tTM: Solve failed at t={t} (all levels attempted).')
+                self._state['psi_grid_prev_tm'][i] = None  # if solve failed, set psi grid to None
             
             # self._tm_diagnostic_plot(step, i, t, ffp_prof, pp_prof, solve_succeeded, fail_msg=fail_msg)
 
@@ -1415,6 +1427,9 @@ class TokTox:
             if coil not in self._results['COIL']:
                 self._results['COIL'][coil] = {}
             self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
+
+        # get psi to use in next timestep
+        self._state['psi_grid_prev_tm'][i] = self._gs.get_psi(normalized=False)
 
 
     def _res_update(self, data_tree):
