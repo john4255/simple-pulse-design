@@ -108,6 +108,7 @@ class TokTox:
         self._state['psi_tx'] = {}  
         self._state['psi_tm'] = {}
         self._state['psi_grid_prev_tm'] = np.zeros(len(self._times))
+        self._psi_warm_start = {}  # {timestep_idx: psi_array} — persists across steps for warm-starting
 
         self._state['lcfs_geo'] = {}
         self._state['ffp_prof'] = {}
@@ -933,20 +934,20 @@ class TokTox:
 
 
         # power channels plot for testing
-        fig, ax = plt.subplots()
-        ax.set_title('Power channels [W]')
-        ax.plot(self._results['P_ohmic_e']['x'], self._results['P_ohmic_e']['y'], 'r-o', markersize=3, label='P_ohmic_e')
-        ax.plot(self._results['P_radiation_e']['x'], self._results['P_radiation_e']['y'], 'm--o', markersize=3, label='P_radiation_e')
-        ax.plot(self._results['P_SOL_total']['x'], self._results['P_SOL_total']['y'], 'c--o', markersize=3, label='P_SOL_total')
-        ax.plot(self._results['P_alpha_total']['x'], self._results['P_alpha_total']['y'], 'g-.o', markersize=3, label='P_alpha_total')
-        ax.plot(self._results['P_aux_total']['x'], self._results['P_aux_total']['y'], 'y-.o', markersize=3, label='P_aux_total')
-        ax.set_xlabel('Time [s]')
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_xbound(0, 1)
-        # ax_20.set_ylim(0,1E8)
-        plt.savefig(os.path.join(self._out_dir, 'plots', f'torax_powers_{self._current_step}.png'), dpi=300)
-        plt.close(fig)
+        # fig, ax = plt.subplots()
+        # ax.set_title('Power channels [W]')
+        # ax.plot(self._results['P_ohmic_e']['x'], self._results['P_ohmic_e']['y'], 'r-o', markersize=3, label='P_ohmic_e')
+        # ax.plot(self._results['P_radiation_e']['x'], self._results['P_radiation_e']['y'], 'm--o', markersize=3, label='P_radiation_e')
+        # ax.plot(self._results['P_SOL_total']['x'], self._results['P_SOL_total']['y'], 'c--o', markersize=3, label='P_SOL_total')
+        # ax.plot(self._results['P_alpha_total']['x'], self._results['P_alpha_total']['y'], 'g-.o', markersize=3, label='P_alpha_total')
+        # ax.plot(self._results['P_aux_total']['x'], self._results['P_aux_total']['y'], 'y-.o', markersize=3, label='P_aux_total')
+        # ax.set_xlabel('Time [s]')
+        # ax.legend(fontsize=8)
+        # ax.grid(True, alpha=0.3)
+        # ax.set_xbound(0, 1)
+        # # ax_20.set_ylim(0,1E8)
+        # plt.savefig(os.path.join(self._out_dir, 'plots', f'torax_powers_{self._current_step}.png'), dpi=300)
+        # plt.close(fig)
 
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
@@ -1103,41 +1104,82 @@ class TokTox:
 
         return ffp_ni
 
-    def set_coil_reg(self, targets=None, i=0, updownsym=False, weights=None, strict_limit=50.0E6, disable_virtual_vsc=True, weight_mult=1.0):
-        r'''! Set coil regularization terms.
-        @param targets Target values for each coil.
-        @param weights Default weight for each coil.
-        @param strict_limit Strict limit for coil currents.
-        @param disable_virtual_vsc Disable VSC virtual coil. 
-        @param weight_mult Factor by which to multiply target weights (reduce to allow for more flexibility).
+    def set_coil_reg(self, targets=None, i=0, coil_bounds=None, updownsym=False,
+                     default_weight=1.0E-1, disable_coils=None,
+                     disable_weight=1.0E4, symmetry_weight=1.0E3,
+                     disable_virtual_vsc=True, vsc_weight=1.0E4):
+        r'''! Set coil regularization using the matrix-based API.
+        @param targets Dict of {coil_name: target_current} or {coil_name: time_series} for prescribed currents.
+        @param i Timestep index (used for prescribed_currents interpolation).
+        @param coil_bounds Dict of {coil_name: [min, max]} current bounds. Default ±50 kA.
+        @param updownsym Enforce up-down symmetry for coil pairs (U/L naming convention).
+        @param default_weight Regularization weight for normal coils (default 0.1).
+        @param disable_coils List of coil name prefixes to disable (e.g. ['DV1', 'DV2']).
+        @param disable_weight Regularization weight for disabled coils (default 1e4).
+        @param symmetry_weight Regularization weight for symmetry constraints (default 1e3).
+        @param disable_virtual_vsc Disable the virtual VSC coil (default True).
+        @param vsc_weight Regularization weight for disabled VSC (default 1e4).
         '''
-        # Set regularization weights
-        # coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
-        # self._gs.set_coil_bounds(coil_bounds)
-
-        coil_bounds = {key: [-strict_limit, strict_limit] for key in self._gs.coil_sets}
-        # for key in [x for x in self._gs.coil_sets if 'DIV' in x]:   
-        #     coil_bounds[key] = [0, 0] # turn off div coils, for now
+        if coil_bounds is None:
+            coil_bounds = {key: [-5.0E4, 5.0E4] for key in self._gs.coil_sets}
         self._gs.set_coil_bounds(coil_bounds)
+        self._coil_bounds = coil_bounds  # store for re-application after solve
 
         if self._prescribed_currents and targets:
             self._targets = targets
-        
-        regularization_terms = []
-        if self._prescribed_currents:
-            for name, currents in self._targets.items():
-                if name == 'time':
-                    continue
-                t_current = np.interp(self._times[i], self._targets['time'], currents)
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=t_current,weight=1.0E-3))
-        else:
-            for name, target_current in targets.items():
-                if name == 'time':
-                    continue
-                regularization_terms.append(self._gs.coil_reg_term({name: 1.0},target=target_current,weight=1.0E-3))
 
-        # Pass regularization terms to TokaMaker
-        self._gs.set_coil_reg(reg_terms=regularization_terms)
+        # Build matrix-based regularization (same API as tokamaker_runner.py)
+        n = self._gs.ncoils + 1  # +1 for virtual VSC coil
+        coil_regmat = np.zeros((n, n), dtype=np.float64)
+        coil_reg_weights = np.zeros((n,), dtype=np.float64)
+        coil_targets = np.zeros((n,), dtype=np.float64)
+
+        if disable_coils is None:
+            disable_coils = []
+
+        for name, coil in self._gs.coil_sets.items():
+            cid = coil['id']
+
+            # Determine target current for this coil
+            if self._prescribed_currents and targets:
+                t_current = np.interp(self._times[i], self._targets['time'], self._targets.get(name, [0.0]*len(self._targets.get('time', [0]))))
+                coil_targets[cid] = t_current
+            elif targets and name in targets:
+                coil_targets[cid] = targets[name]
+
+            if updownsym and 'U' in name:
+                # Enforce up-down symmetry: I_upper - I_lower = 0
+                lower_name = name.replace('U', 'L')
+                if lower_name in self._gs.coil_sets:
+                    coil_regmat[cid, cid] = 1.0
+                    coil_regmat[cid, self._gs.coil_sets[lower_name]['id']] = -1.0
+                    coil_reg_weights[cid] = symmetry_weight
+                    continue
+
+            # Normal coil regularization
+            coil_regmat[cid, cid] = 1.0
+            if any(name.startswith(prefix) for prefix in disable_coils):
+                coil_reg_weights[cid] = disable_weight
+            else:
+                coil_reg_weights[cid] = default_weight
+
+        # Virtual VSC coil (last entry in the matrix)
+        coil_regmat[-1, -1] = 1.0
+        if disable_virtual_vsc:
+            coil_reg_weights[-1] = vsc_weight
+        else:
+            coil_reg_weights[-1] = default_weight
+
+        self._gs.set_coil_reg(coil_regmat, reg_weights=coil_reg_weights, reg_targets=coil_targets)
+
+        # Store config for post-solve re-application
+        self._coil_reg_config = {
+            'targets': targets, 'coil_bounds': coil_bounds,
+            'updownsym': updownsym, 'default_weight': default_weight,
+            'disable_coils': disable_coils, 'disable_weight': disable_weight,
+            'symmetry_weight': symmetry_weight,
+            'disable_virtual_vsc': disable_virtual_vsc, 'vsc_weight': vsc_weight,
+        }
 
     def _run_gs(self, graph=False):
         r'''! Run the GS solve across n timesteps using TokaMaker.
@@ -1186,14 +1228,23 @@ class TokTox:
             if err_flag:
                 print("Error initializing psi.")
 
+            # Warm-start: prefer previous step's converged solution for this
+            # timestep; fall back to the previous timestep's solution within
+            # the current step (adjacent-time warm-start).
+            if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
+                self._print_out(f'\tTM: Warm-starting psi at t={t} from previous step converged solution.')
+                self._gs.set_psi(self._psi_warm_start[i])
+            elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
+                self._print_out(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current step.')
+                self._gs.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
 
             self._gs.update_settings()
 
             if i>0:
-                self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
+                # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
                 if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
-                    self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
+                    # self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
                     self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
             
             
@@ -1302,10 +1353,12 @@ class TokTox:
 
             if self._prescribed_currents:
                 if i < len(self._times):
-                    self.set_coil_reg(i=i+1)
+                    cfg = getattr(self, '_coil_reg_config', {})
+                    self.set_coil_reg(i=i+1, **{k: v for k, v in cfg.items() if k != 'targets'})
             elif not skip_coil_update:
                 coil_targets, _ = self._gs.get_coil_currents()
-                self.set_coil_reg(targets=coil_targets)
+                cfg = getattr(self, '_coil_reg_config', {})
+                self.set_coil_reg(targets=coil_targets, **{k: v for k, v in cfg.items() if k != 'targets'})
 
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
@@ -1430,6 +1483,7 @@ class TokTox:
 
         # get psi to use in next timestep
         self._state['psi_grid_prev_tm'][i] = self._gs.get_psi(normalized=False)
+        self._psi_warm_start[i] = self._gs.get_psi(normalized=False)  # persist across steps
 
 
     def _res_update(self, data_tree):
@@ -2406,7 +2460,7 @@ class TokTox:
             ratio_times = np.array(rx)
         ax2_02 = ax_02.twinx()
         ax2_02.plot(ratio_times, ratio, 'g-s', markersize=3, label='TM/TX ratio')
-        ax2_02.set_ylim(0,30)
+        ax2_02.set_ylim(0,2)
         ax2_02.set_ylabel('V_loop ratio (TM/TX)', color='g')
         ax2_02.tick_params(axis='y', labelcolor='g')
         ax2_02.legend(fontsize=8, loc='upper right')
@@ -2623,7 +2677,7 @@ class TokTox:
         self._print_out(f'---------------------------------------')
         self._current_step = 1
 
-        while err > convergence_threshold and self._current_step < max_step:
+        while err > convergence_threshold and self._current_step <= max_step:
             self._print_out(f'---- Step {self._current_step} ---- \n')
             cflux_tx, cflux_tx_vloop = self._run_transport(graph=graph)
             if save_states:
