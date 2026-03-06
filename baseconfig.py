@@ -63,32 +63,32 @@ BASE_CONFIG = {
     },
     'sources': {
         # Current sources (for psi equation)
-        'ecrh': { # ECRH/ECCD (with Lin-Liu)
+        # 'ecrh': { # ECRH/ECCD (with Lin-Liu)
         #    'gaussian_width': 0.05,
         #    'gaussian_location': 0.35,
         #    'P_total': eccd_power,
-           },
-        'generic_heat': { # Proxy for NBI heat source
+        #    },
+        # 'generic_heat': { # Proxy for NBI heat source
             # 'mode': 'PRESCRIBED',
             # 'gaussian_location': r_nbi, # Gaussian location in normalized coordinates
             # 'gaussian_width': w_nbi, # Gaussian width in normalized coordinates
             # 'P_total': (nbi_times, nbi_powers), # Total heating power
             # electron heating fraction r
             # 'electron_heat_fraction': el_heat_fraction,
-        },
-        'generic_current': { # Proxy for NBI current source
+        # },
+        # 'generic_current': { # Proxy for NBI current source
             # 'mode': 'PRESCRIBED',
             # 'use_absolute_current': True, # I_generic is total external current
             # 'gaussian_width': w_nbi,
             # 'gaussian_location': r_nbi,
             # 'I_generic': (nbi_times, nbi_cd),
-        },
-        'fusion': {}, # fusion power
-        'ei_exchange': {}, # equipartition
-        'ohmic': {}, # ohmic power
-        'cyclotron_radiation': {
-          'mode': 'ZERO',
-        }, # cyclotron radiation
+        # },
+        # 'fusion': {}, # fusion power
+        # 'ei_exchange': {}, # equipartition
+        # 'ohmic': {}, # ohmic power
+        # 'cyclotron_radiation': {
+        #   'mode': 'ZERO',
+        # }, # cyclotron radiation
         'impurity_radiation': { # impurity radiation + bremsstrahlung
             'model_name': 'mavrin_fit',
             'radiation_multiplier': 0.0,

@@ -107,6 +107,7 @@ class TokTox:
         self._state['psi_axis_tx'] = np.zeros(len(self._times))
         self._state['psi_tx'] = {}  
         self._state['psi_tm'] = {}
+        self._state['psi_grid_tm_prev'] = None
 
         self._state['lcfs_geo'] = {}
         self._state['ffp_prof'] = {}
@@ -148,6 +149,9 @@ class TokTox:
         self._state['j_ohmic'] = {}
         self._state['j_ni'] = {}
         self._state['j_bootstrap'] = {}
+        self._state['j_ecrh'] = {}
+        self._state['j_external'] = {}
+        self._state['j_generic_current'] = {}
         self._state['j_ohmic_tx'] = {}
         # self._state['j_ni_tx'] = {}
         self._state['f_NI'] = np.zeros(len(self._times))
@@ -581,20 +585,34 @@ class TokTox:
     def set_validation_density(self, ne):
         self._validation_ne = ne
 
-    def _pull_torax_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'): # TODO adjust interpolation to account for last_surface_factor<1
+    def _pull_torax_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'):
         r'''! Load TORAX variable onto psi_norm grid.
+
+        TORAX normalises its psi so that rho=1 maps to psi_N=1 internally,
+        but that boundary corresponds to psi_N = last_surface_factor in the
+        real equilibrium.  This method rescales the TORAX psi axis so that
+        data are placed correctly in [0, last_surface_factor] on self._psi_N.
+
+        Fill-value policy for the region outside the TORAX domain:
+          * Left  (psi_N < first data point): hold first data value (avoids
+            spurious zeros on-axis for cell-centred quantities like P_ohmic).
+          * Right (psi_N > last_surface_factor):
+              - j-profiles (profile_type='jphi-linterp'): fill with 0
+                (current density vanishes at the separatrix).
+              - All other profiles (T, n, p, FF', p'): hold the edge value.
+
         @param data_tree TORAX output data tree.
         @param var_name Name of variable (e.g., 'T_i', 'j_ohmic', 'FFprime').
         @param time Time value to extract.
-        @param load_into_state If 'state' returns dict to load right into '_state' into '_state', elif None, return interpolated data array.
-        @param normalize If True, normalize profile: subtract edge value, divide by core value (for FFprime, pprime).
-        @param profile_type Type key for returned dict: 'linterp' or 'jphi-linterp'. Default is 'linterp'.
+        @param load_into_state If 'state' returns dict to load into '_state'; else returns plain array.
+        @param normalize If True, normalize profile by the core value.
+        @param profile_type Type key: 'linterp' or 'jphi-linterp'. Default 'linterp'.
         '''
-        
+
         # Extract variable from profiles
         var = getattr(data_tree.profiles, var_name)
         var_data = var.sel(time=time, method='nearest').to_numpy()
-        
+
         # Automatically detect which rho coordinate this variable uses
         if 'rho_cell_norm' in var.coords:
             grid = 'rho_cell_norm'
@@ -604,43 +622,52 @@ class TokTox:
             grid = 'rho_norm'
         else:
             raise ValueError(f"Variable {var_name} does not have a recognized rho coordinate")
-        
-        # Get rho_tor coordinate for this variable
-        rho_tor = var.coords[grid].values
-        
+
         # Get psi_norm on rho_face_norm grid and psi on rho_norm grid
         psi_norm_face = data_tree.profiles.psi_norm.sel(time=time, method='nearest').to_numpy()
         psi_rho_norm = data_tree.profiles.psi.sel(time=time, method='nearest').to_numpy()
         psi_norm_rho_norm = (psi_rho_norm - psi_rho_norm[0]) / (psi_rho_norm[-1] - psi_rho_norm[0])
-        
+
         # Correct second element to avoid degeneracy from zero-gradient BC at core
         psi_norm_rho_norm[1] = (psi_norm_face[0] + psi_norm_face[1]) / 2.0
 
-        # Convert psi to same grid as variable
+        # Convert psi to same grid as variable (TORAX internal: 0 → 1)
         if grid == 'rho_cell_norm':
             psi_on_grid = psi_norm_rho_norm[1:-1]
         elif grid == 'rho_face_norm':
             psi_on_grid = psi_norm_face
         elif grid == 'rho_norm':
             psi_on_grid = psi_norm_rho_norm
-          
-        # Interpolate onto uniform psi grid
-        data_on_psi = interp1d(psi_on_grid, var_data, kind='linear',
-                            fill_value=0, bounds_error=False)(self._psi_N)
 
-        
+        # Rescale to real psi_N: TORAX's domain ceiling is psi_N = last_surface_factor.
+        psi_on_grid_real = psi_on_grid * self._last_surface_factor
+
+        # Fill values outside the TORAX domain.
+        #   Left  (axis): hold the first available data value.
+        #   Right (beyond last_surface_factor): 0 for j-profiles, edge value for all others.
+        left_fill  = float(var_data[0])
+        right_fill = 0.0 if profile_type == 'jphi-linterp' else float(var_data[-1])
+
+        # Interpolate onto the TokTox psi_N grid
+        data_on_psi = interp1d(psi_on_grid_real, var_data, kind='linear',
+                               fill_value=(left_fill, right_fill),
+                               bounds_error=False)(self._psi_N)
+
         # Normalize if requested
         if normalize:
             if grid == 'rho_cell_norm':
-                # Cell-centered variables don't have a value at psi=0
-                # Find the index in data_on_psi closest to the first cell center
-                core_idx = np.argmin(np.abs(self._psi_N - psi_on_grid[0]))
+                # Cell-centred variables don't have a value at psi=0.
+                # Find the index in data_on_psi closest to the first cell centre.
+                core_idx = np.argmin(np.abs(self._psi_N - psi_on_grid_real[0]))
                 data_on_psi /= data_on_psi[core_idx]
-                self._print_out(f"Normalizing {var_name} using value at psi={self._psi_N[core_idx]:.3f} (closest to first cell center at {psi_on_grid[0]:.3f})")
+                self._print_out(
+                    f"Normalizing {var_name} using value at psi={self._psi_N[core_idx]:.3f}"
+                    f" (closest to first cell center at psi_real={psi_on_grid_real[0]:.3f})"
+                )
             else:
                 # Face or extended grid has actual core value at psi=0
                 data_on_psi /= data_on_psi[0]
-        
+
         if load_into_state == 'state':
             return {'x': self._psi_N.copy(), 'y': data_on_psi.copy(), 'type': profile_type}
         else:
@@ -677,7 +704,7 @@ class TokTox:
             'geometry_directory': os.getcwd(),
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 50,
-            'Ip_from_parameters': False, # tells TX to pull Ip from eqdsk
+            'Ip_from_parameters': True, # True tells TX to pull from config, not from eqdsk, in case eqdsks fail TX retains correct Ip targets
         }
         if self._current_step == 1:
             eq_safe = []
@@ -707,16 +734,17 @@ class TokTox:
                 if tm_ok:
                     full_eqdsk_map[t] = eqdsk
                     n_tm += 1
-                else:
+                # else:
                     # TM failed: use nearest seed EQDSK and reset psi to seed values
-                    seed_idx = int(np.argmin(np.abs(eqtimes_arr - t)))
-                    full_eqdsk_map[t] = self._init_files[seed_idx]
-                    self._state['psi_axis_tm'][i] = self._psi_axis_seed[i] 
-                    self._state['psi_lcfs_tm'][i] = self._psi_lcfs_seed[i]
+                    # seed_idx = int(np.argmin(np.abs(eqtimes_arr - t)))
+                    # full_eqdsk_map[t] = self._init_files[seed_idx]
+                    # self._state['psi_axis_tm'][i] = self._psi_axis_seed[i] 
+                    # self._state['psi_lcfs_tm'][i] = self._psi_lcfs_seed[i]
             if n_tm == 0:
-                print(f'Warning: Step {self._current_step}: no valid TM EQDSKs from step {self._current_step-1}, using all seed EQDSKs.')
+                self._print_out(f'Warning: Step {self._current_step}: no valid TM EQDSKs from step {self._current_step-1}, using all seed EQDSKs.')
             else:
                 self._print_out(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
+            
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
             }
@@ -991,6 +1019,10 @@ class TokTox:
         self._state['j_bootstrap'][i] =      self._pull_torax_onto_psi(data_tree, 'j_bootstrap',      t, load_into_state='state', profile_type='jphi-linterp')
         
 
+        self._state['j_ecrh'][i] = self._pull_torax_onto_psi(data_tree, 'j_ecrh', t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_external'][i] = self._pull_torax_onto_psi(data_tree, 'j_external', t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_generic_current'][i] = self._pull_torax_onto_psi(data_tree, 'j_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
+
         self._state['R_inv_avg_tx'][i] = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state='state', normalize=False)
 
         ffp_ni = self._calc_ffp_ni(i, data_tree)
@@ -1035,6 +1067,7 @@ class TokTox:
         self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state', normalize=False)
         self._state['vpr_tx'][i] = self._pull_torax_onto_psi(data_tree, 'vpr', t, load_into_state='state', normalize=False)
 
+        # self._plot_current_densities(i, t)
 
     def _calc_ffp_ni(self, i, data_tree):
         r'''! Calculate non-inductive FF' profile from TORAX current densities.
@@ -1633,7 +1666,7 @@ class TokTox:
         # (1,0): jPhi plot with j_tot, j_ohmic, j_ni, j_bootstrap
         ax_jphi = axes[1,0]
         ax_jphi.set_title('Current densities')
-        ax_jphi.plot(self._state['j_tot'][i]['x'], self._state['j_tot'][i]['y'] / 1e6, 'k-', label=r'$j_{tot}$', linewidth=2)
+        ax_jphi.plot(self._state['j_tot'][i]['x'], self._state['j_tot'][i]['y'] / 1e6, 'k--', label=r'$j_{tot}$', linewidth=2)
         ax_jphi.plot(self._state['j_ohmic'][i]['x'], self._state['j_ohmic'][i]['y'] / 1e6, 'r-', label=r'$j_{ohmic}$', linewidth=1.5)
         ax_jphi.plot(self._state['j_ni'][i]['x'], self._state['j_ni'][i]['y'] / 1e6, 'b-', label=r'$j_{NI}$', linewidth=1.5)
         if i in self._state['j_bootstrap']:
@@ -1768,6 +1801,51 @@ class TokTox:
         plt.subplots_adjust(top=0.95, hspace=0.3, wspace=0.35)
         plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_plot_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
+
+
+    def _plot_current_densities(self, i, t):
+        r'''! Create and save a plot of all available current densities.
+        
+        Plots j_bootstrap, j_ecrh, j_external, j_generic_current, j_non_inductive, 
+        j_ohmic, and j_total on a single plot.
+        
+        @param i Time index within self._times.
+        @param t Physical time value (s).
+        '''
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Define colors and line styles for each current type
+        current_configs = [
+            ('j_tot', 'j_total', 'k--', 2.5, r'$j_{total}$'),
+            ('j_ohmic', 'j_ohmic', 'r-', 2.0, r'$j_{ohmic}$'),
+            ('j_ni', 'j_non_inductive', 'b-', 2.0, r'$j_{non-inductive}$'),
+            ('j_bootstrap', 'j_bootstrap', 'g-', 1.8, r'$j_{bootstrap}$'),
+            ('j_ecrh', 'j_ecrh', 'm-', 1.5, r'$j_{ecrh}$'),
+            ('j_external', 'j_external', 'c-', 1.5, r'$j_{external}$'),
+            ('j_generic_current', 'j_generic_current', 'orange', 1.5, r'$j_{generic}$'),
+        ]
+        
+        # Plot each current density if available
+        for state_key, torax_name, color, linewidth, label in current_configs:
+            if i in self._state.get(state_key, {}):
+                x = self._state[state_key][i]['x']
+                y = self._state[state_key][i]['y'] / 1e6  # Convert to MA/m²
+                ax.plot(x, y, color, linewidth=linewidth, label=label)
+        
+        ax.set_xlabel(r'$\hat{\psi}$', fontsize=12)
+        ax.set_ylabel(r'Current density $j$ [MA/m²]', fontsize=12)
+        ax.set_title(f'Current Densities - Step {self._current_step}, t = {t:.2f} s', fontsize=13)
+        ax.legend(fontsize=11, loc='best')
+        ax.grid(True, alpha=0.3)
+        ax.axhline(0, color='k', linewidth=0.5)
+        
+        # Save the figure
+        plt.tight_layout()
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'current_densities_{self._current_step:03}.{i:03}.png'), 
+                   dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        # plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_evolution_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
 
 
     def _tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded):
