@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import pprint
 import scipy.io as sio
 from scipy.interpolate import make_smoothing_spline
 from scipy.interpolate import interp1d
@@ -41,7 +42,7 @@ class MyEncoder(json.JSONEncoder):
 class TokTox:
     '''! TokaMaker + TORAX Coupled Pulse Simulation Code'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.99, n_rho=50, prescribed_currents=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -335,6 +336,26 @@ class TokTox:
         self._eqdsk_skip = []
     
     @staticmethod
+    def _to_plain_python(obj):
+        r'''! Recursively convert numpy scalars/arrays to plain Python types.
+
+        Used before pformat-saving config dicts so the saved .py files are
+        loadable without numpy (no ``array([...])`` references).
+        '''
+        if isinstance(obj, dict):
+            return {TokTox._to_plain_python(k): TokTox._to_plain_python(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            converted = [TokTox._to_plain_python(v) for v in obj]
+            return type(obj)(converted)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        return obj
+
+    @staticmethod
     def _config_merge(base, override):
         r'''! Recursively merge override into base TORAX config (in-place).
 
@@ -422,63 +443,6 @@ class TokTox:
         @param T_i ion temperature.
         '''
         self._T_i = T_i
-
-    # def set_pressure(self, p_profiles, n_e_profiles, Ti_Te_ratio=1.0):
-    #     r'''! Set initial T_e and T_i profiles from pressure and density profiles.
-        
-    #     Computes temperature from P = n_e * (T_e + T_i) = n_e * T_e * (1 + Ti_Te_ratio).
-    #     Sets both T_e and T_i as time-varying-array dicts for TORAX.
-        
-    #     @param p_profiles Pressure profiles in Pa. Dict of {time: {rho: P_Pa, ...}, ...}.
-    #     @param n_e_profiles Density profiles in m^-3. Dict of {time: {rho: n_e, ...}, ...}.
-    #     @param Ti_Te_ratio Ratio of T_i to T_e (default 1.0, i.e. T_i = T_e).
-    #     '''
-    #     eV_to_J = 1.602e-19  # 1 eV in Joules
-    #     keV_to_J = 1.602e-16  # 1 keV in Joules
-        
-    #     T_e_profiles = {}
-    #     T_i_profiles = {}
-        
-    #     for t in sorted(p_profiles.keys()):
-    #         p_dict = p_profiles[t]
-    #         n_dict = n_e_profiles[t] if t in n_e_profiles else n_e_profiles[max(k for k in n_e_profiles.keys() if k <= t)]
-            
-    #         T_e_prof = {}
-    #         T_i_prof = {}
-            
-    #         # Get sorted rho values from pressure profile
-    #         rho_vals = sorted(p_dict.keys())
-    #         for rho in rho_vals:
-    #             P_Pa = p_dict[rho]
-    #             # Interpolate n_e at this rho from the density profile
-    #             n_rho_vals = sorted(n_dict.keys())
-    #             n_vals = [n_dict[r] for r in n_rho_vals]
-    #             n_e_at_rho = np.interp(rho, n_rho_vals, n_vals)
-                
-    #             if n_e_at_rho > 0 and P_Pa > 0:
-    #                 # P = n_e * T_e * (1 + Ti_Te_ratio) in Joules
-    #                 # T_e [keV] = P / (n_e * (1 + ratio) * keV_to_J)
-    #                 T_e_keV = P_Pa / (n_e_at_rho * (1.0 + Ti_Te_ratio) * keV_to_J)
-    #                 T_i_keV = T_e_keV * Ti_Te_ratio
-    #             else:
-    #                 T_e_keV = 0.01  # minimum temperature
-    #                 T_i_keV = 0.01
-                
-    #             T_e_prof[rho] = T_e_keV
-    #             T_i_prof[rho] = T_i_keV
-            
-    #         T_e_profiles[t] = T_e_prof
-    #         T_i_profiles[t] = T_i_prof
-        
-    #     self._T_e = T_e_profiles
-    #     self._T_i = T_i_profiles
-        
-    #     self._print_out(f'set_pressure: Computed T_e and T_i from pressure and density at times {sorted(p_profiles.keys())}')
-    #     for t in sorted(p_profiles.keys()):
-    #         rho_0 = min(T_e_profiles[t].keys())
-    #         rho_1 = max(T_e_profiles[t].keys())
-    #         self._print_out(f'  t={t}: T_e(0)={T_e_profiles[t][rho_0]:.2f} keV, T_e(1)={T_e_profiles[t][rho_1]:.4f} keV, '
-    #                       f'T_i(0)={T_i_profiles[t][rho_0]:.2f} keV, T_i(1)={T_i_profiles[t][rho_1]:.4f} keV')
 
     def set_Zeff(self, Zeff):
         r'''! Set plasma effective charge.
@@ -769,7 +733,15 @@ class TokTox:
         #     # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
         #     t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
 
-        myconfig['profile_conditions']['initial_psi_mode'] = 'geometry'
+        # Use psi from the step-0 init sim when available (profile_conditions mode),
+        # otherwise fall back to the j-formula (nu formula).
+        # profile_conditions mode uses the injected psi profile directly, so the
+        # initial current distribution reflects the evolved step-0 j profile.
+        myconfig.setdefault('profile_conditions', {})
+        if 'psi' in myconfig.get('profile_conditions', {}):
+            myconfig['profile_conditions']['initial_psi_mode'] = 'profile_conditions'
+        else:
+            myconfig['profile_conditions']['initial_psi_mode'] = 'j'
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
         #    Only applied when the attribute is not None (i.e. the user made
@@ -875,18 +847,177 @@ class TokTox:
 
         # with open('torax_config.json', 'w') as json_file:
         #     json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
-                # Save torax config to python file
-        import pprint
+        # Save torax config dict to python file (before from_dict, so plain Python types only)
         config_filename = os.path.join(self._out_dir, 'results', f'tx_config{self._current_step}.py')
         with open(config_filename, 'w') as f:
             f.write('# Torax configuration\n')
             f.write(f'# Step {self._current_step}\n\n')
             f.write('torax_config = ')
-            f.write(pprint.pformat(myconfig, width=100))
+            f.write(pprint.pformat(self._to_plain_python(myconfig), width=100))
 
 
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
+    
+
+
+    def _run_transport_init(self):
+        r'''! Step 0: Run a short TORAX simulation with eqdsk geometry to equilibrate initial inputs.
+
+        Uses the first seed eqdsk (same geometry as step 1, i=0) so the psi profile
+        evolved here is consistent with the eqdsk GS metric coefficients.  Injecting
+        this psi into the step-1 sim gives a smooth, physically consistent j at t=0.
+
+        Running for 1 second with steady-state (time-flattened) inputs lets TORAX
+        evolve them to a more physical state.  The equilibrated values are then
+        injected into the config used by the main simulation (step 1 onwards).
+        '''
+        self._print_out('Transport init: building steady-state init config...')
+
+        init_config = copy.deepcopy(BASE_CONFIG)
+        if self._loaded_config is not None:
+            self._config_merge(init_config, self._loaded_config)
+
+        # eqdsk geometry from the first seed file — same geometry as step 1, i=0.
+        # This ensures the psi evolved here satisfies the same GS metric coefficients
+        # as the main sim, so injected psi produces smooth j at t=0 of step 1.
+        init_eqdsk = self._init_files[0]
+        if not self._test_eqdsk(init_eqdsk):
+            raise ValueError(f'Transport init: first seed eqdsk is not valid: {init_eqdsk}')
+        init_config['geometry'] = {
+            'geometry_type': 'eqdsk',
+            'geometry_directory': os.getcwd(),
+            'last_surface_factor': self._last_surface_factor,
+            'n_surfaces': 50,
+            'Ip_from_parameters': True,
+            'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': 2}},
+        }
+
+        # Numerics: 1-second steady-state init sim
+        init_config.setdefault('numerics', {})
+        init_config['numerics']['t_initial'] = self._t_init
+        init_config['numerics']['t_final'] = self._t_init + 1.0
+        init_config['numerics']['fixed_dt'] = 0.025
+
+        # Explicitly use J mode (nu formula) to initialize psi in the step-0 sim.
+        # This is the same mode the main sim (step 1+) will use, so T_e/T_i
+        # injected from here will be self-consistent with the initial current profile.
+        init_config.setdefault('profile_conditions', {})
+        init_config['profile_conditions']['initial_psi_mode'] = 'j'
+
+        # Flatten all time-dependent values to their initial value (steady-state inputs)
+        self._flatten_time_dependent(init_config)
+
+        # Save init config dict to python file (before from_dict, so plain Python types only)
+        config_filename = os.path.join(self._out_dir, 'results', 'tx_config0.py')
+        with open(config_filename, 'w') as f:
+            f.write('# Torax configuration\n# Step 0 (transport init)\n\n')
+            f.write('torax_config = ')
+            f.write(pprint.pformat(self._to_plain_python(init_config), width=100))
+
+        self._print_out('Transport init: running 1s steady-state TORAX simulation...')
+        torax_config = torax.ToraxConfig.from_dict(init_config)
+        data_tree, hist = torax.run_simulation(torax_config, log_timestep_info=False)
+
+        if hist.sim_error != torax.SimError.NO_ERROR:
+            raise ValueError(f'Transport init simulation failed: {hist.sim_error}')
+
+        t_final_init = self._t_init + 1.0
+
+        # Extract final psi at axis and LCFS (TORAX outputs in Wb)
+        psi_axis = float(data_tree.profiles.psi.sel(time=t_final_init, rho_norm=0.0, method='nearest').item())
+        psi_lcfs = float(data_tree.profiles.psi.sel(time=t_final_init, rho_norm=1.0, method='nearest').item())
+
+        # --- Add more extractions here as needed ---
+        # pax = float(data_tree.profiles.pressure_thermal_total.sel(time=t_final_init, rho_norm=0.0, method='nearest').item())
+        # Te  = data_tree.profiles.T_e.sel(time=t_final_init, method='nearest').to_numpy()
+        # ne  = data_tree.profiles.n_e.sel(time=t_final_init, method='nearest').to_numpy()
+
+        self._print_out(f'Transport init extracted: psi_axis={psi_axis:.6f} Wb, psi_lcfs={psi_lcfs:.6f} Wb')
+
+        # Extract T_e and T_i profiles, mapped onto the standard psi_N grid
+        T_e_arr = self._pull_torax_onto_psi(data_tree, 'T_e', t_final_init, load_into_state=None)
+        T_i_arr = self._pull_torax_onto_psi(data_tree, 'T_i', t_final_init, load_into_state=None)
+        # Subsample to ~25 rho points for the config dict (TORAX interpolates)
+        _step = max(1, len(self._psi_N) // 25)
+        _rho_sub = self._psi_N[::_step]
+        T_e_profile = {float(r): float(v) for r, v in zip(_rho_sub, T_e_arr[::_step])}
+        T_i_profile = {float(r): float(v) for r, v in zip(_rho_sub, T_i_arr[::_step])}
+        self._print_out(f'Transport init extracted: T_e_core={T_e_arr[0]:.3f} keV, T_e_edge={T_e_arr[-1]:.4f} keV')
+        self._print_out(f'Transport init extracted: T_i_core={T_i_arr[0]:.3f} keV, T_i_edge={T_i_arr[-1]:.4f} keV')
+
+        # Update the config used by the main simulation (self._loaded_config if set, else BASE_CONFIG)
+        # main_config is direct reference to main config, so modifications below are propagated into main step 1+ simulation.
+        main_config = self._loaded_config if self._loaded_config is not None else BASE_CONFIG
+        main_config.setdefault('profile_conditions', {})
+
+        # Inject equilibrated T_e, T_i, and psi as initial conditions for the main sim.
+        # T_e/T_i and psi all come from the same evolved step-0 simulation, so they
+        # are mutually self-consistent at t=0 of the main sim.
+        # If set_Te() / set_Ti() were called, _get_torax_config() will override those.
+        main_config['profile_conditions']['T_e'] = {self._t_init: T_e_profile}
+        main_config['profile_conditions']['T_i'] = {self._t_init: T_i_profile}
+
+        
+
+        # Extract the evolved psi profile (Wb) on TORAX's rho_norm grid [0, ..., 1].
+        # IMPORTANT: inject at FULL resolution — do NOT subsample.
+        # j is derived from the second derivative of psi (j ∝ d²ψ/dρ²).
+        # Subsampling psi and then linearly interpolating back produces piecewise-flat
+        # curvature, which maps directly to oscillatory j at each coarse-grid knot.
+        # _get_torax_config will detect this psi and use initial_psi_mode='profile_conditions'.
+        psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
+        rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
+        psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
+        psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
+        main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
+        self._print_out(f'Transport init extracted: psi_axis={psi_arr_smooth[0]:.4f} Wb, psi_lcfs={psi_arr_smooth[-1]:.4f} Wb ({len(rho_arr)} points)')
+        self._print_out(f'psi_profile = {psi_profile}')
+        # --- Add more value applications here as needed --- # TODO could add n_e profile as well
+        # main_config['profile_conditions']['n_e'] = {self._t_init: {rho: float(v) for rho, v in zip(_rho_sub, ne_arr[::_step])}}
+        # main_config['profile_conditions']['pax'] = {self._t_init: pax}
+
+        self._print_out(
+            f'Transport init: updated main sim config with equilibrated T_e/T_i '
+            f'(T_e_core={T_e_arr[0]:.2f} keV, T_i_core={T_i_arr[0]:.2f} keV)')
+
+    @staticmethod
+    def _flatten_time_dependent(config):
+        r'''! Recursively flatten time-dependent config values to their initial value only.
+
+        A dict whose keys are ALL numeric (int/float) is treated as time-dependent:
+        only the entry with the smallest key is retained.
+        Structural dicts (with any string keys) are recursed into.
+        Tuples of form (times_array, values_array) are flattened to the first entry.
+        '''
+        for key in list(config.keys()):
+            val = config[key]
+            if isinstance(val, dict):
+                if val and all(isinstance(k, (int, float, np.integer, np.floating)) for k in val.keys()):
+                    # Time-dependent dict: keep only the first (smallest t) entry.
+                    # Do NOT recurse — the nested value may be a rho-profile dict.
+                    first_key = min(val.keys())
+                    config[key] = {first_key: copy.deepcopy(val[first_key])}
+                else:
+                    # Structural dict with string keys: recurse.
+                    TokTox._flatten_time_dependent(val)
+            elif isinstance(val, (tuple, list)) and len(val) == 2:
+                t_arr, v_arr = val
+                try:
+                    if (hasattr(t_arr, '__len__') and hasattr(v_arr, '__len__')
+                            and not isinstance(t_arr, str) and not isinstance(v_arr, str)
+                            and len(t_arr) > 1
+                            and max(t_arr) > 1.0):  # rho grids have max==1.0; skip them
+                        first_t = t_arr[0]
+                        first_v = v_arr[0]
+                        if isinstance(t_arr, np.ndarray):
+                            config[key] = (np.array([first_t]), np.array([first_v]))
+                        elif isinstance(t_arr, tuple):
+                            config[key] = ((first_t,), (first_v,))
+                        else:
+                            config[key] = ([first_t], [first_v])
+                except TypeError:
+                    pass
 
     def _test_eqdsk(self, eqdsk):
             myconfig = copy.deepcopy(BASE_CONFIG)
@@ -930,24 +1061,6 @@ class TokTox:
         # self._print_out(f'Step {self._current_step}: TX output (w/ /2pi): psi_lcfs: min = {np.min(self._state["psi_lcfs"]):.6f}, max = {np.max(self._state["psi_lcfs"]):.6f}, swing = {(self._state["psi_lcfs"][-1] - self._state["psi_lcfs"][0]):.6f} Wb/rad')
 
         self._res_update(data_tree)
-
-
-
-        # power channels plot for testing
-        # fig, ax = plt.subplots()
-        # ax.set_title('Power channels [W]')
-        # ax.plot(self._results['P_ohmic_e']['x'], self._results['P_ohmic_e']['y'], 'r-o', markersize=3, label='P_ohmic_e')
-        # ax.plot(self._results['P_radiation_e']['x'], self._results['P_radiation_e']['y'], 'm--o', markersize=3, label='P_radiation_e')
-        # ax.plot(self._results['P_SOL_total']['x'], self._results['P_SOL_total']['y'], 'c--o', markersize=3, label='P_SOL_total')
-        # ax.plot(self._results['P_alpha_total']['x'], self._results['P_alpha_total']['y'], 'g-.o', markersize=3, label='P_alpha_total')
-        # ax.plot(self._results['P_aux_total']['x'], self._results['P_aux_total']['y'], 'y-.o', markersize=3, label='P_aux_total')
-        # ax.set_xlabel('Time [s]')
-        # ax.legend(fontsize=8)
-        # ax.grid(True, alpha=0.3)
-        # ax.set_xbound(0, 1)
-        # # ax_20.set_ylim(0,1E8)
-        # plt.savefig(os.path.join(self._out_dir, 'plots', f'torax_powers_{self._current_step}.png'), dpi=300)
-        # plt.close(fig)
 
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0]) # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need *2pi factor to get Wb to calculate consumed flux
@@ -1223,14 +1336,12 @@ class TokTox:
             # self._gs.set_isoflux(np.array(lcfs), isoflux_weights)
 
             # Initialize psi from geometry parameters
-            # For step 0, using the seed EQDSK geometry should give a good initial guess
-            err_flag = self._gs.init_psi(self._state['R'][i],
+            # Using the seed EQDSK geometry should give a good initial guess
+            self._gs.init_psi(self._state['R'][i],
                                          self._state['Z'][i],
                                          self._state['a'][i],
                                          self._state['kappa'][i],
                                          self._state['delta'][i])
-            if err_flag:
-                print("Error initializing psi.")
 
             # Warm-start: prefer previous step's converged solution for this
             # timestep; fall back to the previous timestep's solution within
@@ -1246,7 +1357,10 @@ class TokTox:
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
 
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights*2) # sets target psi at LCFS
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights) # sets target psi at LCFS
+                # sets flux at certain point, doesn't necessarily tell TM it's the LCFS
+            self._gs.set_isoflux(lcfs, isoflux_weights) # sets LCFS location targets
+
             
             
             self._gs.update_settings() # TODO what does this do?
@@ -1259,7 +1373,6 @@ class TokTox:
             
             
             if i==0: # at beginning of every step reset this dict so it doesn't use previous step's values
-                self._print_out(f'\tTM: Resetting previous psi grid storage at beginning of step {self._current_step}.')
                 self._state['psi_grid_prev_tm'] = {} # TODO weird place to put this but works for now
 
             skip_coil_update = False
@@ -1349,8 +1462,11 @@ class TokTox:
                     fig_eq, ax_eq = plt.subplots(1, 1, figsize=(6, 8))
                     self._gs.plot_machine(fig_eq, ax_eq, coil_colormap='seismic', coil_symmap=True, coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
                     self._gs.plot_psi(fig_eq, ax_eq, xpoint_color='r', vacuum_nlevels=4)
-                    ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1)
+                    ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1, label = 'LCFS target')
+                    if self._diverted_times[i] and self._x_point_targets is not None:
+                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'rx', label='X-point targets')
                     ax_eq.set_title(f't = {t:.2f} s')
+                    fig_eq.legend(loc='upper right')
                     fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
                     plt.close(fig_eq)
                 
@@ -2728,7 +2844,17 @@ class TokTox:
         tx_cflux_psi = []
         tx_cflux_vloop = []
 
-        self._print_out(f'---------------------------------------')
+        # Step 0 = TORAX initialization: run tx sim with circular geo for 1 sec to initialize initial inputs
+        self._print_out(f'---- Step {self._current_step} ---- \n')
+        self._run_transport_init()
+
+
+
+
+
+
+
+
         self._current_step = 1
 
         while err > convergence_threshold and self._current_step <= max_step:
