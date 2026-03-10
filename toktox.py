@@ -963,16 +963,19 @@ class TokTox:
 
         
 
-        # Inject only the axis and LCFS psi values as a 2-point linear profile.
-        # NOTE: Even a 2-point linear psi still produces bumpy j because j
-        # depends on d²psi/drho multiplied by geometry metrics (g2g3, F, etc.)
-        # and those have structure that amplifies any mismatch. Using
-        # initial_psi_mode='j' (nu formula) and only injecting T_e/T_i from
-        # step 0 avoids this entirely — psi is computed self-consistently
-        # from the geometry and the j formula.
-        # We do NOT inject psi — the main sim will use initial_psi_mode='j'.
-        # psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
-        self._print_out(f'Transport init: NOT injecting psi (will use initial_psi_mode=j in main sim)')
+        # Extract the evolved psi profile (Wb) on TORAX's rho_norm grid [0, ..., 1].
+        # IMPORTANT: inject at FULL resolution — do NOT subsample.
+        # j is derived from the second derivative of psi (j ∝ d²ψ/dρ²).
+        # Subsampling psi and then linearly interpolating back produces piecewise-flat
+        # curvature, which maps directly to oscillatory j at each coarse-grid knot.
+        # _get_torax_config will detect this psi and use initial_psi_mode='profile_conditions'.
+        psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
+        rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
+        psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
+        psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
+        main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
+        self._print_out(f'Transport init extracted: psi_axis={psi_arr_smooth[0]:.4f} Wb, psi_lcfs={psi_arr_smooth[-1]:.4f} Wb ({len(rho_arr)} points)')
+        self._print_out(f'psi_profile = {psi_profile}')
         # --- Add more value applications here as needed --- # TODO could add n_e profile as well
         # main_config['profile_conditions']['n_e'] = {self._t_init: {rho: float(v) for rho, v in zip(_rho_sub, ne_arr[::_step])}}
         # main_config['profile_conditions']['pax'] = {self._t_init: pax}
@@ -1328,13 +1331,13 @@ class TokTox:
                           'type': self._state['pp_prof'][i]['type']}
             
             # Normalize profiles for TokaMaker input
-            ffp_prof['y'] /= ffp_prof['y'][0]
-            pp_prof['y'] /= pp_prof['y'][0]
+            # ffp_prof['y'] /= ffp_prof['y'][0]
+            # pp_prof['y'] /= pp_prof['y'][0]
 
 
             # self._gs.set_isoflux(np.array(lcfs), isoflux_weights)
 
-            # Initialize psi from geometry parameters
+            # Initialize psi from geometry parameters # TODO this is probably not doing anything, remove (and test)
             # Using the seed EQDSK geometry should give a good initial guess
             self._gs.init_psi(self._state['R'][i],
                                          self._state['Z'][i],
@@ -1342,7 +1345,7 @@ class TokTox:
                                          self._state['kappa'][i],
                                          self._state['delta'][i])
 
-            # Warm-start: prefer previous step's converged solution for this
+            # Warm-start: prefer previous step's converged solution for this # TODO this might be unecessarily complication, not sure i like using i-1 for warmstart, mighe be fine
             # timestep; fall back to the previous timestep's solution within
             # the current step (adjacent-time warm-start).
             if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
@@ -1356,23 +1359,14 @@ class TokTox:
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
 
-            # Shape control: set_isoflux on ALL LCFS points for shape.
-            # Psi-value control: set_flux on ONE point only (outboard midplane)
-            # to set the absolute psi scale without over-constraining the shape.
-            # Using set_flux on every LCFS point over-constrains the solve —
-            # TokaMaker distorts the shape to satisfy both GS and the value
-            # targets, producing a limited/less-triangular equilibrium.
+            # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
             self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
             omp_idx = np.argmax(lcfs[:, 0] * np.exp(-0.5 * ((lcfs[:, 1] - z_axis) / (0.3 * self._state['a'][i]))**2))
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
-            # High weight on the flux target to force TM to match the absolute
-            # psi scale from TORAX.  Isoflux (shape) uses weight 10*LCFS_WEIGHT;
-            # flux (value) needs to be much stronger so the least-squares inverse
-            # solve actually hits the target instead of letting regularization
-            # pull it away.
+            # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
             self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
                               weights=np.array([LCFS_WEIGHT * 100])) # psi value target
 
@@ -1486,7 +1480,7 @@ class TokTox:
                     if self._diverted_times[i] and self._x_point_targets is not None:
                         ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'x', color='purple', label='X-point targets')
                     ax_eq.set_title(f't = {t:.2f} s')
-                    fig_eq.legend(loc='best')
+                    fig_eq.legend(loc='upper right')
                     fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
                     plt.close(fig_eq)
                 
