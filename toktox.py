@@ -42,7 +42,7 @@ class MyEncoder(json.JSONEncoder):
 class TokTox:
     '''! TokaMaker + TORAX Coupled Pulse Simulation Code'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.99, n_rho=50, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.99, n_rho=50, prescribed_currents=False, oft_env=None):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -53,7 +53,10 @@ class TokTox:
         @param last_surface_factor Last surface factor for Torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
         '''
-        self._oftenv = OFT_env(nthreads=6)
+        if oft_env is not None:
+            self._oftenv = oft_env
+        else:
+            self._oftenv = OFT_env(nthreads=6)
         self._gs = TokaMaker(self._oftenv)
 
         self._state = {}
@@ -1041,9 +1044,9 @@ class TokTox:
                 # self._print_out(e)
                 return False
 
-    def _run_transport(self, graph=False):
+    def _run_transport(self, graph='all'):
         r'''! Run the Torax simulation.
-        @param graph Whether to display profiles at each iteration (for testing).
+        @param graph Plotting mode (currently unused for transport, but kept for API consistency).
         @return Consumed flux.
         '''
         myconfig = self._get_torax_config()       
@@ -1296,9 +1299,9 @@ class TokTox:
             'disable_virtual_vsc': disable_virtual_vsc, 'vsc_weight': vsc_weight,
         }
 
-    def _run_gs(self, graph=False):
+    def _run_gs(self, graph='all'):
         r'''! Run the GS solve across n timesteps using TokaMaker.
-        @param graph Whether to display psi graphs at each iteration (for testing).
+        @param graph Plotting mode: 'none', 'all', 'only_movie', or 'normal'.
         @return Consumed flux.
         '''
         self._print_out(f"Step {self._current_step} TokaMaker:")
@@ -1460,15 +1463,19 @@ class TokTox:
                     lcfs_pad=0.001,run_info='TokaMaker EQDSK',
                     cocos=2, nr=200, nz=200, truncate_eq=False)
                 self._gs_update(i)
-                self._profile_plot(i, t)
+                
+                # Only plot profiles in 'all' mode
+                if graph == 'all':
+                    self._profile_plot(i, t)
 
                 # Store diverted/limited flag for this timestep
                 if not hasattr(self, '_diverted_flags'):
                     self._diverted_flags = {}
                 self._diverted_flags[i] = self._gs.diverted
 
-                if graph:
-                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(10, 8))
+                # Plot equil whenever movie will be generated ('all', 'only_movie', or 'normal')
+                if graph in ('all', 'only_movie', 'normal'):
+                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(10, 12))
                     # Set colorbar limits to coil current bounds (not actual currents)
                     min_bound = min(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
                     max_bound = max(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
@@ -1478,13 +1485,15 @@ class TokTox:
                     self._gs.plot_psi(fig_eq, ax_eq, xpoint_color='r', vacuum_nlevels=4)
                     ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1, label = 'LCFS target')
                     if self._diverted_times[i] and self._x_point_targets is not None:
-                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'x', color='purple', label='X-point targets')
+                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'X', color='purple', markersize=8, label='X-point targets')
                     ax_eq.set_title(f't = {t:.2f} s')
                     fig_eq.legend(loc='upper right')
                     fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
                     plt.close(fig_eq)
                 
-            self._tm_diagnostic_plot(i, t, level_attempts, solve_succeeded)
+            # Only plot tm_diagnostic in 'all' mode
+            if graph == 'all':
+                self._tm_diagnostic_plot(i, t, level_attempts, solve_succeeded)
 
             _winning = next((a for a in level_attempts if a['succeeded']), None)
             _last_attempt = level_attempts[-1] if level_attempts else {}
@@ -1508,7 +1517,9 @@ class TokTox:
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi # psi_lcfs stored as Wb/rad (AKA Wb-rad), so need 2pi factor to get Wb to calculate consumed flux
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
 
-        self._gs_step_summary_plot(_step_level_log)
+        # Only plot gs_step_summary in 'all' mode
+        if graph == 'all':
+            self._gs_step_summary_plot(_step_level_log)
 
         return consumed_flux, consumed_flux_integral
         
@@ -2822,12 +2833,13 @@ class TokTox:
         plt.close(fig)
 
 
-    def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
+    def fly(self, convergence_threshold=-1.0, save_states=False, graph='all', max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
              x_point_targets=None, x_point_weight=100.0, diverted_times=None):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
-        @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
+        @param convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
-        @param graph Whether to display psi and profile graphs at each iteration (for testing).
+        @param graph Plotting mode: 'none' (no plots), 'all' (everything), 'only_movie' (equil + mp4 only),
+                     or 'normal' (movie + scalars only on last step). Accepts bool for backward compat: True='all', False='none'.
         @param max_step Maximum number of simulation iterations allowed.
         @param skip_bad_init_eqdsks If True, silently skip broken initial gEQDSK files; if False, raise an error when one is found.
         @param diverted_times Tuple of (t_start, t_end) defining the time window for diverted plasma.
@@ -2836,6 +2848,16 @@ class TokTox:
         @param x_point_weight Weight for the saddle point constraints (default 100).
         '''
 
+        # Convert legacy bool graph parameter to new string format
+        if isinstance(graph, bool):
+            graph = 'all' if graph else 'none'
+        
+        # Validate graph parameter
+        valid_graph_modes = {'none', 'all', 'only_movie', 'normal'}
+        if graph not in valid_graph_modes:
+            raise ValueError(f"graph must be one of {valid_graph_modes}, got '{graph}'")
+        
+        self._graph_mode = graph
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
@@ -2911,11 +2933,11 @@ class TokTox:
 
         while err > convergence_threshold and self._current_step <= max_step:
             self._print_out(f'---- Step {self._current_step} ---- \n')
-            cflux_tx, cflux_tx_vloop = self._run_transport(graph=graph)
+            cflux_tx, cflux_tx_vloop = self._run_transport(graph=self._graph_mode)
             if save_states:
                 self.save_state(os.path.join(self._out_dir, 'results', 'ts_state{}.json'.format(self._current_step)))
 
-            cflux_gs, cflux_gs_vloop = self._run_gs(graph=graph)
+            cflux_gs, cflux_gs_vloop = self._run_gs(graph=self._graph_mode)
             if save_states:
                 self.save_state(os.path.join(self._out_dir, 'results', 'gs_state{}.json'.format(self._current_step)))
 
@@ -2936,12 +2958,30 @@ class TokTox:
 
             cflux_tx_prev = cflux_tx
 
-            self._profile_evolution_plot()
-            self._scalar_plot()
-            self._coil_current_plot()
+            # Determine if this is the last step (either convergence or max_step reached)
+            is_last_step = (err <= convergence_threshold) or (self._current_step >= max_step)
 
-            from pulse_movie import generate_pulse_movie
-            generate_pulse_movie(self, self._current_step, run_name=run_name)
+            # Apply plotting logic based on graph mode
+            if self._graph_mode == 'none':
+                # Plot nothing
+                pass
+            elif self._graph_mode == 'all':
+                # Plot everything every step
+                self._profile_evolution_plot()
+                self._scalar_plot()
+                self._coil_current_plot()
+                from pulse_movie import generate_pulse_movie
+                generate_pulse_movie(self, self._current_step, run_name=run_name)
+            elif self._graph_mode == 'only_movie':
+                # Only movie-related plots (equil + frames + mp4), no individual frame saves
+                from pulse_movie import generate_pulse_movie
+                generate_pulse_movie(self, self._current_step, run_name=run_name, save_frames=False)
+            elif self._graph_mode == 'normal':
+                # Only on last step: scalar_plot and movie plots
+                if is_last_step:
+                    self._scalar_plot()
+                    from pulse_movie import generate_pulse_movie
+                    generate_pulse_movie(self, self._current_step, run_name=run_name)
 
             self._current_step += 1
         

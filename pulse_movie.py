@@ -47,7 +47,7 @@ DPI = 200                   # → 3840 × 2160 px
 #  Public entry point
 # ═══════════════════════════════════════════════════════════════════════
 
-def generate_pulse_movie(tt, step, run_name=''):
+def generate_pulse_movie(tt, step, run_name='', save_frames=True):
     """Create one PNG frame per time-slice, then encode MP4 + GIF.
 
     Parameters
@@ -58,6 +58,9 @@ def generate_pulse_movie(tt, step, run_name=''):
         Current coupling-iteration index.
     run_name : str
         Human-readable run label shown in the info panel.
+    save_frames : bool
+        If True, keep individual frame PNG files. If False, generate them
+        for MP4 encoding but delete them afterward.
     """
     vid_dir = os.path.join(tt._out_dir, 'vid')
     os.makedirs(vid_dir, exist_ok=True)
@@ -78,6 +81,15 @@ def generate_pulse_movie(tt, step, run_name=''):
         plt.close('all')
 
     _encode_video(vid_dir, step)
+    
+    # If not saving frames, delete them after encoding
+    if not save_frames:
+        for idx in range(n):
+            fpath = os.path.join(vid_dir, f'frame_{idx:04d}.png')
+            try:
+                os.remove(fpath)
+            except FileNotFoundError:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
