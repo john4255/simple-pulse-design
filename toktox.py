@@ -263,9 +263,9 @@ class TokTox:
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
             self._state['ffpni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
 
-            # Normalize profiles
-            self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
-            self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
+            # Normalize profiles (disabled – use raw profiles)
+            # self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
+            # self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
             self._state['eta_prof'][i]= {
                 'x': self._psi_N.copy(),
@@ -893,6 +893,11 @@ class TokTox:
             'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': 2}},
         }
 
+        if self._tx_grid_type == 'n_rho':
+            init_config['geometry']['n_rho'] = self._tx_grid
+        elif self._tx_grid_type == 'face_centers':
+            init_config['geometry']['face_centers'] = self._tx_grid
+
         # Numerics: 1-second steady-state init sim
         init_config.setdefault('numerics', {})
         init_config['numerics']['t_initial'] = self._t_init
@@ -951,28 +956,23 @@ class TokTox:
         main_config = self._loaded_config if self._loaded_config is not None else BASE_CONFIG
         main_config.setdefault('profile_conditions', {})
 
-        # Inject equilibrated T_e, T_i, and psi as initial conditions for the main sim.
-        # T_e/T_i and psi all come from the same evolved step-0 simulation, so they
-        # are mutually self-consistent at t=0 of the main sim.
+        # Inject equilibrated T_e, T_i as initial conditions for the main sim.
         # If set_Te() / set_Ti() were called, _get_torax_config() will override those.
         main_config['profile_conditions']['T_e'] = {self._t_init: T_e_profile}
         main_config['profile_conditions']['T_i'] = {self._t_init: T_i_profile}
 
         
 
-        # Extract the evolved psi profile (Wb) on TORAX's rho_norm grid [0, ..., 1].
-        # IMPORTANT: inject at FULL resolution — do NOT subsample.
-        # j is derived from the second derivative of psi (j ∝ d²ψ/dρ²).
-        # Subsampling psi and then linearly interpolating back produces piecewise-flat
-        # curvature, which maps directly to oscillatory j at each coarse-grid knot.
-        # _get_torax_config will detect this psi and use initial_psi_mode='profile_conditions'.
-        psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
-        rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
-        psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
-        psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
-        main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
-        self._print_out(f'Transport init extracted: psi_axis={psi_arr_smooth[0]:.4f} Wb, psi_lcfs={psi_arr_smooth[-1]:.4f} Wb ({len(rho_arr)} points)')
-        self._print_out(f'psi_profile = {psi_profile}')
+        # Inject only the axis and LCFS psi values as a 2-point linear profile.
+        # NOTE: Even a 2-point linear psi still produces bumpy j because j
+        # depends on d²psi/drho multiplied by geometry metrics (g2g3, F, etc.)
+        # and those have structure that amplifies any mismatch. Using
+        # initial_psi_mode='j' (nu formula) and only injecting T_e/T_i from
+        # step 0 avoids this entirely — psi is computed self-consistently
+        # from the geometry and the j formula.
+        # We do NOT inject psi — the main sim will use initial_psi_mode='j'.
+        # psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
+        self._print_out(f'Transport init: NOT injecting psi (will use initial_psi_mode=j in main sim)')
         # --- Add more value applications here as needed --- # TODO could add n_e profile as well
         # main_config['profile_conditions']['n_e'] = {self._t_init: {rho: float(v) for rho, v in zip(_rho_sub, ne_arr[::_step])}}
         # main_config['profile_conditions']['pax'] = {self._t_init: pax}
@@ -1098,8 +1098,7 @@ class TokTox:
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
         self._state['q0'][i] = data_tree.profiles.q.sel(time=t, rho_face_norm=0.0, method='nearest')
 
-        # deep copy to prevent mutation when normalizing ffp_prof/pp_prof later
-        # these are normalized already from the previous step
+        # deep copy to prevent mutation when normalizing local copies for TM input later
         self._state['ffp_prof_save'][i] = {
             'x': self._state['ffp_prof'][i]['x'].copy(),
             'y': self._state['ffp_prof'][i]['y'].copy(),
@@ -1112,8 +1111,8 @@ class TokTox:
         }
 
 
-        self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=True)
-        self._state['pp_prof'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime',  t, load_into_state='state', normalize=True)
+        self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=False)
+        self._state['pp_prof'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime',  t, load_into_state='state', normalize=False)
         
         self._state['ffp_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=False) # temp for calculating j_phi
         self._state['ffp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
@@ -1328,7 +1327,7 @@ class TokTox:
                           'y': self._state['pp_prof'][i]['y'].copy(),
                           'type': self._state['pp_prof'][i]['type']}
             
-            # Normalize profiles
+            # Normalize profiles for TokaMaker input
             ffp_prof['y'] /= ffp_prof['y'][0]
             pp_prof['y'] /= pp_prof['y'][0]
 
@@ -1355,11 +1354,27 @@ class TokTox:
 
             lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
-            lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad) 
+            lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
 
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights) # sets target psi at LCFS
-                # sets flux at certain point, doesn't necessarily tell TM it's the LCFS
-            self._gs.set_isoflux(lcfs, isoflux_weights) # sets LCFS location targets
+            # Shape control: set_isoflux on ALL LCFS points for shape.
+            # Psi-value control: set_flux on ONE point only (outboard midplane)
+            # to set the absolute psi scale without over-constraining the shape.
+            # Using set_flux on every LCFS point over-constrains the solve —
+            # TokaMaker distorts the shape to satisfy both GS and the value
+            # targets, producing a limited/less-triangular equilibrium.
+            self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
+
+            # Pick outboard midplane point (largest R at approx Z = Z_axis)
+            z_axis = self._state['Z'][i]
+            omp_idx = np.argmax(lcfs[:, 0] * np.exp(-0.5 * ((lcfs[:, 1] - z_axis) / (0.3 * self._state['a'][i]))**2))
+            omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
+            # High weight on the flux target to force TM to match the absolute
+            # psi scale from TORAX.  Isoflux (shape) uses weight 10*LCFS_WEIGHT;
+            # flux (value) needs to be much stronger so the least-squares inverse
+            # solve actually hits the target instead of letting regularization
+            # pull it away.
+            self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
+                              weights=np.array([LCFS_WEIGHT * 100])) # psi value target
 
             
             
@@ -1459,14 +1474,19 @@ class TokTox:
                 self._diverted_flags[i] = self._gs.diverted
 
                 if graph:
-                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(6, 8))
-                    self._gs.plot_machine(fig_eq, ax_eq, coil_colormap='seismic', coil_symmap=True, coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(10, 8))
+                    # Set colorbar limits to coil current bounds (not actual currents)
+                    min_bound = min(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
+                    max_bound = max(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
+                    cb = self._gs.plot_machine(fig_eq, ax_eq, coil_colormap='seismic', coil_symmap=False, coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+                    if cb is not None:
+                        cb.mappable.set_clim(min_bound, max_bound)
                     self._gs.plot_psi(fig_eq, ax_eq, xpoint_color='r', vacuum_nlevels=4)
                     ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1, label = 'LCFS target')
                     if self._diverted_times[i] and self._x_point_targets is not None:
-                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'rx', label='X-point targets')
+                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'x', color='purple', label='X-point targets')
                     ax_eq.set_title(f't = {t:.2f} s')
-                    fig_eq.legend(loc='upper right')
+                    fig_eq.legend(loc='best')
                     fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
                     plt.close(fig_eq)
                 
@@ -1832,32 +1852,35 @@ class TokTox:
         ax2_pp_real.tick_params(axis='y', labelcolor='r')
         ax2_pp_real.legend(fontsize=9, loc='upper right')
 
-        # (0,1): p' and p comparison (normalized) with dual y-axes
-        ax_pp_norm = axes[0,1]
-        ptot_torax_norm = normalize_arr(self._state['ptot'][i]['y'])
-        ax_pp_norm.set_title("p' and p comparison (normalized)")
-        ax_pp_norm.plot(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'], 'b-', label="p' TX (norm)", linewidth=2)
-        ax_pp_norm.plot(tm_psi, tm_pp_norm, 'b--', label="p' TM (norm)", linewidth=2)
-        ax_pp_norm.set_ylabel("p' (norm)", color='b')
-        ax_pp_norm.set_xlabel(r'$\hat{\psi}$')
-        ax_pp_norm.tick_params(axis='y', labelcolor='b')
-        ax_pp_norm.legend(fontsize=9, loc='upper left')
-        # Secondary y-axis for p normalized
-        ax2_pp_norm = ax_pp_norm.twinx()
-        ax2_pp_norm.plot(tm_psi, tm_p_norm, 'r-', label='p TM (norm)', linewidth=2)
-        ax2_pp_norm.plot(self._state['ptot'][i]['x'], ptot_torax_norm, 'r--', label='p TX (norm)', linewidth=2)
-        ax2_pp_norm.set_ylabel('p (norm)', color='r')
-        ax2_pp_norm.tick_params(axis='y', labelcolor='r')
-        ax2_pp_norm.legend(fontsize=9, loc='upper right')
+        # # (0,1): p' and p comparison (normalized) with dual y-axes
+        # ax_pp_norm = axes[0,1]
+        # ptot_torax_norm = normalize_arr(self._state['ptot'][i]['y'])
+        # ax_pp_norm.set_title("p' and p comparison (normalized)")
+        # ax_pp_norm.plot(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'], 'b-', label="p' TX (norm)", linewidth=2)
+        # ax_pp_norm.plot(tm_psi, tm_pp_norm, 'b--', label="p' TM (norm)", linewidth=2)
+        # ax_pp_norm.set_ylabel("p' (norm)", color='b')
+        # ax_pp_norm.set_xlabel(r'$\hat{\psi}$')
+        # ax_pp_norm.tick_params(axis='y', labelcolor='b')
+        # ax_pp_norm.legend(fontsize=9, loc='upper left')
+        # # Secondary y-axis for p normalized
+        # ax2_pp_norm = ax_pp_norm.twinx()
+        # ax2_pp_norm.plot(tm_psi, tm_p_norm, 'r-', label='p TM (norm)', linewidth=2)
+        # ax2_pp_norm.plot(self._state['ptot'][i]['x'], ptot_torax_norm, 'r--', label='p TX (norm)', linewidth=2)
+        # ax2_pp_norm.set_ylabel('p (norm)', color='r')
+        # ax2_pp_norm.tick_params(axis='y', labelcolor='r')
+        # ax2_pp_norm.legend(fontsize=9, loc='upper right')
 
-        # (0,2): FF' comparison (normalized)
-        ax_ffp_norm = axes[0,2]
-        ax_ffp_norm.set_title("FF' comparison (normalized)")
-        ax_ffp_norm.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], 'b-', label='TX (norm)', linewidth=2)
-        ax_ffp_norm.plot(tm_psi, tm_ffp_norm, 'r--', label='TM (norm)', linewidth=2)
-        ax_ffp_norm.set_ylabel("FF' (norm)")
-        ax_ffp_norm.set_xlabel(r'$\hat{\psi}$')
-        ax_ffp_norm.legend(fontsize=9)
+        # # (0,2): FF' comparison (normalized)
+        # ax_ffp_norm = axes[0,2]
+        # ax_ffp_norm.set_title("FF' comparison (normalized)")
+        # ax_ffp_norm.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], 'b-', label='TX (norm)', linewidth=2)
+        # ax_ffp_norm.plot(tm_psi, tm_ffp_norm, 'r--', label='TM (norm)', linewidth=2)
+        # ax_ffp_norm.set_ylabel("FF' (norm)")
+        # ax_ffp_norm.set_xlabel(r'$\hat{\psi}$')
+        # ax_ffp_norm.legend(fontsize=9)
+        
+        axes[0,1].axis('off')  # hide unused subplot
+        axes[0,2].axis('off')  # hide unused subplot
 
         # =======================
         # ROW 1: Current densities, resistivity, FF' real units
@@ -2770,50 +2793,56 @@ class TokTox:
         plt.close(fig)
 
 
-
+    def _coil_current_plot(self):
+        r'''! Plot coil current traces over the pulse, with limit bands.'''
+        coil_data = self._results.get('COIL', {})
+        if not coil_data:
+            return
+        coil_names = sorted(coil_data.keys())
+        n_coils = len(coil_names)
+        ncols = 3
+        nrows = max(1, (n_coils + ncols - 1) // ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3 * nrows), squeeze=False)
+        for k, cname in enumerate(coil_names):
+            ax = axes[k // ncols, k % ncols]
+            t_vals = sorted(coil_data[cname].keys())
+            i_vals = [coil_data[cname][t] * 1e-3 for t in t_vals]  # kA
+            ax.plot(t_vals, i_vals, '-o', ms=2, lw=1.2)
+            if hasattr(self, '_coil_bounds') and cname in self._coil_bounds:
+                lo, hi = self._coil_bounds[cname]
+                ax.axhline(lo * 1e-3, color='r', ls='--', lw=0.8, label=f'limit {lo*1e-3:.0f} kA')
+                ax.axhline(hi * 1e-3, color='r', ls='--', lw=0.8, label=f'limit {hi*1e-3:.0f} kA')
+            ax.set_title(cname, fontsize=9)
+            ax.set_ylabel('I [kA]', fontsize=8)
+            ax.set_xlabel('Time [s]', fontsize=8)
+            ax.tick_params(labelsize=7)
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=6)
+        # hide unused axes
+        for k in range(n_coils, nrows * ncols):
+            axes[k // ncols, k % ncols].axis('off')
+        plt.suptitle(f'Coil Currents (Step {self._current_step})', fontsize=12)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.92)
+        plt.savefig(os.path.join(self._out_dir, 'plots', f'coil_currents_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
 
     def fly(self, convergence_threshold=-1.0, save_states=False, graph=False, max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
-             diverted_eqdsk_idxs=None, x_point_targets=None, x_point_weight=100.0):
+             x_point_targets=None, x_point_weight=100.0, diverted_times=None):
         r'''! Run Tokamaker-Torax simulation loop until convergence or max_step reached. Saves results to JSON object.
         @pararm convergence_threshold Maximum percent difference between iterations allowed for convergence.
         @param save_states Save intermediate simulation states (for testing).
         @param graph Whether to display psi and profile graphs at each iteration (for testing).
         @param max_step Maximum number of simulation iterations allowed.
         @param skip_bad_init_eqdsks If True, silently skip broken initial gEQDSK files; if False, raise an error when one is found.
-        @param diverted_eqdsk_indices List of eqdsk indices where the plasma should be diverted (e.g. [9,10,...,19]).
+        @param diverted_times Tuple of (t_start, t_end) defining the time window for diverted plasma.
         @param x_point_targets X-point target locations as array of shape (n_xpoints, 2) with [R, Z] pairs.
               One pair for single null, two pairs for double null.
         @param x_point_weight Weight for the saddle point constraints (default 100).
         '''
 
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
-
-        # ── Diverted / saddle-point configuration ──
-        if diverted_eqdsk_idxs is not None and x_point_targets is not None:
-            x_point_targets = np.atleast_2d(x_point_targets)
-            div_times = [self._eqtimes[j] for j in diverted_eqdsk_idxs]
-            t_div_start = min(div_times)
-            t_div_end   = max(div_times)
-            self._diverted_times = np.array([(t >= t_div_start and t <= t_div_end) for t in self._times])
-            self._x_point_targets = x_point_targets
-            self._x_point_weight  = x_point_weight
-        else:
-            self._diverted_times  = np.zeros(len(self._times), dtype=bool)
-            self._x_point_targets = None
-            self._x_point_weight  = x_point_weight
-
-        # ── Flattop detection ──
-        Ip_arr = np.array(self._state['Ip'])
-        Ip_max = np.max(Ip_arr)
-        flattop_threshold = 0.95 * Ip_max
-        above = Ip_arr >= flattop_threshold
-        if np.any(above):
-            ft_start = self._times[np.argmax(above)]
-            ft_end   = self._times[len(above) - 1 - np.argmax(above[::-1])]
-            self._flattop = np.array([(t >= ft_start and t <= ft_end) for t in self._times])
-        else:
-            self._flattop = np.zeros(len(self._times), dtype=bool)
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         if run_name == 'tmp':
@@ -2836,6 +2865,39 @@ class TokTox:
         self._run_name = run_name
         self._fname_out = os.path.join(self._out_dir, 'results', out)
 
+
+
+
+        # ── Diverted / saddle-point configuration ──
+        if diverted_times is not None and x_point_targets is not None:
+            # Time-based diverted window (preferred)
+            x_point_targets = np.atleast_2d(x_point_targets)
+            t_div_start, t_div_end = diverted_times
+            self._diverted_times = np.array([(t >= t_div_start and t <= t_div_end) for t in self._times])
+            self._x_point_targets = x_point_targets
+            self._x_point_weight  = x_point_weight
+            self._print_out(f'Diverted window: t=[{t_div_start}, {t_div_end}] s '
+                            f'({int(self._diverted_times.sum())}/{len(self._times)} timesteps)')
+        else:
+            self._diverted_times  = np.zeros(len(self._times), dtype=bool)
+            self._x_point_targets = None
+            self._x_point_weight  = x_point_weight
+
+        # ── Flattop detection ──
+        Ip_arr = np.array(self._state['Ip'])
+        Ip_max = np.max(Ip_arr)
+        flattop_threshold = 0.95 * Ip_max
+        above = Ip_arr >= flattop_threshold
+        if np.any(above):
+            ft_start = self._times[np.argmax(above)]
+            ft_end   = self._times[len(above) - 1 - np.argmax(above[::-1])]
+            self._flattop = np.array([(t >= ft_start and t <= ft_end) for t in self._times])
+        else:
+            self._flattop = np.zeros(len(self._times), dtype=bool)
+
+
+
+
         err = convergence_threshold + 1.0
         cflux_tx_prev = 0.0
         # records of flux consumption throughout steps
@@ -2847,10 +2909,6 @@ class TokTox:
         # Step 0 = TORAX initialization: run tx sim with circular geo for 1 sec to initialize initial inputs
         self._print_out(f'---- Step {self._current_step} ---- \n')
         self._run_transport_init()
-
-
-
-
 
 
 
@@ -2886,6 +2944,7 @@ class TokTox:
 
             self._profile_evolution_plot()
             self._scalar_plot()
+            self._coil_current_plot()
 
             from pulse_movie import generate_pulse_movie
             generate_pulse_movie(self, self._current_step, run_name=run_name)

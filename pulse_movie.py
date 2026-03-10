@@ -151,6 +151,7 @@ def _draw_equil(ax, tt, step, idx, t_now):
         config_str = 'Diverted' if div_flag else ('Limited' if div_flag is not None else '?')
 
         diag = (
+            f"i = {idx}    "
             f"Ip = {abs(s['Ip_tm'][idx])/1e6:.3f} MA    "
             f"pax = {s['pax_tm'][idx]/1e3:.1f} kPa    "
             f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
@@ -210,7 +211,7 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
             color=COLOR_TX, ls=LS_SEC, lw=LW, label='Ip_NI TX')
     ax.set_ylabel('Ip [MA]', fontsize=LABEL_FS)
     ax.set_title('Plasma Current', fontsize=TITLE_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='best')
+    ax.legend(fontsize=LEGEND_FS, loc='upper left')
     _style(ax)
 
     # 2 ── V_loop (left) / flux consumed (right) ─────────────────────
@@ -238,7 +239,7 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
     ax.plot(times, np.array(s['pax']) / 1e3,
             color=COLOR_TX, ls=LS_PRI, lw=LW, label='pax TX')
     ax.set_ylabel('pax [kPa]', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='best')
+    ax.legend(fontsize=LEGEND_FS, loc='upper left')
     _style(ax)
 
     # 4 ── Power channels (TORAX only → multi-colours) ───────────────
@@ -255,8 +256,20 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
             ax.plot(r[key]['x'], np.array(r[key]['y']) / 1e6,
                     color=clr, ls=LS_PRI, lw=LW, label=label)
     ax.set_ylabel('Power [MW]', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='best', ncol=2)
+    ax.legend(fontsize=LEGEND_FS, loc='upper left', ncol=2)
     _style(ax)
+    # Secondary axis: Q
+    ax2 = ax.twinx()
+    if 'Q' in r:
+        ax2.plot(r['Q']['x'], r['Q']['y'],
+                 color='indigo', ls=LS_SEC, lw=LW, label='Q')
+    # if 'P_alpha_total' in r:
+    #     ax2.plot(r['P_alpha_total']['x'],
+    #              np.array(r['P_alpha_total']['y']) / 1e6,
+    #              color='darkgreen', ls=LS_SEC, lw=LW, label='P_fus [MW]')
+    ax2.set_ylabel('Q', fontsize=LABEL_FS)
+    ax2.tick_params(labelsize=TICK_FS)
+    ax2.legend(fontsize=LEGEND_FS, loc='upper right')
 
     # 5 ── ψ_axis (left) / ψ_lcfs (right) ────────────────────────────
     ax = axes[4]
@@ -274,23 +287,27 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
              color=COLOR_TX, ls=LS_SEC, lw=LW, label='ψ_lcfs TX')
     ax2.set_ylabel('ψ_lcfs [Wb/rad]', fontsize=LABEL_FS)
     ax2.tick_params(labelsize=TICK_FS)
-    ax2.legend(fontsize=LEGEND_FS, loc='upper right')
+    ax2.legend(fontsize=LEGEND_FS, loc='lower right')
 
-    # 6 ── β_N (left) / β_pol (right) ────────────────────────────────
+    # 6 ── Coil currents ─────────────────────────────────────────────
     ax = axes[5]
-    ax.plot(times, s['beta_N_tm'],
-            color=COLOR_TM, ls=LS_PRI, lw=LW, marker=MK_TM, ms=MK_SZ, label='βN TM')
-    ax.plot(times, s['beta_N_tx'],
-            color=COLOR_TX, ls=LS_PRI, lw=LW, label='βN TX')
-    ax.set_ylabel('β_N', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='upper left')
+    coil_data = tt._results.get('COIL', {})
+    coil_bounds = getattr(tt, '_coil_bounds', {})
+    if coil_data:
+        coil_colors = plt.cm.tab10(np.linspace(0, 1, max(len(coil_data), 1)))
+        for ci, (cname, cvals) in enumerate(sorted(coil_data.items())):
+            ct = sorted(cvals.keys())
+            ci_vals = [cvals[t] * 1e-3 for t in ct]  # kA
+            ax.plot(ct, ci_vals, ls=LS_PRI, lw=LW * 0.7, color=coil_colors[ci],
+                    label=cname)
+        # Draw limit lines from first coil bound (all same by default)
+        if coil_bounds:
+            first_bounds = next(iter(coil_bounds.values()))
+            ax.axhline(first_bounds[0] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
+            ax.axhline(first_bounds[1] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
+    ax.set_ylabel('I_coil [kA]', fontsize=LABEL_FS)
+    ax.legend(fontsize=LEGEND_FS - 2, loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1)
     _style(ax)
-    ax2 = ax.twinx()
-    ax2.plot(times, s['beta_pol'],
-             color=COLOR_TX, ls=LS_SEC, lw=LW, label='βpol TX')
-    ax2.set_ylabel('β_pol', fontsize=LABEL_FS)
-    ax2.tick_params(labelsize=TICK_FS)
-    ax2.legend(fontsize=LEGEND_FS, loc='upper right')
 
     # Vertical time indicator on every scalar panel
     _vline(axes, t_now)
@@ -330,13 +347,16 @@ def _draw_profiles(axes, tt, idx):
     if x is not None:
         ax.plot(x, y, color=COLOR_TX, ls=LS_PRI, lw=LW, label='ne TX')
     ax.set_ylabel('ne [m⁻³]', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='upper left')
+    ax.legend(fontsize=LEGEND_FS, loc='lower left')
     _style(ax)
     x, y = _prof(s.get('T_e', {}), idx)
     if x is not None:
         ax2 = ax.twinx()
         ax2.plot(x, y, color=COLOR_TX, ls=LS_SEC, lw=LW, label='Te TX')
-        ax2.set_ylabel('Te [keV]', fontsize=LABEL_FS)
+        x_ti, y_ti = _prof(s.get('T_i', {}), idx)
+        if x_ti is not None:
+            ax2.plot(x_ti, y_ti, color='forestgreen', ls='--', lw=LW, label='Ti TX')
+        ax2.set_ylabel('T [keV]', fontsize=LABEL_FS)
         ax2.tick_params(labelsize=TICK_FS)
         ax2.legend(fontsize=LEGEND_FS, loc='upper right')
 
@@ -377,7 +397,7 @@ def _draw_profiles(axes, tt, idx):
     if x is not None:
         ax.plot(x, y, color=COLOR_TX, ls=LS_PRI, lw=LW, label="p' TX")
     ax.set_ylabel("p'", fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='upper left')
+    ax.legend(fontsize=LEGEND_FS, loc='center')
     _style(ax)
     ax2 = ax.twinx()
     x, y = _prof(s.get('p_prof_tm', {}), idx)
@@ -399,7 +419,7 @@ def _draw_profiles(axes, tt, idx):
     if x is not None:
         ax.plot(x, y, color=COLOR_TX, ls=LS_PRI, lw=LW, label='<1/R> TX')
     ax.set_ylabel('<1/R> [1/m]', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='upper left')
+    ax.legend(fontsize=LEGEND_FS, loc='center left')
     _style(ax)
     ax2 = ax.twinx()
     x, y = _prof(s.get('psi_tm', {}), idx)
@@ -410,7 +430,7 @@ def _draw_profiles(axes, tt, idx):
         ax2.plot(x, y, color=COLOR_TX, ls=LS_SEC, lw=LW, label='ψ TX')
     ax2.set_ylabel('ψ [Wb/rad]', fontsize=LABEL_FS)
     ax2.tick_params(labelsize=TICK_FS)
-    ax2.legend(fontsize=LEGEND_FS, loc='upper right')
+    ax2.legend(fontsize=LEGEND_FS, loc='center right')
 
     # 6 ── η (resistivity, TORAX only) ───────────────────────────────
     ax = axes[5]
@@ -427,7 +447,7 @@ def _draw_profiles(axes, tt, idx):
 #  Video encoding  (frames → MP4 + GIF via ffmpeg, best-effort)
 # ═══════════════════════════════════════════════════════════════════════
 
-def _encode_video(vid_dir, step, fps=1):
+def _encode_video(vid_dir, step, fps=2):
     pattern  = os.path.join(vid_dir, 'frame_%04d.png')
     mp4_path = os.path.join(vid_dir, f'!pulse_step{step:03}.mp4')
     gif_path = os.path.join(vid_dir, f'!pulse_step{step:03}.gif')
