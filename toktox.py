@@ -78,7 +78,7 @@ class TokTox:
         else:
             self._times = sorted(times)
         # TODO organize initialization of _state
-        self._state['R'] = np.zeros(len(self._times))
+        self._state['R0_mag'] = np.zeros(len(self._times))
         self._state['Z'] = np.zeros(len(self._times))
         self._state['a'] = np.zeros(len(self._times))
         self._state['kappa'] = np.zeros(len(self._times))
@@ -142,6 +142,23 @@ class TokTox:
         
         self._state['test'] = {}
 
+        # Thermal conductivity profiles
+        self._state['chi_neo_e'] = {}
+        self._state['chi_neo_i'] = {}
+        self._state['chi_etg_e'] = {}
+        self._state['chi_itg_e'] = {}
+        self._state['chi_itg_i'] = {}
+        self._state['chi_tem_e'] = {}
+        self._state['chi_tem_i'] = {}
+        self._state['chi_turb_e'] = {}
+        self._state['chi_turb_i'] = {}
+
+        # Diffusivity profiles
+        self._state['D_itg_e'] = {}
+        self._state['D_neo_e'] = {}
+        self._state['D_tem_e'] = {}
+        self._state['D_turb_e'] = {}
+
         # self._state['R_avg_tx'] = {}
         self._state['R_inv_avg_tx'] = {}
         self._state['R_sr_inv_avg_tx'] = {}
@@ -176,6 +193,7 @@ class TokTox:
         self._results['n_e'] = {}
         self._results['T_e'] = {}
         self._results['T_i'] = {}
+
 
         R = []
         Z = []
@@ -248,7 +266,7 @@ class TokTox:
 
         for i, t in enumerate(self._times):
             # Default Scalars
-            self._state['R'][i] = np.interp(t, self._eqtimes, R)
+            self._state['R0_mag'][i] = np.interp(t, self._eqtimes, R)
             self._state['Z'][i] = np.interp(t, self._eqtimes, Z)
             self._state['a'][i] = np.interp(t, self._eqtimes, a)
             self._state['kappa'][i] = np.interp(t, self._eqtimes, kappa)
@@ -406,15 +424,16 @@ class TokTox:
 
 
 
-    def initialize_gs(self, mesh, weights=None, vsc=None):
+    def initialize_gs(self, mesh, R0_geo, weights=None, vsc=None):
         r'''! Initialize GS Solver Object.
         @param mesh Filename of reactor mesh.
+        @param R0_geo Major radius of machine geometric center.
         @param vsc Vertical Stability Coil.
         '''
         mesh_pts,mesh_lc,mesh_reg,coil_dict,cond_dict = load_gs_mesh(mesh)
         self._gs.setup_mesh(mesh_pts, mesh_lc, mesh_reg)
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
-        self._gs.setup(order = 2, F0 = self._state['R'][0]*self._state['B0'][0])
+        self._gs.setup(order = 2, F0 = R0_geo*self._state['B0'][0])
 
         self._gs.settings.maxits = 100
         # self._gs.settings.pm = False
@@ -736,15 +755,14 @@ class TokTox:
         #     # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
         #     t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
 
-        # Use psi from the step-0 init sim when available (profile_conditions mode),
-        # otherwise fall back to the j-formula (nu formula).
-        # profile_conditions mode uses the injected psi profile directly, so the
-        # initial current distribution reflects the evolved step-0 j profile.
+        # Initialize psi from analytic j profile using the nu formula:
+        #   j = j0 * (1 - rho^2)^nu
+        # This is smooth by construction. Set initial_psi_mode='j' explicitly
+        # to avoid the legacy fallback logic which defaults to GEOMETRY mode
+        # when psi is None and initial_psi_from_j is False.
         myconfig.setdefault('profile_conditions', {})
-        if 'psi' in myconfig.get('profile_conditions', {}):
-            myconfig['profile_conditions']['initial_psi_mode'] = 'profile_conditions'
-        else:
-            myconfig['profile_conditions']['initial_psi_mode'] = 'j'
+        myconfig['profile_conditions']['initial_psi_mode'] = 'geometry'
+        # myconfig['profile_conditions']['current_profile_nu'] = 1.0
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
         #    Only applied when the attribute is not None (i.e. the user made
@@ -904,14 +922,14 @@ class TokTox:
         # Numerics: 1-second steady-state init sim
         init_config.setdefault('numerics', {})
         init_config['numerics']['t_initial'] = self._t_init
-        init_config['numerics']['t_final'] = self._t_init + 1.0
+        init_config['numerics']['t_final'] = self._t_init + 1.
         init_config['numerics']['fixed_dt'] = 0.025
 
         # Explicitly use J mode (nu formula) to initialize psi in the step-0 sim.
         # This is the same mode the main sim (step 1+) will use, so T_e/T_i
         # injected from here will be self-consistent with the initial current profile.
         init_config.setdefault('profile_conditions', {})
-        init_config['profile_conditions']['initial_psi_mode'] = 'j'
+        init_config['profile_conditions']['initial_psi_mode'] = 'geometry'
 
         # Flatten all time-dependent values to their initial value (steady-state inputs)
         self._flatten_time_dependent(init_config)
@@ -966,19 +984,19 @@ class TokTox:
 
         
 
-        # Extract the evolved psi profile (Wb) on TORAX's rho_norm grid [0, ..., 1].
-        # IMPORTANT: inject at FULL resolution — do NOT subsample.
-        # j is derived from the second derivative of psi (j ∝ d²ψ/dρ²).
-        # Subsampling psi and then linearly interpolating back produces piecewise-flat
-        # curvature, which maps directly to oscillatory j at each coarse-grid knot.
-        # _get_torax_config will detect this psi and use initial_psi_mode='profile_conditions'.
-        psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
-        rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
-        psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
-        psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
-        main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
-        self._print_out(f'Transport init extracted: psi_axis={psi_arr_smooth[0]:.4f} Wb, psi_lcfs={psi_arr_smooth[-1]:.4f} Wb ({len(rho_arr)} points)')
-        self._print_out(f'psi_profile = {psi_profile}')
+        # NOTE: psi injection from step0 is DISABLED.
+        # The step0 psi evolves under artificial steady-state conditions and
+        # produces a j profile (via d²ψ/dρ²) that is inconsistent with the
+        # actual transient initial state, causing an l_i spike at t=0.
+        # Instead, _get_torax_config uses initial_psi_mode='geometry' which
+        # derives psi directly from the eqdsk's Ip profile, giving a j that
+        # is self-consistent with the TokaMaker equilibrium.
+        #
+        # psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
+        # rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
+        # psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
+        # psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
+        # main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
         # --- Add more value applications here as needed --- # TODO could add n_e profile as well
         # main_config['profile_conditions']['n_e'] = {self._t_init: {rho: float(v) for rho, v in zip(_rho_sub, ne_arr[::_step])}}
         # main_config['profile_conditions']['pax'] = {self._t_init: pax}
@@ -1186,7 +1204,29 @@ class TokTox:
         self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state', normalize=False)
         self._state['vpr_tx'][i] = self._pull_torax_onto_psi(data_tree, 'vpr', t, load_into_state='state', normalize=False)
 
-        # self._plot_current_densities(i, t)
+        # Pull thermal conductivity (chi) profiles with safety checks
+        chi_profiles = [
+            'chi_neo_e', 'chi_neo_i', 'chi_etg_e', 'chi_itg_e', 'chi_itg_i',
+            'chi_tem_e', 'chi_tem_i', 'chi_turb_e', 'chi_turb_i'
+        ]
+        for chi_key in chi_profiles:
+            try:
+                self._state[chi_key][i] = self._pull_torax_onto_psi(data_tree, chi_key, t, load_into_state='state', normalize=False)
+            except (KeyError, AttributeError):
+                # Variable not available in this data_tree, skip
+                pass
+
+        # Pull diffusivity (D) profiles with safety checks
+        d_profiles = [
+            'D_itg_e', 'D_neo_e', 'D_tem_e', 'D_turb_e'
+        ]
+        for d_key in d_profiles:
+            try:
+                self._state[d_key][i] = self._pull_torax_onto_psi(data_tree, d_key, t, load_into_state='state', normalize=False)
+            except (KeyError, AttributeError):
+                # Variable not available in this data_tree, skip
+                pass
+
 
     def _calc_ffp_ni(self, i, data_tree):
         r'''! Calculate non-inductive FF' profile from TORAX current densities.
@@ -1342,7 +1382,7 @@ class TokTox:
 
             # Initialize psi from geometry parameters # TODO this is probably not doing anything, remove (and test)
             # Using the seed EQDSK geometry should give a good initial guess
-            self._gs.init_psi(self._state['R'][i],
+            self._gs.init_psi(self._state['R0_mag'][i],
                                          self._state['Z'][i],
                                          self._state['a'][i],
                                          self._state['kappa'][i],
@@ -1475,7 +1515,7 @@ class TokTox:
 
                 # Plot equil whenever movie will be generated ('all', 'only_movie', or 'normal')
                 if graph in ('all', 'only_movie', 'normal'):
-                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(10, 12))
+                    fig_eq, ax_eq = plt.subplots(1, 1, figsize=(11, 12))
                     # Set colorbar limits to coil current bounds (not actual currents)
                     min_bound = min(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
                     max_bound = max(b for bounds in self._coil_bounds.values() for b in bounds) * 1.E-6  # MA
@@ -1833,7 +1873,7 @@ class TokTox:
         ffpni_on_tm = np.interp(tm_psi, self._state['ffpni_prof'][i]['x'], ffpni_real)
         ffp_inductive = tm_ffp_prof - ffpni_on_tm
 
-        fig, axes = plt.subplots(4, 3, figsize=(20, 16))
+        fig, axes = plt.subplots(6, 3, figsize=(20, 24))
         plt.suptitle(f'Step {self._current_step} - Time index {i}/{len(self._times)-1} - t = {t:.1f} s', fontsize=14)
 
         # =======================
@@ -2024,6 +2064,111 @@ class TokTox:
             ax_dens.text(0.5, 0.5, 'No n profiles', ha='center', va='center')
             ax_dens.set_xticks([])
             ax_dens.set_yticks([])
+
+        # =======================
+        # ROW 4: Chi (thermal conductivity) profiles
+        # =======================
+
+        # (4,0): Chi neo components
+        ax_chi_neo = axes[4,0]
+        ax_chi_neo.set_title(r'$\chi$ (NEO)')
+        try:
+            if i in self._state['chi_neo_e']:
+                ax_chi_neo.plot(self._state['chi_neo_e'][i]['x'], self._state['chi_neo_e'][i]['y'], 'r-', label=r'$\chi_{NEO,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        try:
+            if i in self._state['chi_neo_i']:
+                ax_chi_neo.plot(self._state['chi_neo_i'][i]['x'], self._state['chi_neo_i'][i]['y'], 'b--', label=r'$\chi_{NEO,i}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        ax_chi_neo.set_xlabel(r'$\hat{\psi}$')
+        ax_chi_neo.set_ylabel(r'$\chi$ [m²/s]')
+        ax_chi_neo.legend(fontsize=9)
+        ax_chi_neo.grid(True, alpha=0.3)
+
+        # (4,1): Chi ITG/TEM/ETG components
+        ax_chi_turb = axes[4,1]
+        ax_chi_turb.set_title(r'$\chi$ (Turbulent)')
+        turb_colors = ['g', 'm', 'c', 'orange', 'purple']
+        turb_labels = [r'$\chi_{ETG,e}$', r'$\chi_{ITG,e}$', r'$\chi_{ITG,i}$', r'$\chi_{TEM,e}$', r'$\chi_{TEM,i}$']
+        turb_keys = ['chi_etg_e', 'chi_itg_e', 'chi_itg_i', 'chi_tem_e', 'chi_tem_i']
+        for key, label, color in zip(turb_keys, turb_labels, turb_colors):
+            try:
+                if i in self._state[key]:
+                    ax_chi_turb.plot(self._state[key][i]['x'], self._state[key][i]['y'], color=color, label=label, linewidth=1.5)
+            except (KeyError, TypeError):
+                pass
+        ax_chi_turb.set_xlabel(r'$\hat{\psi}$')
+        ax_chi_turb.set_ylabel(r'$\chi$ [m²/s]')
+        ax_chi_turb.legend(fontsize=8, ncol=2)
+        ax_chi_turb.grid(True, alpha=0.3)
+
+        # (4,2): Chi turb components
+        ax_chi_turb2 = axes[4,2]
+        ax_chi_turb2.set_title(r'$\chi$ (Turbulent - e/i)')
+        try:
+            if i in self._state['chi_turb_e']:
+                ax_chi_turb2.plot(self._state['chi_turb_e'][i]['x'], self._state['chi_turb_e'][i]['y'], 'b-', label=r'$\chi_{turb,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        try:
+            if i in self._state['chi_turb_i']:
+                ax_chi_turb2.plot(self._state['chi_turb_i'][i]['x'], self._state['chi_turb_i'][i]['y'], 'r--', label=r'$\chi_{turb,i}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        ax_chi_turb2.set_xlabel(r'$\hat{\psi}$')
+        ax_chi_turb2.set_ylabel(r'$\chi$ [m²/s]')
+        ax_chi_turb2.legend(fontsize=9)
+        ax_chi_turb2.grid(True, alpha=0.3)
+
+        # =======================
+        # ROW 5: D (diffusivity) profiles
+        # =======================
+
+        # (5,0): D ITG
+        ax_d_itg = axes[5,0]
+        ax_d_itg.set_title(r'$D_{ITG}$')
+        try:
+            if i in self._state['D_itg_e']:
+                ax_d_itg.plot(self._state['D_itg_e'][i]['x'], self._state['D_itg_e'][i]['y'], 'g-', label=r'$D_{ITG,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        ax_d_itg.set_xlabel(r'$\hat{\psi}$')
+        ax_d_itg.set_ylabel(r'$D$ [m²/s]')
+        ax_d_itg.legend(fontsize=9)
+        ax_d_itg.grid(True, alpha=0.3)
+
+        # (5,1): D NEO and TEM
+        ax_d_neo_tem = axes[5,1]
+        ax_d_neo_tem.set_title(r'$D$ (NEO & TEM)')
+        try:
+            if i in self._state['D_neo_e']:
+                ax_d_neo_tem.plot(self._state['D_neo_e'][i]['x'], self._state['D_neo_e'][i]['y'], 'r-', label=r'$D_{NEO,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        try:
+            if i in self._state['D_tem_e']:
+                ax_d_neo_tem.plot(self._state['D_tem_e'][i]['x'], self._state['D_tem_e'][i]['y'], 'm--', label=r'$D_{TEM,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        ax_d_neo_tem.set_xlabel(r'$\hat{\psi}$')
+        ax_d_neo_tem.set_ylabel(r'$D$ [m²/s]')
+        ax_d_neo_tem.legend(fontsize=9)
+        ax_d_neo_tem.grid(True, alpha=0.3)
+
+        # (5,2): D turbulent
+        ax_d_turb = axes[5,2]
+        ax_d_turb.set_title(r'$D_{turb}$')
+        try:
+            if i in self._state['D_turb_e']:
+                ax_d_turb.plot(self._state['D_turb_e'][i]['x'], self._state['D_turb_e'][i]['y'], 'c-', label=r'$D_{turb,e}$', linewidth=1.5)
+        except (KeyError, TypeError):
+            pass
+        ax_d_turb.set_xlabel(r'$\hat{\psi}$')
+        ax_d_turb.set_ylabel(r'$D$ [m²/s]')
+        ax_d_turb.legend(fontsize=9)
+        ax_d_turb.grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.subplots_adjust(top=0.95, hspace=0.3, wspace=0.35)

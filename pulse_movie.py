@@ -167,7 +167,7 @@ def _draw_equil(ax, tt, step, idx, t_now):
             f"Ip = {abs(s['Ip_tm'][idx])/1e6:.3f} MA    "
             f"pax = {s['pax_tm'][idx]/1e3:.1f} kPa    "
             f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
-            f"R = {s['R'][idx]:.3f} m    "
+            f"R = {s['R0_mag'][idx]:.3f} m    "
             f"a = {s['a'][idx]:.3f} m    "
             f"B0 = {s['B0'][idx]:.3f} T\n"
             f"κ = {s['kappa'][idx]:.3f}    "
@@ -185,7 +185,7 @@ def _draw_equil(ax, tt, step, idx, t_now):
             f"Ip target = {abs(s['Ip'][idx])/1e6:.3f} MA\n"
             f"pax target = {s['pax'][idx]/1e3:.1f} kPa\n"
             f"ψ_lcfs TX = {s['psi_lcfs_tx'][idx]:.4f} Wb/rad\n"
-            f"R = {s['R'][idx]:.3f} m    a = {s['a'][idx]:.3f} m\n"
+            f"R = {s['R0_mag'][idx]:.3f} m    a = {s['a'][idx]:.3f} m\n"
             f"B0 = {s['B0'][idx]:.3f} T    κ = {s['kappa'][idx]:.3f}    δ = {s['delta'][idx]:.3f}"
         )
         ax.text(0.5, 0.25, diag, transform=ax.transAxes, fontsize=DIAG_FS,
@@ -213,7 +213,7 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
     s = tt._state
     r = tt._results
 
-    # 1 ── Ip and Ip_NI ──────────────────────────────────────────────
+    # 1 ── Ip and Ip_NI (left) / l_i (right) ────────────────────────
     ax = axes[0]
     ax.plot(times, np.array(s['Ip_tm']) / 1e6,
             color=COLOR_TM, ls=LS_PRI, lw=LW, marker=MK_TM, ms=MK_SZ, label='Ip TM')
@@ -225,6 +225,12 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
     ax.set_title('Plasma Current', fontsize=TITLE_FS)
     ax.legend(fontsize=LEGEND_FS, loc='upper left')
     _style(ax)
+    ax2 = ax.twinx()
+    ax2.plot(times, s['l_i_tm'],
+             color=COLOR_TM, ls=LS_SEC, lw=LW, marker=MK_TM, ms=MK_SZ, label='l_i TM')
+    ax2.set_ylabel('l_i', fontsize=LABEL_FS)
+    ax2.tick_params(labelsize=TICK_FS)
+    ax2.legend(fontsize=LEGEND_FS, loc='upper right')
 
     # 2 ── V_loop (left) / flux consumed (right) ─────────────────────
     ax = axes[1]
