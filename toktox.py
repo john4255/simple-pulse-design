@@ -41,7 +41,7 @@ class MyEncoder(json.JSONEncoder):
 class TokTox:
     '''! TokaMaker + TORAX Coupled Pulse Simulation Code'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -54,6 +54,7 @@ class TokTox:
         '''
         self._oftenv = OFT_env(nthreads=6)
         self._gs = TokaMaker(self._oftenv)
+        self._cocos = cocos
 
         self._state = {}
         self._eqtimes = eqtimes
@@ -236,7 +237,9 @@ class TokTox:
             if time <= self._eqtimes[0]:
                 return profs[0]
             for i in range(1, len(self._eqtimes)):
-                if time > self._eqtimes[i-1] and time <= self._eqtimes[i]:
+                if time == self._eqtimes[i]:
+                    return profs[i]
+                elif time > self._eqtimes[i-1] and time <= self._eqtimes[i]:
                     dt = self._eqtimes[i] - self._eqtimes[i-1]
                     alpha = (time - self._eqtimes[i-1]) / dt
                     return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
@@ -721,7 +724,7 @@ class TokTox:
                         raise ValueError(f'Bad initial gEQDSK at t={t}: {eq}')
                     self._print_out(f'\tTX: Skipping eqdsk at t={t}')
             myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': eq_safe[i], 'cocos': 2} for i, t in enumerate(t_safe)
+                t: {'geometry_file': eq_safe[i], 'cocos': self._cocos} for i, t in enumerate(t_safe)
             }
         else:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
@@ -747,7 +750,7 @@ class TokTox:
                 self._print_out(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
             
             myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
+                t: {'geometry_file': eqdsk_f, 'cocos': self._cocos} for t, eqdsk_f in full_eqdsk_map.items()
             }
 
         if self._tx_grid_type == 'n_rho':
@@ -898,7 +901,7 @@ class TokTox:
                 'last_surface_factor': self._last_surface_factor,
                 'Ip_from_parameters': False,
                 'geometry_file': eqdsk,
-                'cocos': 2,
+                'cocos': self._cocos,
             }
             try:
                 _ = torax.ToraxConfig.from_dict(myconfig)
@@ -921,6 +924,25 @@ class TokTox:
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             print(hist.sim_error)
+            fig, ax = plt.subplots(1,3)
+            print(data_tree.profiles.T_e.coords['time'])
+            Te = data_tree.profiles.T_e.sel(time=2.0, method='nearest')
+            Tex = Te.coords['rho_norm']
+            Tey = Te.to_numpy()
+            ax[0].plot(Tex, Tey)
+            ax[0].set_title('Te')
+            Ti = data_tree.profiles.T_i.sel(time=2.0, method='nearest')
+            Tix = Ti.coords['rho_norm']
+            Tiy = Ti.to_numpy()
+            ax[1].plot(Tix, Tiy)
+            ax[1].set_title('Ti')
+            ne = data_tree.profiles.n_e.sel(time=2.0, method='nearest')
+            nex = ne.coords['rho_norm']
+            ney = ne.to_numpy()
+            ax[2].plot(nex, ney)
+            ax[2].set_title('ne')
+            fig.suptitle('TX Outputs at t=2.0')
+            plt.show()
             raise ValueError(f'TORAX failed to run the simulation.')
         
         v_loops = np.zeros(len(self._times))
