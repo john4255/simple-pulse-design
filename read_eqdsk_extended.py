@@ -2,13 +2,42 @@
 read_eqdsk_extended.py
 
 Extended gEQDSK reader that extracts the same fields as  TokaMaker. read_eqdsk,
-plus derived flux-surface geometry:
+plus derived flux-surface geometry.
 
-    psi_n         - normalised poloidal flux grid (0 = axis, 1 = boundary)
-    volume        - volume enclosed by each flux surface  V(psi_n)  [m^3]
-    vpr           - dV/dpsi  (not normalised psi)  [m^3 / (Wb/rad)]
-    R_avg         - flux-surface average <R>  [m]
-    R_inv_avg     - flux-surface average <1/R>  [1/m]
+From original gEQDSK file:
+    case          - case name string
+    nr, nz        - number of R and Z grid points
+    rdim, zdim    - R and Z dimensions [m]
+    rcentr        - R at geometric center [m]
+    rleft         - R of left boundary [m]
+    zmid          - Z at geometric center [m]
+    raxis, zaxis  - R, Z coordinates of magnetic axis [m]
+    psimag, psibry - poloidal flux at axis and boundary [Wb/rad]
+    bcentr        - vacuum field at Rcentr [T]
+    ip            - plasma current [A]
+    fpol          - F(psi) = R*Bphi  [T·m]  shape (nr,)
+    pres          - pressure profile  [Pa]  shape (nr,)
+    ffprim        - dF/dpsi  [T·m/(Wb/rad)]  shape (nr,)
+    pprime        - dp/dpsi  [Pa/(Wb/rad)]  shape (nr,)
+    psirz         - poloidal flux on (R, Z) grid  [Wb/rad]  shape (nz, nr)
+    qpsi          - q-profile  shape (nr,)
+    nbbs, nlim    - number of boundary and limiter points
+    rzout         - R, Z coordinates of LCFS  [m]  shape (nbbs, 2)
+    rzlim         - R, Z coordinates of wall/limiter  [m]  shape (nlim, 2)
+
+Derived flux-surface geometry (computed using OMFIT algorithm):
+    psi_n         - normalised poloidal flux grid (0 = axis, 1 = boundary)  shape (nr,)
+    psi           - poloidal flux values  [Wb/rad]  shape (nr,)
+    vol           - volume enclosed by each flux surface  V(psi_n)  [m^3]  shape (nr,)
+    vol_lcfs      - volume at LCFS  [m^3]
+    vpr           - dV/dpsi  [m^3/(Wb/rad)]  shape (nr,)
+    R_avg         - flux-surface average <R>  [m]  shape (nr,)
+    R_inv_avg     - flux-surface average <1/R>  [1/m]  shape (nr,)
+    a             - minor radius [m]
+    kappa         - elongation (Z_extent / horiz_extent)
+    delta         - triangularity (inboard shift at top)
+    q0            - safety factor at axis
+    q95           - safety factor at 95% flux
 
 Uses OMFIT's contour tracing algorithm.
 """
@@ -407,6 +436,43 @@ def add_flux_surface_geometry(eqdsk, filename=None):
     eqdsk['q0']  = float(np.abs(eqdsk['qpsi'][0]))
     eqdsk['q95'] = float(np.interp(0.95, psi_n_q, np.abs(eqdsk['qpsi'])))
 
+    # Minor radius: from LCFS at midplane
+    # Find R values at Z closest to zmid, compute a = (R_max - R_min) / 2
+    if len(eqdsk['rzout']) > 0:
+        R_lcfs = eqdsk['rzout'][:, 0]
+        Z_lcfs = eqdsk['rzout'][:, 1]
+        # Find points closest to midplane
+        idx_midplane = np.argmin(np.abs(Z_lcfs - eqdsk['zmid']))
+        # Get a window of points near midplane to find R extent
+        z_tol = 0.01  # tolerance in m
+        near_midplane = np.abs(Z_lcfs - eqdsk['zmid']) < z_tol
+        if np.sum(near_midplane) > 0:
+            R_midplane = R_lcfs[near_midplane]
+            eqdsk['a'] = float((np.max(R_midplane) - np.min(R_midplane)) / 2.0)
+        else:
+            eqdsk['a'] = float((np.max(R_lcfs) - np.min(R_lcfs)) / 2.0)
+        
+        # Elongation: kappa = (Z_max - Z_min) / (2 * a)
+        z_extent = np.max(Z_lcfs) - np.min(Z_lcfs)
+        if eqdsk['a'] > 0:
+            eqdsk['kappa'] = float(z_extent / (2.0 * eqdsk['a']))
+        else:
+            eqdsk['kappa'] = 0.0
+        
+        # Triangularity: delta = (R_center - R_at_Zmax) / a
+        # Find the point at maximum Z
+        idx_zmax = np.argmax(Z_lcfs)
+        R_at_zmax = R_lcfs[idx_zmax]
+        R_center = (np.max(R_lcfs) + np.min(R_lcfs)) / 2.0
+        if eqdsk['a'] > 0:
+            eqdsk['delta'] = float((R_center - R_at_zmax) / eqdsk['a'])
+        else:
+            eqdsk['delta'] = 0.0
+    else:
+        eqdsk['a'] = 0.0
+        eqdsk['kappa'] = 0.0
+        eqdsk['delta'] = 0.0
+
     return eqdsk
 
 
@@ -464,4 +530,7 @@ if __name__ == '__main__':
     print(f"  LCFS volume:   {eq['vol_lcfs']:.4f}  m^3")
     print(f"  <R> at LCFS:   {eq['R_avg'][-1]:.4f}  m")
     print(f"  <1/R> at LCFS: {eq['R_inv_avg'][-1]:.4f}  1/m")
+    print(f"  Minor radius:  {eq['a']:.4f}  m")
+    print(f"  Elongation:    {eq['kappa']:.4f}")
+    print(f"  Triangularity: {eq['delta']:.4f}")
     print(f"  Max dV/dpsi:   {np.max(np.abs(eq['vpr'])):.4e}  m^3/(Wb/rad)")
