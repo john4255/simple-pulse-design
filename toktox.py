@@ -1424,19 +1424,19 @@ class TokTox:
             lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
-            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+            # self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
 
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
-            # self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
+            self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
             omp_idx = np.argmax(lcfs[:, 0] * np.exp(-0.5 * ((lcfs[:, 1] - z_axis) / (0.3 * self._state['a'][i]))**2))
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
             # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
-            # self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
-            #                   weights=np.array([LCFS_WEIGHT * 100])) # psi value target
+            self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
+                              weights=np.array([LCFS_WEIGHT * 100])) # psi value target
 
             
             
