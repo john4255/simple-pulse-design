@@ -914,7 +914,7 @@ class TokTox:
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 50,
             'Ip_from_parameters': True,
-            'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': 2}},
+            'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': self._cocos}},
         }
 
         if self._tx_grid_type == 'n_rho':
@@ -1047,23 +1047,24 @@ class TokTox:
                     pass
 
     def _test_eqdsk(self, eqdsk):
-            myconfig = copy.deepcopy(BASE_CONFIG)
-            if self._loaded_config is not None:
-                self._config_merge(myconfig, self._loaded_config)
-            myconfig['geometry'] = {
-                'geometry_type': 'eqdsk',
-                'geometry_directory': os.getcwd(),
-                'last_surface_factor': self._last_surface_factor,
-                'Ip_from_parameters': False,
-                'geometry_file': eqdsk,
-                'cocos': self._cocos,
-            }
-            try:
-                _ = torax.ToraxConfig.from_dict(myconfig)
-                return True
-            except Exception as e:
-                # self._print_out(e)
-                return False
+        myconfig = copy.deepcopy(BASE_CONFIG)
+        if self._loaded_config is not None:
+            self._config_merge(myconfig, self._loaded_config)
+        myconfig['geometry'] = {
+            'geometry_type': 'eqdsk',
+            'geometry_directory': os.getcwd(),
+            'last_surface_factor': self._last_surface_factor,
+            'Ip_from_parameters': False,
+            'geometry_file': eqdsk,
+            'cocos': self._cocos,
+        }
+        print(myconfig['geometry'])
+        try:
+            _ = torax.ToraxConfig.from_dict(myconfig)
+            return True
+        except Exception as e:
+            print(e)
+            return False
 
     def _run_transport(self, graph='all'):
         r'''! Run the Torax simulation.
@@ -1132,8 +1133,8 @@ class TokTox:
 
         self._state['Ip'][i] =          data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['Ip_tx'][i] =       data_tree.scalars.Ip.sel(time=t, method='nearest')
-        self._state['Ip_NI_tx'][i] =    data_tree.scalars.I_non_inductive.sel(time=t, method='nearest')
-        self._state['f_NI'][i] =        data_tree.scalars.f_non_inductive.sel(time=t, method='nearest')
+        # self._state['Ip_NI_tx'][i] =    data_tree.scalars.I_non_inductive.sel(time=t, method='nearest')
+        # self._state['f_NI'][i] =        data_tree.scalars.f_non_inductive.sel(time=t, method='nearest')
         
         pax_new = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest').values
         pax_old = self._state['pax'][i]
@@ -1413,37 +1414,39 @@ class TokTox:
             # Warm-start: prefer previous step's converged solution for this # TODO this might be unecessarily complication, not sure i like using i-1 for warmstart, mighe be fine
             # timestep; fall back to the previous timestep's solution within
             # the current step (adjacent-time warm-start).
-            if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
-                self._print_out(f'\tTM: Warm-starting psi at t={t} from previous step converged solution.')
-                self._gs.set_psi(self._psi_warm_start[i])
-            elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
-                self._print_out(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current step.')
-                self._gs.set_psi(self._state['psi_grid_prev_tm'][i-1])
+            # if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
+            #     self._print_out(f'\tTM: Warm-starting psi at t={t} from previous step converged solution.')
+            #     self._gs.set_psi(self._psi_warm_start[i])
+            # elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
+            #     self._print_out(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current step.')
+            #     self._gs.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
             lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
+            self._gs.set_flux(lcfs, targets=lcfs_psi_target*np.ones_like(isoflux_weights), weights=isoflux_weights)
+
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
-            self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
+            # self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
             omp_idx = np.argmax(lcfs[:, 0] * np.exp(-0.5 * ((lcfs[:, 1] - z_axis) / (0.3 * self._state['a'][i]))**2))
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
             # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
-            self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
-                              weights=np.array([LCFS_WEIGHT * 100])) # psi value target
+            # self._gs.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
+            #                   weights=np.array([LCFS_WEIGHT * 100])) # psi value target
 
             
             
             self._gs.update_settings() # TODO what does this do?
 
-            if i>0:
-                # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
-                if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
-                    # self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
-                    self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
+            # if i>0:
+            #     # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
+            #     if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
+            #         # self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
+            #         self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
             
             
             if i==0: # at beginning of every step reset this dict so it doesn't use previous step's values
@@ -1494,8 +1497,8 @@ class TokTox:
 
                 try:
                     print(f'{equals} trying level {level_idx} solve ({level_name})')
-                    self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
-                                          ffp_NI_prof=self._state['ffpni_prof'][i])
+                    # self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
+                    #                       ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
                     print(f'{equals} level {level_idx} solve succeeded!')
                     self._print_out(f'\tTM: Solve succeeded at t={t} (level {level_idx}: {level_name}).')
@@ -3091,7 +3094,7 @@ class TokTox:
 
         # Step 0 = TORAX initialization: run tx sim with circular geo for 1 sec to initialize initial inputs
         self._print_out(f'---- Step {self._current_step} ---- \n')
-        self._run_transport_init()
+        # self._run_transport_init()
 
 
 
