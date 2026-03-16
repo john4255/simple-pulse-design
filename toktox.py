@@ -1497,8 +1497,8 @@ class TokTox:
 
                 try:
                     print(f'{equals} trying level {level_idx} solve ({level_name})')
-                    # self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
-                    #                       ffp_NI_prof=self._state['ffpni_prof'][i])
+                    self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
+                                          ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
                     print(f'{equals} level {level_idx} solve succeeded!')
                     self._print_out(f'\tTM: Solve succeeded at t={t} (level {level_idx}: {level_name}).')
@@ -1526,7 +1526,7 @@ class TokTox:
             if solve_succeeded:
                 self._gs.save_eqdsk(eq_name,
                     lcfs_pad=0.001,run_info='TokaMaker EQDSK',
-                    cocos=2, nr=200, nz=200, truncate_eq=False)
+                    cocos=self._cocos, nr=200, nz=200, truncate_eq=False)
                 self._gs_update(i)
                 
                 # Only plot profiles in 'all' mode
