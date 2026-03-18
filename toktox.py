@@ -1437,18 +1437,11 @@ class TokTox:
             
             self._gs.update_settings() # TODO what does this do?
 
-            if i>0:
-                # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
-                if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
-                    # self._print_out(f'\tTM: Setting psi grid from previous timestep for eddy current calcs.')
-                    self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
             
-            
-            if i==0: # at beginning of every step reset this dict so it doesn't use previous step's values
+            if i==0: # at beginning of every step reset TokaMaker settings so it doesn't use previous step's i=i_final values
                 self._state['psi_grid_prev_tm'] = {} # TODO weird place to put this but works for now
 
-                # Reset coil regularization to i=0 targets so stale end-of-step
-                # targets from the previous step don't bias the first solve.
+                # Reset coil regularization to i=0 targets so stale end-of-step targets
                 cfg = getattr(self, '_coil_reg_config', {})
                 if cfg:
                     if self._prescribed_currents:
@@ -1456,16 +1449,16 @@ class TokTox:
                     else:
                         self.set_coil_reg(targets=None, **{k: v for k, v in cfg.items() if k != 'targets'})
 
-                # Reset eddy-current reference so TokaMaker doesn't use the stale
-                # psi_dt from step N's last timestep at step N+1, i=0. TokaMaker
-                # stores psi_dt internally and uses it in every solve() until
-                # explicitly updated, so the if i>0 guard above doesn't protect us.
-                # The spurious eddy current is ~(psi_new - psi_stale)/dt_last, and
-                # dt_last shrinks with more timepoints, causing the threshold behavior.
-                # Using the warm-start psi as psi0 with dt→∞ zeroes the contribution.
+                # Using the warm-start psi as psi0 with dt = 10^10 negates eddy current effects.
                 if 0 in self._psi_warm_start and self._psi_warm_start[0] is not None:
                     self._gs.set_psi_dt(psi0=self._psi_warm_start[0], dt=1.0e10)
+           
+            if i>0:
+                # self._print_out(f'\tTM: Starting solve at t={t} with initial psi from previous timestep.')
+                if self._state['psi_grid_prev_tm'][i-1] is not None: # for every timestep after initial, set last timestep's psi grid for eddy current calcs in TokaMaker 
 
+                    self._gs.set_psi_dt(psi0 = self._state['psi_grid_prev_tm'][i-1], dt = self._times[i]-self._times[i-1])
+            
             skip_coil_update = False
             eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i))
 
