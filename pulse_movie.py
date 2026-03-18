@@ -178,8 +178,8 @@ def _draw_equil(ax, tt, step, idx, t_now):
             f"B0 = {s['B0'][idx]:.3f} T\n"
             f"κ = {s['kappa'][idx]:.3f}    "
             f"δ = {s['delta'][idx]:.3f}    "
-            f"Configuration = {config_str}"
-            f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
+            f"Configuration = {config_str}\n"
+            # f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
         )
         ax.text(0.5, -0.02, diag, transform=ax.transAxes, fontsize=DIAG_FS,
                 ha='center', va='top', fontfamily='monospace')
