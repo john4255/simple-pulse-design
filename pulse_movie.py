@@ -32,12 +32,12 @@ VLINE_COLOR = 'black'
 VLINE_LS    = ':'
 VLINE_LW    = 1.0
 GRID_ALPHA  = 0.2
-LEGEND_FS   = 7            # legend font size
-TITLE_FS    = 10           # subplot title font size
-LABEL_FS    = 9            # axis-label font size
-TICK_FS     = 8            # tick-label font size
-INFO_FS     = 10           # info panel font size
-DIAG_FS     = 10           # diagnostic text under equil
+LEGEND_FS   = 9            # legend font size
+TITLE_FS    = 13           # subplot title font size
+LABEL_FS    = 11           # axis-label font size
+TICK_FS     = 10           # tick-label font size
+INFO_FS     = 13           # info panel font size
+DIAG_FS     = 13           # diagnostic text under equil
 
 FIG_W, FIG_H = 19.2, 10.8  # inches  (16 : 9)
 DPI = 200                   # → 3840 × 2160 px
@@ -47,7 +47,7 @@ DPI = 200                   # → 3840 × 2160 px
 #  Public entry point
 # ═══════════════════════════════════════════════════════════════════════
 
-def generate_pulse_movie(tt, step, run_name='', save_frames=True):
+def generate_pulse_movie(tt, step, run_name='', save_frames=True, speed_factor=1.0):
     """Create one PNG frame per time-slice, then encode MP4 + GIF.
 
     Parameters
@@ -61,6 +61,9 @@ def generate_pulse_movie(tt, step, run_name='', save_frames=True):
     save_frames : bool
         If True, keep individual frame PNG files. If False, generate them
         for MP4 encoding but delete them afterward.
+    speed_factor : float
+        Playback speed relative to real time. 1.0 = real-time, 2.0 = 2x speed, etc.
+        Default is 1.0 (real-time pulse duration).
     """
     vid_dir = os.path.join(tt._out_dir, 'vid')
     os.makedirs(vid_dir, exist_ok=True)
@@ -80,7 +83,10 @@ def generate_pulse_movie(tt, step, run_name='', save_frames=True):
                       flux_con_tm, flux_con_tx, fpath, run_name)
         plt.close('all')
 
-    _encode_video(vid_dir, step)
+    # Calculate fps based on real-time speed factor
+    total_time = times[-1] - times[0] if len(times) > 1 else 1.0
+    fps = speed_factor * n / total_time
+    _encode_video(vid_dir, step, fps=fps)
     
     # If not saving frames, delete them after encoding
     if not save_frames:
@@ -101,7 +107,8 @@ def _render_frame(tt, step, idx, t_now, times,
 
     fig = plt.figure(figsize=(FIG_W, FIG_H), dpi=DPI)
     gs  = GridSpec(6, 3, figure=fig,
-                   wspace=0.42, hspace=0.18,
+                   width_ratios=[1.2, 1.0, 1.0],
+                   wspace=0.30, hspace=0.18, # wspace = whitespace between columns, .42 is too much, .15 is too little
                    left=0.045, right=0.965, top=0.96, bottom=0.05)
 
     # ── Column 0: info + equil ──────────────────────────────────────
@@ -153,11 +160,11 @@ def _draw_equil(ax, tt, step, idx, t_now):
 
     if tm_ok:
         img = imread(eq_img)
-        ax.imshow(img, aspect='auto')
+        ax.imshow(img, aspect='equal')
         ax.axis('off')
         ax.set_title(f't = {t_now:.2f} s', fontsize=TITLE_FS + 2)
 
-        # Build diagnostic text below equil image
+        # Build diagnostic text for below equil image
         div_flags = getattr(tt, '_diverted_flags', {})
         div_flag = div_flags.get(idx)
         config_str = 'Diverted' if div_flag else ('Limited' if div_flag is not None else '?')
@@ -165,14 +172,14 @@ def _draw_equil(ax, tt, step, idx, t_now):
         diag = (
             f"i = {idx}    "
             f"Ip = {abs(s['Ip_tm'][idx])/1e6:.3f} MA    "
-            f"pax = {s['pax_tm'][idx]/1e3:.1f} kPa    "
-            f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
+            f"pax = {s['pax_tm'][idx]/1e3:.1f} kPa\n"
             f"R = {s['R0_mag'][idx]:.3f} m    "
             f"a = {s['a'][idx]:.3f} m    "
             f"B0 = {s['B0'][idx]:.3f} T\n"
             f"κ = {s['kappa'][idx]:.3f}    "
             f"δ = {s['delta'][idx]:.3f}    "
             f"Configuration = {config_str}"
+            f"ψ_lcfs = {s['psi_lcfs_tm'][idx]:.4f} Wb/rad\n"
         )
         ax.text(0.5, -0.02, diag, transform=ax.transAxes, fontsize=DIAG_FS,
                 ha='center', va='top', fontfamily='monospace')
@@ -184,9 +191,9 @@ def _draw_equil(ax, tt, step, idx, t_now):
         diag = (
             f"Ip target = {abs(s['Ip'][idx])/1e6:.3f} MA\n"
             f"pax target = {s['pax'][idx]/1e3:.1f} kPa\n"
-            f"ψ_lcfs TX = {s['psi_lcfs_tx'][idx]:.4f} Wb/rad\n"
             f"R = {s['R0_mag'][idx]:.3f} m    a = {s['a'][idx]:.3f} m\n"
             f"B0 = {s['B0'][idx]:.3f} T    κ = {s['kappa'][idx]:.3f}    δ = {s['delta'][idx]:.3f}"
+            f"ψ_lcfs TX = {s['psi_lcfs_tx'][idx]:.4f} Wb/rad\n"
         )
         ax.text(0.5, 0.25, diag, transform=ax.transAxes, fontsize=DIAG_FS,
                 ha='center', va='center', fontfamily='monospace')
@@ -246,7 +253,7 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
              color=COLOR_TM, ls=LS_SEC, lw=LW, marker=MK_TM, ms=MK_SZ, label='Φ TM')
     ax2.plot(times, flux_con_tx,
              color=COLOR_TX, ls=LS_SEC, lw=LW, label='Φ TX')
-    ax2.set_ylabel('Flux [Wb]', fontsize=LABEL_FS)
+    ax2.set_ylabel('Flux Consumed [Wb]', fontsize=LABEL_FS)
     ax2.tick_params(labelsize=TICK_FS)
     ax2.legend(fontsize=LEGEND_FS, loc='upper right')
 
@@ -319,10 +326,10 @@ def _draw_scalars(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
             ax.plot(ct, ci_vals, ls=LS_PRI, lw=LW * 0.7, color=coil_colors[ci],
                     label=cname)
         # Draw limit lines from first coil bound (all same by default)
-        if coil_bounds:
-            first_bounds = next(iter(coil_bounds.values()))
-            ax.axhline(first_bounds[0] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
-            ax.axhline(first_bounds[1] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
+        # if coil_bounds:
+        #     first_bounds = next(iter(coil_bounds.values()))
+        #     ax.axhline(first_bounds[0] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
+        #     ax.axhline(first_bounds[1] * 1e-3, color='r', ls='--', lw=0.6, alpha=0.6)
     ax.set_ylabel('I_coil [kA]', fontsize=LABEL_FS)
     ax.legend(fontsize=LEGEND_FS - 2, loc='center left', bbox_to_anchor=(1.02, 0.5), ncol=1)
     _style(ax)

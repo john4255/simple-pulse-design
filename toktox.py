@@ -140,8 +140,6 @@ class TokTox:
         self._state['p_prof_tm'] = {} 
         self._state['p_prof_tx'] = {}
         self._state['f_prof_tm'] = {}
-        
-        self._state['test'] = {}
 
         # Thermal conductivity profiles
         self._state['chi_neo_e'] = {}
@@ -307,6 +305,8 @@ class TokTox:
         self._pax_seed      = self._state['pax'].copy()
         self._state['pax_tm'] = self._state['pax'].copy()
 
+        self._psi_init = None
+        
         self._Ip = None
         self._Zeff = None
 
@@ -674,7 +674,7 @@ class TokTox:
            keys only in BASE_CONFIG are kept as-is.
         3. Override geometry (always set by TokTox / TokaMaker equilibria).
         4. Override t_initial / t_final / fixed_dt from __init__ params.
-        5. Apply psi profile (computed from TokaMaker state).
+        5. Use psi profile from step 0 (if available) from profile_conditions.
         6. Apply any explicit set_*() overrides (only when the attribute is
            not None, i.e. the user called the setter after load_config).
 
@@ -714,7 +714,7 @@ class TokTox:
             }
         else:
             # For times where TM succeeded last step, use the TM-solved EQDSK.
-            # For times where TM failed, fall back to the nearest seed EQDSK and
+            # For times where TM failed, fall back to the nearest solved EQDSK and
             eqtimes_arr = np.array(self._eqtimes)
             full_eqdsk_map = {}
             n_tm = 0
@@ -750,27 +750,17 @@ class TokTox:
         myconfig['numerics']['t_final'] = self._t_final
         myconfig['numerics']['fixed_dt'] = self._dt
 
-        # ── 5. Psi profile (always computed from TokaMaker state) ──────────
-        # myconfig.setdefault('profile_conditions', {})
-        # myconfig['profile_conditions']['psi'] = { # TORAX takes in Wb, psi_lcfs stored as Wb/rad (AKA Wb-rad) so needs *2pi factor
-        #     # TX and TM have different Ip sign conventions, meaning they expect psi profile differently
-        #     # TM expects psi to increase, TX expects it to decrease. They match psi_lcfs and they have the same abs(psi(0) - psi(1)).
-        #     # But to correctly pass psi_axis to TX, we have to reflect it over psi_lcfs: psi_axis_tx = 2*psi_axis_tm - psi_lcfs_tm
-        #     t: {0.0: (2.0 * self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs_tm'][i]* 2.0 * np.pi} for i, t in enumerate(self._times)}
-
-        # Initialize psi from analytic j profile using the nu formula:
-        #   j = j0 * (1 - rho^2)^nu
-        # This is smooth by construction. Set initial_psi_mode='j' explicitly
-        # to avoid the legacy fallback logic which defaults to GEOMETRY mode
-        # when psi is None and initial_psi_from_j is False.
+        # ── 5. Psi profile from step 0  ──────────
         myconfig.setdefault('profile_conditions', {})
-        myconfig['profile_conditions']['initial_psi_mode'] = 'geometry'
-        # myconfig['profile_conditions']['current_profile_nu'] = 1.0
+        if self._psi_init is not None:
+            myconfig['profile_conditions']['psi'] = self._psi_init
+            myconfig['profile_conditions']['initial_psi_mode'] = 'profile_conditions'
+            myconfig['profile_conditions']['initial_psi_from_j'] = False
+        else:
+            myconfig['profile_conditions']['initial_psi_mode'] = 'geometry' # if step 0 wasn't run, uses psi from initial eqdsk, not ideal
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
-        #    Only applied when the attribute is not None (i.e. the user made
-        #    an explicit setter call, or will be None if relying on the
-        #    loaded config / base config value).
+        #    Only applied when the attribute is not None (i.e. the user made an explicit setter call, or will be None if relying on the loaded config / base config value).
         if self._n_e is not None:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
@@ -869,16 +859,12 @@ class TokTox:
         if self._Ve_max is not None:
             myconfig['transport']['V_e_max'] = self._Ve_max
 
-        # with open('torax_config.json', 'w') as json_file:
-        #     json.dump(myconfig, json_file, indent=4, cls=MyEncoder)
-        # Save torax config dict to python file (before from_dict, so plain Python types only)
         config_filename = os.path.join(self._out_dir, 'results', f'tx_config{self._current_step}.py')
         with open(config_filename, 'w') as f:
             f.write('# Torax configuration\n')
             f.write(f'# Step {self._current_step}\n\n')
             f.write('torax_config = ')
             f.write(pprint.pformat(self._to_plain_python(myconfig), width=100))
-
 
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -888,14 +874,11 @@ class TokTox:
     def _run_transport_init(self):
         r'''! Step 0: Run a short TORAX simulation with eqdsk geometry to equilibrate initial inputs.
 
-        Uses the first seed eqdsk (same geometry as step 1, i=0) so the psi profile
-        evolved here is consistent with the eqdsk GS metric coefficients.  Injecting
-        this psi into the step-1 sim gives a smooth, physically consistent j at t=0.
-
-        Running for 1 second with steady-state (time-flattened) inputs lets TORAX
-        evolve them to a more physical state.  The equilibrated values are then
+        Run TORAX for 1 second with steady-state (time-flattened) inputs lets TORAX
+        evolve them to a more physical state.  The relaxed values are then
         injected into the config used by the main simulation (step 1 onwards).
         '''
+        INIT_RUNTIME = 0.5 # seconds
         self._print_out('Transport init: building steady-state init config...')
 
         init_config = copy.deepcopy(BASE_CONFIG)
@@ -925,8 +908,13 @@ class TokTox:
         # Numerics: 1-second steady-state init sim
         init_config.setdefault('numerics', {})
         init_config['numerics']['t_initial'] = self._t_init
-        init_config['numerics']['t_final'] = self._t_init + 1.
-        init_config['numerics']['fixed_dt'] = 0.025
+        init_config['numerics']['t_final'] = self._t_init + INIT_RUNTIME
+        init_config['numerics']['fixed_dt'] = 0.01
+        
+        init_config['numerics']['evolve_current'] = True # Let current evolve to relax to psi profile
+        init_config['numerics']['evolve_density'] = False # Fix ne and Te/Ti profiles
+        init_config['numerics']['evolve_ion_heat'] = False
+        init_config['numerics']['evolve_electron_heat'] = False
 
         # Explicitly use J mode (nu formula) to initialize psi in the step-0 sim.
         # This is the same mode the main sim (step 1+) will use, so T_e/T_i
@@ -944,69 +932,49 @@ class TokTox:
             f.write('torax_config = ')
             f.write(pprint.pformat(self._to_plain_python(init_config), width=100))
 
-        self._print_out('Transport init: running 1s steady-state TORAX simulation...')
+        self._print_out(f'Transport init: running ~{INIT_RUNTIME}s steady-state TORAX simulation...')
         torax_config = torax.ToraxConfig.from_dict(init_config)
         data_tree, hist = torax.run_simulation(torax_config, log_timestep_info=False)
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             raise ValueError(f'Transport init simulation failed: {hist.sim_error}')
 
-        t_final_init = self._t_init + 1.0
+        t_final_init = self._t_init + INIT_RUNTIME
 
-        # Extract final psi at axis and LCFS (TORAX outputs in Wb)
-        psi_axis = float(data_tree.profiles.psi.sel(time=t_final_init, rho_norm=0.0, method='nearest').item())
-        psi_lcfs = float(data_tree.profiles.psi.sel(time=t_final_init, rho_norm=1.0, method='nearest').item())
 
-        # --- Add more extractions here as needed ---
-        # pax = float(data_tree.profiles.pressure_thermal_total.sel(time=t_final_init, rho_norm=0.0, method='nearest').item())
-        # Te  = data_tree.profiles.T_e.sel(time=t_final_init, method='nearest').to_numpy()
-        # ne  = data_tree.profiles.n_e.sel(time=t_final_init, method='nearest').to_numpy()
 
-        self._print_out(f'Transport init extracted: psi_axis={psi_axis:.6f} Wb, psi_lcfs={psi_lcfs:.6f} Wb')
+        #### Possible to extract Te/ne or other profiles from end of init simulation and inject into main sim but this hasn't worked
+        #    because temperatures and pressures evolve quickly (Te is heating ohmically by spuriously high P_oh), so be careful if using these
+        #    Probably better to just get your initial profiles correct in the loaded config
 
-        # Extract T_e and T_i profiles, mapped onto the standard psi_N grid
-        T_e_arr = self._pull_torax_onto_psi(data_tree, 'T_e', t_final_init, load_into_state=None)
-        T_i_arr = self._pull_torax_onto_psi(data_tree, 'T_i', t_final_init, load_into_state=None)
-        # Subsample to ~25 rho points for the config dict (TORAX interpolates)
-        _step = max(1, len(self._psi_N) // 25)
-        _rho_sub = self._psi_N[::_step]
-        T_e_profile = {float(r): float(v) for r, v in zip(_rho_sub, T_e_arr[::_step])}
-        T_i_profile = {float(r): float(v) for r, v in zip(_rho_sub, T_i_arr[::_step])}
-        self._print_out(f'Transport init extracted: T_e_core={T_e_arr[0]:.3f} keV, T_e_edge={T_e_arr[-1]:.4f} keV')
-        self._print_out(f'Transport init extracted: T_i_core={T_i_arr[0]:.3f} keV, T_i_edge={T_i_arr[-1]:.4f} keV')
+        # Extract T_e, T_i, n_e profiles natively on their TORAX coordinates
+        # T_e_xr = data_tree.profiles.T_e.sel(time=t_final_init, method='nearest')
+        # rho_norm_arr = T_e_xr.coords['rho_norm'].to_numpy()
+        # T_e_arr = T_e_xr.to_numpy()
+        # T_i_arr = data_tree.profiles.T_i.sel(time=t_final_init, method='nearest').to_numpy()
+        # n_e_arr = data_tree.profiles.n_e.sel(time=t_final_init, method='nearest').to_numpy()
+        # Build tuples as expected by TORAX config
+        # T_e_profile = ([self._t_init], rho_norm_arr.tolist(), [T_e_arr.tolist()])
+        # T_i_profile = ([self._t_init], rho_norm_arr.tolist(), [T_i_arr.tolist()])
+        # n_e_profile = ([self._t_init], rho_norm_arr.tolist(), [n_e_arr.tolist()])
+        # Use standard setters so `_get_torax_config` uses them natively instead of user overrides
+        # self.set_Te(T_e_profile)
+        # self.set_Ti(T_i_profile)
+        # self.set_ne(n_e_profile)
+        ####
 
         # Update the config used by the main simulation (self._loaded_config if set, else BASE_CONFIG)
         # main_config is direct reference to main config, so modifications below are propagated into main step 1+ simulation.
         main_config = self._loaded_config if self._loaded_config is not None else BASE_CONFIG
         main_config.setdefault('profile_conditions', {})
 
-        # Inject equilibrated T_e, T_i as initial conditions for the main sim.
-        # If set_Te() / set_Ti() were called, _get_torax_config() will override those.
-        main_config['profile_conditions']['T_e'] = {self._t_init: T_e_profile}
-        main_config['profile_conditions']['T_i'] = {self._t_init: T_i_profile}
-
+        # Extract psi directly on its own grid
+        psi_xr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest')
+        rho_psi_arr = psi_xr.coords['rho_norm'].to_numpy()
+        psi_arr = psi_xr.to_numpy()
+        self._psi_init = ([self._t_init], rho_psi_arr.tolist(), [psi_arr.tolist()])
         
 
-        # NOTE: psi injection from step0 is DISABLED.
-        # The step0 psi evolves under artificial steady-state conditions and
-        # produces a j profile (via d²ψ/dρ²) that is inconsistent with the
-        # actual transient initial state, causing an l_i spike at t=0.
-        # Instead, _get_torax_config uses initial_psi_mode='geometry' which
-        # derives psi directly from the eqdsk's Ip profile, giving a j that
-        # is self-consistent with the TokaMaker equilibrium.
-        #
-        # psi_arr = data_tree.profiles.psi.sel(time=t_final_init, method='nearest').to_numpy()
-        # rho_arr = data_tree.profiles.psi.coords['rho_norm'].to_numpy()
-        # psi_arr_smooth = savgol_filter(psi_arr, window_length=31, polyorder=3)
-        # psi_profile = {float(r): float(v) for r, v in zip(rho_arr, psi_arr_smooth)}
-        # main_config['profile_conditions']['psi'] = {self._t_init: psi_profile}
-        # --- Add more value applications here as needed --- # TODO could add n_e profile as well
-        # main_config['profile_conditions']['n_e'] = {self._t_init: {rho: float(v) for rho, v in zip(_rho_sub, ne_arr[::_step])}}
-        # main_config['profile_conditions']['pax'] = {self._t_init: pax}
-
-        self._print_out(
-            f'Transport init: updated main sim config with equilibrated T_e/T_i '
-            f'(T_e_core={T_e_arr[0]:.2f} keV, T_i_core={T_i_arr[0]:.2f} keV)')
 
     @staticmethod
     def _flatten_time_dependent(config):
@@ -1045,6 +1013,23 @@ class TokTox:
                             config[key] = ([first_t], [first_v])
                 except TypeError:
                     pass
+            elif isinstance(val, (tuple, list)) and len(val) == 3:
+                t_arr, rho_arr, v_arr = val
+                try:
+                    if (hasattr(t_arr, '__len__') and hasattr(rho_arr, '__len__') and hasattr(v_arr, '__len__')
+                            and not isinstance(t_arr, str) and not isinstance(v_arr, str)
+                            and len(t_arr) > 1
+                            and max(t_arr) > 1.0):
+                        first_t = t_arr[0]
+                        first_v = v_arr[0]
+                        if isinstance(t_arr, np.ndarray):
+                            config[key] = (np.array([first_t]), rho_arr, np.array([first_v]))
+                        elif isinstance(t_arr, tuple):
+                            config[key] = ((first_t,), rho_arr, (first_v,))
+                        else:
+                            config[key] = ([first_t], rho_arr, [first_v])
+                except TypeError:
+                    pass
 
     def _test_eqdsk(self, eqdsk):
             myconfig = copy.deepcopy(BASE_CONFIG)
@@ -1062,7 +1047,7 @@ class TokTox:
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except Exception as e:
-                # self._print_out(e)
+                print(f"TEST EQDSK FAILED:", repr(e))
                 return False
 
     def _run_transport(self, graph='all'):
@@ -1126,9 +1111,6 @@ class TokTox:
         '''
         t = self._times[i]
 
-        # temp 2026-02-03
-        self._state['test'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=True)
-
 
         self._state['Ip'][i] =          data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['Ip_tx'][i] =       data_tree.scalars.Ip.sel(time=t, method='nearest')
@@ -1144,7 +1126,7 @@ class TokTox:
         self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
         self._state['q0'][i] = data_tree.profiles.q.sel(time=t, rho_face_norm=0.0, method='nearest')
 
-        # deep copy to prevent mutation when normalizing local copies for TM input later
+
         self._state['ffp_prof_save'][i] = {
             'x': self._state['ffp_prof'][i]['x'].copy(),
             'y': self._state['ffp_prof'][i]['y'].copy(),
@@ -1157,20 +1139,20 @@ class TokTox:
         }
 
 
-        self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=False)
-        self._state['pp_prof'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime',  t, load_into_state='state', normalize=False)
+        self._state['ffp_prof'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state')
+        self._state['pp_prof'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime',  t, load_into_state='state')
         
-        self._state['ffp_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state', normalize=False) # temp for calculating j_phi
+        self._state['ffp_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'FFprime', t, load_into_state='state') # temp for calculating j_phi
         self._state['ffp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
 
-        self._state['pp_prof_tx'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state', normalize=False)
+        self._state['pp_prof_tx'][i] =  self._pull_torax_onto_psi(data_tree, 'pprime', t, load_into_state='state')
         self._state['pp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
 
-        self._state['p_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state', normalize=False)
+        self._state['p_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state')
 
         self._state['vloop_tx'][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
         
-        self._state['q_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='state', normalize=False)
+        self._state['q_prof_tx'][i] = self._pull_torax_onto_psi(data_tree, 'q', t, load_into_state='state')
 
         self._state['j_tot'][i] =            self._pull_torax_onto_psi(data_tree, 'j_total',          t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_ohmic'][i] =          self._pull_torax_onto_psi(data_tree, 'j_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
@@ -1182,33 +1164,33 @@ class TokTox:
         self._state['j_external'][i] = self._pull_torax_onto_psi(data_tree, 'j_external', t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_generic_current'][i] = self._pull_torax_onto_psi(data_tree, 'j_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
 
-        self._state['R_inv_avg_tx'][i] = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state='state', normalize=False)
+        self._state['R_inv_avg_tx'][i] = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state='state')
 
         ffp_ni = self._calc_ffp_ni(i, data_tree)
 
         self._state['ffpni_prof'][i] = {'x': self._psi_N.copy(), 'y': ffp_ni.copy(), 'type': 'linterp'}         
 
-        self._state['T_i'][i] = self._pull_torax_onto_psi(data_tree, 'T_i', t, load_into_state='state', normalize=False)
-        self._state['T_e'][i] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='state', normalize=False)
-        self._state['n_i'][i] = self._pull_torax_onto_psi(data_tree, 'n_i', t, load_into_state='state', normalize=False)
-        self._state['n_e'][i] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='state', normalize=False)
+        self._state['T_i'][i] = self._pull_torax_onto_psi(data_tree, 'T_i', t, load_into_state='state')
+        self._state['T_e'][i] = self._pull_torax_onto_psi(data_tree, 'T_e', t, load_into_state='state')
+        self._state['n_i'][i] = self._pull_torax_onto_psi(data_tree, 'n_i', t, load_into_state='state')
+        self._state['n_e'][i] = self._pull_torax_onto_psi(data_tree, 'n_e', t, load_into_state='state')
         # ne_bar = data_tree.scalars.n_e_line_avg.sel(time=t, method='nearest').item()
         # n_GW = self._state['Ip'][i] / (np.pi * self._state['a'][i]**2)  # GW density based on line-averaged density
         # self._state['f_GW'][i] = ne_bar / n_GW if n_GW > 0 else 0.0
         self._state['f_GW'][i] = data_tree.scalars.fgw_n_e_line_avg.sel(time=t, method='nearest').item()
         self._state['f_GW_vol'][i] = data_tree.scalars.fgw_n_e_volume_avg.sel(time=t, method='nearest').item()
 
-        self._state['ptot'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state', normalize=False)
+        self._state['ptot'][i] = self._pull_torax_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state')
 
         # Get conductivity and convert to resistivity (eta = 1/sigma)
-        conductivity = self._pull_torax_onto_psi(data_tree, 'sigma_parallel', t, load_into_state=None, normalize=False)
+        conductivity = self._pull_torax_onto_psi(data_tree, 'sigma_parallel', t, load_into_state=None)
         self._state['eta_prof'][i] = {
             'x': self._psi_N.copy(),
             'y': 1.0 / conductivity,
             'type': 'linterp',
         }
 
-        psi_tx = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state=None, normalize=False) / (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
+        psi_tx = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state=None) / (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
         psi_tx = 2.0 * psi_tx[-1] - psi_tx  # reflect over psi_lcfs to convert from TX to TM convention
         self._state['psi_tx'][i] = {'x': self._psi_N.copy(), 'y': psi_tx.copy(), 'type': 'linterp',}
         self._state['psi_lcfs_tx'][i] = self._state['psi_tx'][i]['y'][-1]  # update psi_lcfs based on reflected psi profile
@@ -1217,14 +1199,14 @@ class TokTox:
 
         # self._state['psi_lcfs'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=1.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
         # self._state['psi_axis'][i] = data_tree.profiles.psi.sel(time=t, rho_norm=0.0, method='nearest').item() / (2.0 * np.pi) # TORAX outputs psi_lcfs in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
-        # self._state['psi_tx'][i]   = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state='state', normalize=False)
+        # self._state['psi_tx'][i]   = self._pull_torax_onto_psi(data_tree, 'psi', t, load_into_state='state')
         # self._state['psi_tx'][i]['y'] /= (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
         # 2.0 * self._state['psi_lcfs'][i] - self._state['psi_axis'][i]) * 2.0 * np.pi, 1.0: self._state['psi_lcfs'][i]* 2.0 * np.pi
         
         # Pull volume and volume derivative from TORAX
         self._state['vol_tx_lcfs'][i] = data_tree.profiles.volume.sel(time=t, rho_norm=1.0, method='nearest').item()
-        self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state', normalize=False)
-        self._state['vpr_tx'][i] = self._pull_torax_onto_psi(data_tree, 'vpr', t, load_into_state='state', normalize=False)
+        self._state['vol_tx'][i] = self._pull_torax_onto_psi(data_tree, 'volume', t, load_into_state='state')
+        self._state['vpr_tx'][i] = self._pull_torax_onto_psi(data_tree, 'vpr', t, load_into_state='state')
 
         # Pull thermal conductivity (chi) profiles with safety checks
         chi_profiles = [
@@ -1233,7 +1215,7 @@ class TokTox:
         ]
         for chi_key in chi_profiles:
             try:
-                self._state[chi_key][i] = self._pull_torax_onto_psi(data_tree, chi_key, t, load_into_state='state', normalize=False)
+                self._state[chi_key][i] = self._pull_torax_onto_psi(data_tree, chi_key, t, load_into_state='state')
             except (KeyError, AttributeError):
                 # Variable not available in this data_tree, skip
                 pass
@@ -1244,7 +1226,7 @@ class TokTox:
         ]
         for d_key in d_profiles:
             try:
-                self._state[d_key][i] = self._pull_torax_onto_psi(data_tree, d_key, t, load_into_state='state', normalize=False)
+                self._state[d_key][i] = self._pull_torax_onto_psi(data_tree, d_key, t, load_into_state='state')
             except (KeyError, AttributeError):
                 # Variable not available in this data_tree, skip
                 pass
@@ -1288,7 +1270,7 @@ class TokTox:
                      default_weight=1.0E-1, disable_coils=None,
                      disable_weight=1.0E4, symmetry_weight=1.0E3,
                      disable_virtual_vsc=True, vsc_weight=1.0E4):
-        r'''! Set coil regularization using the matrix-based API.
+        r'''! Set coil regularization using the matrix-based TokaMaker input.
         @param targets Dict of {coil_name: target_current} or {coil_name: time_series} for prescribed currents.
         @param i Timestep index (used for prescribed_currents interpolation).
         @param coil_bounds Dict of {coil_name: [min, max]} current bounds. Default ±50 kA.
@@ -1376,10 +1358,7 @@ class TokTox:
             self._gs.set_flux(None,None)
             self._gs.set_saddles(None)
 
-            # Set saddle-point (X-point) constraints during diverted phase
-            if self._diverted_times[i] and self._x_point_targets is not None:
-                saddle_weights = self._x_point_weight * np.ones(self._x_point_targets.shape[0])
-                self._gs.set_saddles(self._x_point_targets, saddle_weights)
+
 
             Ip_target = abs(self._state['Ip'][i])
             P0_target = abs(self._state['pax'][i])
@@ -1420,12 +1399,31 @@ class TokTox:
                 self._print_out(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current step.')
                 self._gs.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
-            lcfs = self._state['lcfs_geo'][i] # never updated by TORAX, only from initial eqdsk
+
+
+            lcfs = self._state['lcfs_geo'][i]
+
+            # Set saddle-point (X-point) constraints during diverted phase
+            if self._diverted_times[i] and self._x_point_targets is not None:
+                saddle_weights = self._x_point_weight * np.ones(self._x_point_targets.shape[0])
+                self._gs.set_saddles(self._x_point_targets, saddle_weights)
+
+                # trims lcfs targets near X-point(s)
+                perc_limit = 0.60       # LCFS points above percentage limit* max(abs(Z)) are removed from isoflux targets
+                Z_max_abs = np.max(np.abs(lcfs[:, 1]))
+                Z_lim = perc_limit * Z_max_abs
+                if np.shape(self._x_point_targets)[0] == 1 and self._x_point_targets[0][1] > 0: # upper single null
+                    lcfs = lcfs[lcfs[:, 1] <= Z_lim]   
+                elif np.shape(self._x_point_targets)[0] == 1 and self._x_point_targets[0][1] < 0: # lower single null
+                    lcfs = lcfs[lcfs[:, 1] >= -Z_lim]
+                elif np.shape(self._x_point_targets)[0] == 2: # double null
+                    lcfs = lcfs[np.abs(lcfs[:, 1]) <= Z_lim]
+
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
-            self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
+            self._gs.set_isoflux(lcfs, isoflux_weights*10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
@@ -1448,6 +1446,25 @@ class TokTox:
             
             if i==0: # at beginning of every step reset this dict so it doesn't use previous step's values
                 self._state['psi_grid_prev_tm'] = {} # TODO weird place to put this but works for now
+
+                # Reset coil regularization to i=0 targets so stale end-of-step
+                # targets from the previous step don't bias the first solve.
+                cfg = getattr(self, '_coil_reg_config', {})
+                if cfg:
+                    if self._prescribed_currents:
+                        self.set_coil_reg(i=0, **{k: v for k, v in cfg.items() if k != 'targets'})
+                    else:
+                        self.set_coil_reg(targets=None, **{k: v for k, v in cfg.items() if k != 'targets'})
+
+                # Reset eddy-current reference so TokaMaker doesn't use the stale
+                # psi_dt from step N's last timestep at step N+1, i=0. TokaMaker
+                # stores psi_dt internally and uses it in every solve() until
+                # explicitly updated, so the if i>0 guard above doesn't protect us.
+                # The spurious eddy current is ~(psi_new - psi_stale)/dt_last, and
+                # dt_last shrinks with more timepoints, causing the threshold behavior.
+                # Using the warm-start psi as psi0 with dt→∞ zeroes the contribution.
+                if 0 in self._psi_warm_start and self._psi_warm_start[0] is not None:
+                    self._gs.set_psi_dt(psi0=self._psi_warm_start[0], dt=1.0e10)
 
             skip_coil_update = False
             eq_name = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step, i))
@@ -1545,12 +1562,17 @@ class TokTox:
                     if cb is not None:
                         cb.mappable.set_clim(min_bound, max_bound)
                     self._gs.plot_psi(fig_eq, ax_eq, xpoint_color='r', vacuum_nlevels=4)
-                    ax_eq.plot(self._state['lcfs_geo'][i][:, 0], self._state['lcfs_geo'][i][:, 1], color='r', linewidth=1, label = 'LCFS target')
-                    if self._diverted_times[i] and self._x_point_targets is not None:
-                        ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'X', color='purple', markersize=8, label='X-point targets')
-                    ax_eq.set_title(f't = {t:.2f} s')
-                    fig_eq.legend(loc='upper right')
-                    fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
+                    self._gs.plot_constraints(fig_eq, ax_eq, isoflux_color='red', isoflux_marker='.', saddle_color='purple', saddle_marker='X')
+                    # ax_eq.plot(lcfs_trimmed[:, 0], lcfs_trimmed[:, 1], color='r', marker='.', linewidth=1, label = 'LCFS target')
+                    # if self._diverted_times[i] and self._x_point_targets is not None:
+                        # ax_eq.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'X', color='purple', markersize=8, label='X-point targets')
+                    # ax_eq.set_title(f't = {t:.2f} s')
+                    ax_eq.set_aspect('equal')
+                    ax_eq.legend(loc='upper right', fontsize=12) # legend font size
+                    ax_eq.tick_params(labelsize=11) # tick font size
+                    if cb is not None:
+                        cb.ax.tick_params(labelsize=11)
+                    fig_eq.savefig(os.path.join(self._out_dir, 'equil', f'equil_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight', pad_inches=0.0)
                     plt.close(fig_eq)
                 
             # Only plot tm_diagnostic in 'all' mode
@@ -1703,6 +1725,15 @@ class TokTox:
         self._state['psi_grid_prev_tm'][i] = self._gs.get_psi(normalized=False)
         self._psi_warm_start[i] = self._gs.get_psi(normalized=False)  # persist across steps
 
+
+        # TODO 2026-03-17 pull LCFS geometry from gs solve, works but doesn't help in the way i wanted it to, might try later
+        #         # if self._gs.trace_surf(1.0) is not None:
+        #     lcfs_geo = self._gs.trace_surf(1.0) # often silenty fails and returns 0
+        # else:
+        #     lcfs_geo = self._gs.trace_surf(0.999)
+        # self._state['lcfs_geo'][i] = lcfs_geo[::10, :]
+        # if i == 0:
+        #     self._state['lcfs_geo'][i] = self._gs.trace_surf(1.0)[::10, :]
 
     def _res_update(self, data_tree):
 
@@ -1874,25 +1905,10 @@ class TokTox:
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._gs.get_profiles(npsi=N_PSI)
         tm_ffp_prof = tm_f_prof * tm_fp_prof
 
-        # Helper to normalize an array: subtract boundary, divide by axis value
-        def normalize_arr(y):
-            y_norm = copy.deepcopy(y)
-            # y_norm -= y_norm[-1]
-            axis_val = y_norm[0]
-            y_norm /= axis_val if axis_val != 0 else 1.0
-            return y_norm
-
-        # Normalized versions
-        tm_p_norm = normalize_arr(tm_p_prof)
-        tm_pp_norm = normalize_arr(tm_pp_prof)
-        tm_f_norm = normalize_arr(tm_f_prof)
-        tm_ffp_norm = normalize_arr(tm_ffp_prof)
-
-        # FF'_NI is NOT normalized - it's in physical units
-        ffpni_real = self._state['ffpni_prof'][i]['y'].copy()
+        ffpni = self._state['ffpni_prof'][i]['y'].copy()
         
         # FF'_inductive = FF'_total - FF'_NI (on TM psi grid, in physical units)
-        ffpni_on_tm = np.interp(tm_psi, self._state['ffpni_prof'][i]['x'], ffpni_real)
+        ffpni_on_tm = np.interp(tm_psi, self._state['ffpni_prof'][i]['x'], ffpni)
         ffp_inductive = tm_ffp_prof - ffpni_on_tm
 
         fig, axes = plt.subplots(6, 3, figsize=(20, 24))
@@ -1918,33 +1934,6 @@ class TokTox:
         ax2_pp_real.set_ylabel('p [Pa]', color='r')
         ax2_pp_real.tick_params(axis='y', labelcolor='r')
         ax2_pp_real.legend(fontsize=9, loc='upper right')
-
-        # # (0,1): p' and p comparison (normalized) with dual y-axes
-        # ax_pp_norm = axes[0,1]
-        # ptot_torax_norm = normalize_arr(self._state['ptot'][i]['y'])
-        # ax_pp_norm.set_title("p' and p comparison (normalized)")
-        # ax_pp_norm.plot(self._state['pp_prof'][i]['x'], self._state['pp_prof'][i]['y'], 'b-', label="p' TX (norm)", linewidth=2)
-        # ax_pp_norm.plot(tm_psi, tm_pp_norm, 'b--', label="p' TM (norm)", linewidth=2)
-        # ax_pp_norm.set_ylabel("p' (norm)", color='b')
-        # ax_pp_norm.set_xlabel(r'$\hat{\psi}$')
-        # ax_pp_norm.tick_params(axis='y', labelcolor='b')
-        # ax_pp_norm.legend(fontsize=9, loc='upper left')
-        # # Secondary y-axis for p normalized
-        # ax2_pp_norm = ax_pp_norm.twinx()
-        # ax2_pp_norm.plot(tm_psi, tm_p_norm, 'r-', label='p TM (norm)', linewidth=2)
-        # ax2_pp_norm.plot(self._state['ptot'][i]['x'], ptot_torax_norm, 'r--', label='p TX (norm)', linewidth=2)
-        # ax2_pp_norm.set_ylabel('p (norm)', color='r')
-        # ax2_pp_norm.tick_params(axis='y', labelcolor='r')
-        # ax2_pp_norm.legend(fontsize=9, loc='upper right')
-
-        # # (0,2): FF' comparison (normalized)
-        # ax_ffp_norm = axes[0,2]
-        # ax_ffp_norm.set_title("FF' comparison (normalized)")
-        # ax_ffp_norm.plot(self._state['ffp_prof'][i]['x'], self._state['ffp_prof'][i]['y'], 'b-', label='TX (norm)', linewidth=2)
-        # ax_ffp_norm.plot(tm_psi, tm_ffp_norm, 'r--', label='TM (norm)', linewidth=2)
-        # ax_ffp_norm.set_ylabel("FF' (norm)")
-        # ax_ffp_norm.set_xlabel(r'$\hat{\psi}$')
-        # ax_ffp_norm.legend(fontsize=9)
         
         axes[0,1].axis('off')  # hide unused subplot
         axes[0,2].axis('off')  # hide unused subplot
@@ -2193,54 +2182,9 @@ class TokTox:
         ax_d_turb.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.95, hspace=0.3, wspace=0.35)
+        plt.subplots_adjust(top=0.95, hspace=0.3, wspace=0.35) 
         plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_plot_{self._current_step:03}.{i:03}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
-
-
-    def _plot_current_densities(self, i, t):
-        r'''! Create and save a plot of all available current densities.
-        
-        Plots j_bootstrap, j_ecrh, j_external, j_generic_current, j_non_inductive, 
-        j_ohmic, and j_total on a single plot.
-        
-        @param i Time index within self._times.
-        @param t Physical time value (s).
-        '''
-        
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        # Define colors and line styles for each current type
-        current_configs = [
-            ('j_tot', 'j_total', 'k--', 2.5, r'$j_{total}$'),
-            ('j_ohmic', 'j_ohmic', 'r-', 2.0, r'$j_{ohmic}$'),
-            ('j_ni', 'j_non_inductive', 'b-', 2.0, r'$j_{non-inductive}$'),
-            ('j_bootstrap', 'j_bootstrap', 'g-', 1.8, r'$j_{bootstrap}$'),
-            ('j_ecrh', 'j_ecrh', 'm-', 1.5, r'$j_{ecrh}$'),
-            ('j_external', 'j_external', 'c-', 1.5, r'$j_{external}$'),
-            ('j_generic_current', 'j_generic_current', 'orange', 1.5, r'$j_{generic}$'),
-        ]
-        
-        # Plot each current density if available
-        for state_key, torax_name, color, linewidth, label in current_configs:
-            if i in self._state.get(state_key, {}):
-                x = self._state[state_key][i]['x']
-                y = self._state[state_key][i]['y'] / 1e6  # Convert to MA/m²
-                ax.plot(x, y, color, linewidth=linewidth, label=label)
-        
-        ax.set_xlabel(r'$\hat{\psi}$', fontsize=12)
-        ax.set_ylabel(r'Current density $j$ [MA/m²]', fontsize=12)
-        ax.set_title(f'Current Densities - Step {self._current_step}, t = {t:.2f} s', fontsize=13)
-        ax.legend(fontsize=11, loc='best')
-        ax.grid(True, alpha=0.3)
-        ax.axhline(0, color='k', linewidth=0.5)
-        
-        # Save the figure
-        plt.tight_layout()
-        plt.savefig(os.path.join(self._out_dir, 'plots', f'current_densities_{self._current_step:03}.{i:03}.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.close(fig)
-        # plt.savefig(os.path.join(self._out_dir, 'plots', f'profile_evolution_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
 
 
     def _tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded):
@@ -2349,8 +2293,6 @@ class TokTox:
 
         # TX input plots — all attempted levels
         _plot_levels(ax_ffp_tx, 'ffp', seed_x=_seed_psi_n, seed_y=_seed_ffp_norm, seed_label="FF\' seed EQDSK (norm)")
-        # ax_ffp_tx.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'],
-                        #    'g--', linewidth=1.5, label="FF\'_NI (real)")
         ax_ffp_tx.set_title("FF\' tried levels (norm)", fontsize=10)
         ax_ffp_tx.set_xlabel(r'$\hat{\psi}$')
         ax_ffp_tx.set_ylabel("FF\' (norm)")
@@ -3107,8 +3049,7 @@ class TokTox:
             cflux_gs, cflux_gs_vloop = self._run_gs(graph=self._graph_mode)
             if save_states:
                 self.save_state(os.path.join(self._out_dir, 'results', 'gs_state{}.json'.format(self._current_step)))
-
-            self.save_res()
+                self.save_res()
 
             # record convergence history
             tm_cflux_psi.append(cflux_gs)

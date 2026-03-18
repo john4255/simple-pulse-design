@@ -255,9 +255,23 @@ def detailed_plot_single_sim(dt: xr.DataTree, time: float | None = None):
   axes[4, 1].set_title(r"Core electron density", fontsize=fsize-fontreduction)
   axes[4, 1].legend(fontsize=fsize-fontreduction)
 
-  # Hide unused subplots
-  for col in range(2, 5):
-    axes[4, col].set_visible(False)
+  if hasattr(dt.profiles, 'FFprime'):
+    axes[4, 2].plot(dt.rho_face_norm, dt.profiles.FFprime[time_index, :], 'b-')
+    axes[4, 2].set_xlabel(r"Normalized Radius ($\hat{\rho}$)")
+    axes[4, 2].set_ylabel(r"FF'")
+    axes[4, 2].set_title(r"FF' Profile", fontsize=fsize-fontreduction)
+
+  if hasattr(dt.profiles, 'pprime'):
+    axes[4, 3].plot(dt.rho_face_norm, dt.profiles.pprime[time_index, :], 'r-')
+    axes[4, 3].set_xlabel(r"Normalized Radius ($\hat{\rho}$)")
+    axes[4, 3].set_ylabel(r"p'")
+    axes[4, 3].set_title(r"p' Profile", fontsize=fsize-fontreduction)
+
+  if hasattr(dt.profiles, 'pressure_thermal_total'):
+    axes[4, 4].plot(dt.rho_norm, dt.profiles.pressure_thermal_total[time_index, :], 'm-')
+    axes[4, 4].set_xlabel(r"Normalized Radius ($\hat{\rho}$)")
+    axes[4, 4].set_ylabel(r"Pressure [Pa]")
+    axes[4, 4].set_title(r"p", fontsize=fsize-fontreduction)
 
   plt.tight_layout()
   plt.show()
