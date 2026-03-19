@@ -50,6 +50,7 @@ BASE_CONFIG = {
         # 'evolve_electron_heat': True, # solve electron heat equation
         # 'evolve_current': True, # solve current equation
         # 'evolve_density': True, # solve density equation
+        'dt_reduction_factor': 3,  # retry failed Newton-Raphson steps with dt/3 (backtracking)
     },
     'geometry': {
         # 'geometry_type': 'eqdsk',
@@ -85,7 +86,7 @@ BASE_CONFIG = {
         # },
         # 'fusion': {}, # fusion power
         # 'ei_exchange': {}, # equipartition
-        # 'ohmic': {}, # ohmic power
+        'ohmic': {}, # ohmic heating — always on; TORAX computes it from resistivity and current profile
         # 'cyclotron_radiation': {
         #   'mode': 'ZERO',
         # }, # cyclotron radiation

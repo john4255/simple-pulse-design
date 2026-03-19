@@ -3,12 +3,12 @@ import pprint
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
-import torax
 import copy
 import json
 import os
 import shutil
 from datetime import datetime
+import time
 
 from OpenFUSIONToolkit import OFT_env
 from OpenFUSIONToolkit.TokaMaker import TokaMaker
@@ -24,6 +24,65 @@ N_PSI = 1000
 _NBI_W_TO_MA = 1/16e6
 mu_0 = 4.0 * np.pi * 1e-7
 
+# Setup output re-direct from TORAX to log file, suppressing frivolous warnings.
+# Errors will still be output in terminal.
+# This is the first step, needs to be given self._log_file once that is configured in self.fly().
+import logging
+import sys
+def log_redirect_setup():
+    r'''! Step 1/3 of setup to redirect noisy outputs to log file.
+    Performs the initial, minimal logging setup.
+    - Removes any handlers pre-configured by libraries.
+    - Sets the root logger's level to capture all desired messages.
+    - Adds a console handler for critical errors only.
+    '''
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)  # Capture INFO level and above
+    
+    # Remove any pre-existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add a handler to show ONLY errors on the console
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setLevel(logging.ERROR)
+    formatter = logging.Formatter('CONSOLE ERROR: [%(levelname)s] %(message)s')
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+
+log_redirect_setup()
+
+# Now import "noisy" packages, after running log_redirect_setup:
+import torax
+
+
+from contextlib import contextmanager
+@contextmanager
+def redirect_outputs_to_log(filename):
+    r'''! Step 2/3 of setup to redirect noisy outputs to log file. 
+    A context manager to temporarily redirect stdout and stderr to a file.
+    @param filename Name of log file (self._log_file)
+    '''
+    if not filename:
+        # If no filename is provided, do nothing.
+        yield
+        return
+
+    with open(filename, 'a') as log_file:
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = log_file
+        sys.stderr = log_file
+        try:
+            # Write a separator to the log to show where stdout redirection started
+            log_file.write("\n--- [Begin capturing stdout/stderr] ---\n")
+            yield
+        finally:
+            # Write a separator to show where it ended
+            log_file.write("\n--- [End capturing stdout/stderr] ---\n")
+            # Crucially, restore the original streams
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
 
 class MyEncoder(json.JSONEncoder):
     '''! JSON Encoder Object to store simulation results.'''
@@ -42,7 +101,7 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -52,11 +111,13 @@ class TokTox:
         @param times Time points to sample output at.
         @param last_surface_factor Last surface factor for Torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
+        @param oft_env OFT environment if one is already initialized.
+        @param oft_threads Number of threads OFT can use.
         '''
         if oft_env is not None:
             self._oftenv = oft_env
         else:
-            self._oftenv = OFT_env(nthreads=6)
+            self._oftenv = OFT_env(nthreads=oft_threads)
         self._tm = TokaMaker(self._oftenv)
         self._cocos = cocos
 
@@ -168,7 +229,7 @@ class TokTox:
         self._results['lcfs_geo'] = {}
         self._results['dpsi_lcfs_dt'] = {}
         self._results['vloop_tm'] = np.zeros([20, len(self._times)])
-        self._results['vloop_torax'] = np.zeros([20, len(self._times)])
+        # self._results['vloop_tx'] = np.zeros([20, len(self._times)])
         self._results['q'] = {}
         self._results['jtot'] = {}
         self._results['n_e'] = {}
@@ -177,7 +238,7 @@ class TokTox:
 
 
         R = []
-        Z = []
+        Z = []  
         a = []
         kappa = []
         delta = []
@@ -288,7 +349,6 @@ class TokTox:
         self._eccd_heating = None
         self._eccd_loc = None
         self._nbi_loc = None
-        self._ohmic_power = None
 
         self._nbar = None
         self._n_e = None
@@ -303,8 +363,6 @@ class TokTox:
         self._Te_right_bc = None
         self._Ti_right_bc = None
         self._ne_right_bc = None
-
-        self._ohmic = None
 
         self._gp_s = None
         self._gp_dl = None
@@ -326,6 +384,11 @@ class TokTox:
         self._Ve_min = None
         self._Ve_max = None
 
+        self._main_ion = None
+        self._impurity = None
+        self._enable_fusion = False
+        self._enable_ei_exchange = False
+
         self._targets = None
         self._loaded_config = None   # set by load_config()
         self._tx_grid_type = None
@@ -339,7 +402,9 @@ class TokTox:
         # Temp/output directory state (set in fly())
         self._eqdsk_dir = None
         self._save_outputs = False
+        self._debug_mode = False
         self._diagnostics = False
+        self._logging_configured = False
         self._log_file = None
 
     # ─── Static Utilities ───────────────────────────────────────────────────────
@@ -594,6 +659,38 @@ class TokTox:
         '''
         self._Zeff = Zeff
 
+    def set_plasma_composition(self, main_ion=None, impurity=None):
+        r'''! Set plasma composition (fuel and impurity species).
+
+        Must be called together with set_Zeff() — set_Zeff() provides the
+        Z_eff target which TORAX uses to determine the impurity density for the
+        species specified here.
+
+        @param main_ion Main ion species dict, e.g. {'D': 0.5, 'T': 0.5} for DT.
+        @param impurity Impurity species string, e.g. 'Ne', 'Ar', 'W'.
+        '''
+        if main_ion is not None:
+            self._main_ion = main_ion
+        if impurity is not None:
+            self._impurity = impurity
+
+    def set_sources(self, fusion=False, ei_exchange=False):
+        r'''! Enable standard TORAX physics sources using TORAX defaults.
+
+        Each flag adds the corresponding source with an empty config dict so
+        TORAX uses its built-in defaults.  Only call the ones you need — empty
+        dicts pull in TORAX's machine-specific defaults (e.g. ITER geometry for
+        fusion), which may not be appropriate for every simulation.
+        
+        Ohmic heating is enabled by default in the base_config. 
+        Currently there is no way to disable ohmic heating, other than changing base_config.
+
+        @param fusion    Enable fusion alpha heating.
+        @param ei_exchange Enable electron-ion energy exchange.
+        '''
+        self._enable_fusion = fusion
+        self._enable_ei_exchange = ei_exchange
+
     def set_nbar(self, nbar, normalize_to_nbar=True):
         r'''! Set line averaged density over time.
         @param nbar Density (m^-3).
@@ -610,11 +707,14 @@ class TokTox:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None):
+    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None):
         r'''! Set heating sources for Torax.
-        @param nbi NBI heating (dictionary of heating at times).
-        @param eccd ECCD heating (dictionary of heating at times).
-        @param eccd_loc Location of ECCD heating.
+
+        Ohmic heating is always enabled (it is on by default in BASE_CONFIG).
+        @param nbi NBI heating (dictionary of {time: power_in_watts}).
+        @param nbi_loc NBI deposition location (normalized rho).
+        @param eccd ECCD heating (dictionary of {time: power_in_watts}).
+        @param eccd_loc ECCD deposition location (normalized rho).
         '''
         if nbi is not None and nbi_loc is not None:
             self._nbi_heating = nbi
@@ -622,8 +722,6 @@ class TokTox:
         if eccd is not None and eccd_loc is not None:
             self._eccd_heating = eccd
             self._eccd_loc = eccd_loc
-        if ohmic is not None:
-            self._ohmic_power = ohmic
 
     def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
@@ -652,15 +750,15 @@ class TokTox:
         self._evolve_Ti = Ti
         self._evolve_Te = Te
 
-    def set_Bp(self, Bp):
-        Bp_t = sorted(Bp.keys())
-        Bp_list = [Bp[t] for t in Bp_t]
-        for i, t in enumerate(self._times):
-            self._state['beta_pol'][i] = np.interp(t, Bp_t, Bp_list)
-
-    def set_Vloop(self, vloop):
-        for i in range(len(self._times)):
-            self._state['vloop_tm'][i] = vloop[i]
+    # def set_Bp(self, Bp):
+    #     Bp_t = sorted(Bp.keys())
+    #     Bp_list = [Bp[t] for t in Bp_t]
+    #     for i, t in enumerate(self._times):
+    #         self._state['beta_pol'][i] = np.interp(t, Bp_t, Bp_list)
+    
+    # def set_Vloop(self, vloop):
+    #     for i in range(len(self._times)):
+    #         self._state['vloop_tm'][i] = vloop[i]
 
     def set_gaspuff(self, s=None, decay_length=None):
         r'''! Set gas puff particle source.
@@ -687,9 +785,6 @@ class TokTox:
             self._Ve_min = Ve_min
         if Ve_max is not None:
             self._Ve_max = Ve_max
-
-    def set_ohmic(self, times, rho, values):
-        self._ohmic = (times, rho, values)
 
 
     # ─── TORAX (TX) Methods ───────────────────────────────────────────────────
@@ -874,6 +969,9 @@ class TokTox:
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
         #    Only applied when the attribute is not None (i.e. the user made an explicit setter call, or will be None if relying on the loaded config / base config value).
+        if self._Ip is not None:
+            myconfig['profile_conditions']['Ip'] = self._Ip
+
         if self._n_e is not None:
             myconfig['profile_conditions']['n_e'] = self._n_e
         
@@ -887,17 +985,27 @@ class TokTox:
             myconfig.setdefault('plasma_composition', {})
             myconfig['plasma_composition']['Z_eff'] = self._Zeff
 
+        if self._main_ion is not None:
+            myconfig.setdefault('plasma_composition', {})
+            myconfig['plasma_composition']['main_ion'] = self._main_ion
+
+        if self._impurity is not None:
+            myconfig.setdefault('plasma_composition', {})
+            myconfig['plasma_composition']['impurity'] = self._impurity
+
+        if self._enable_fusion:
+            myconfig.setdefault('sources', {})
+            myconfig['sources'].setdefault('fusion', {})
+
+        if self._enable_ei_exchange:
+            myconfig.setdefault('sources', {})
+            myconfig['sources'].setdefault('ei_exchange', {})
+
         if self._eccd_loc is not None:
             myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('ecrh', {})
             myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
             myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
-
-        if self._ohmic_power is not None:
-            myconfig.setdefault('sources', {})
-            myconfig['sources'].setdefault('ohmic', {})
-            myconfig['sources']['ohmic']['mode'] = 'PRESCRIBED'
-            myconfig['sources']['ohmic']['prescribed_values'] = self._ohmic_power
 
         if self._nbi_heating is not None:
             nbi_times, nbi_pow = zip(*self._nbi_heating.items())    
@@ -972,16 +1080,16 @@ class TokTox:
         if self._Ve_max is not None:
             myconfig['transport']['V_e_max'] = self._Ve_max
 
-        if self._save_outputs:
+        if self._save_outputs or self._debug_mode:
             config_filename = os.path.join(self._out_dir, 'results', f'tx_config{self._current_loop}.py')
             with open(config_filename, 'w') as f:
                 f.write('# Torax configuration\n')
                 f.write(f'# Loop {self._current_loop}\n\n')
-                f.write('torax_config = ')
+                f.write('tx_config = ')
                 f.write(pprint.pformat(self._to_plain_python(myconfig), width=100))
 
-        torax_config = torax.ToraxConfig.from_dict(myconfig)
-        return torax_config
+        tx_config = torax.ToraxConfig.from_dict(myconfig)
+        return tx_config
 
     def _test_eqdsk(self, eqdsk):
             myconfig = copy.deepcopy(BASE_CONFIG)
@@ -996,6 +1104,8 @@ class TokTox:
                 'cocos': self._cocos,
             }
             try:
+                # with redirect_output_to_log(self._log_file):
+                    # print('FREDDIE TEST SHOULD BE IN LOG FILE')
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except Exception as e:
@@ -1056,16 +1166,16 @@ class TokTox:
         # Flatten all time-dependent values to their initial value (steady-state inputs)
         self._flatten_time_dependent(init_config)
 
-        if self._save_outputs:
+        if self._save_outputs or self._debug_mode:
             config_filename = os.path.join(self._out_dir, 'results', 'tx_config0.py')
             with open(config_filename, 'w') as f:
                 f.write('# Torax configuration\n# Loop 0 (transport init)\n\n')
-                f.write('torax_config = ')
+                f.write('tx_config = ')
                 f.write(pprint.pformat(self._to_plain_python(init_config), width=100))
 
         self._log(f'Transport init: running ~{INIT_RUNTIME}s steady-state TORAX simulation...')
-        torax_config = torax.ToraxConfig.from_dict(init_config)
-        data_tree, hist = torax.run_simulation(torax_config, log_timestep_info=False)
+        tx_config = torax.ToraxConfig.from_dict(init_config)
+        data_tree, hist = torax.run_simulation(tx_config, log_timestep_info=False)
 
         if hist.sim_error != torax.SimError.NO_ERROR:
             raise ValueError(f'Transport init simulation failed: {hist.sim_error}')
@@ -1088,7 +1198,7 @@ class TokTox:
         r'''! Run the TORAX transport simulation.
         @return Tuple (consumed_flux, consumed_flux_integral).
         '''
-        self._print(f'  TORAX: running transport...')
+        self._print(f'  TORAX: running simulation...')
         myconfig = self._get_tx_config()
         try:
             data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
@@ -1339,13 +1449,13 @@ class TokTox:
         }
 
         psi_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
-        self._results['psi_lcfs_torax'] = {
+        self._results['psi_lcfs_tx'] = {
             'x': list(psi_lcfs.coords['time'].values),
             'y': psi_lcfs.to_numpy() / (2.0 * np.pi), # TORAX outputs in Wb, stored in Wb/rad
         }
 
         psi_axis = data_tree.profiles.psi.sel(rho_norm = 0.0)
-        self._results['psi_axis_torax'] = {
+        self._results['psi_axis_tx'] = {
             'x': list(psi_axis.coords['time'].values),
             'y': psi_axis.to_numpy() / (2.0 * np.pi), # TORAX outputs in Wb, stored in Wb/rad
         }
@@ -1483,12 +1593,9 @@ class TokTox:
         if 0 in self._psi_warm_start and self._psi_warm_start[0] is not None:
             self._tm.set_psi_dt(psi0=self._psi_warm_start[0], dt=1.0e10)
 
-        # _pbar = tqdm(enumerate(self._times), total=len(self._times),
-        #              desc=f'  TM loop {self._current_loop}', unit='t',
-        #              bar_format='{desc}: {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}')
         _pbar = tqdm(enumerate(self._times), total=len(self._times),
-                    desc=f'  TM loop {self._current_loop}', unit='t',
-                    bar_format='{desc} |{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}')
+                    desc=f'  TM loop {self._current_loop}', unit='eq',
+                    bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]{postfix}')
         for i, t in _pbar:
             # Clear isoflux, flux, and saddle targets from previous timepoint
             self._tm.set_isoflux(None)
@@ -1519,14 +1626,14 @@ class TokTox:
                                          self._state['kappa'][i],
                                          self._state['delta'][i])
 
-            # Warm-start: prefer previous loop's converged solution for this # TODO this might be unecessarily complication, not sure i like using i-1 for warmstart, mighe be fine
+            # Warm-start: prefer previous loop's converged solution for this
             # timestep; fall back to the previous timestep's solution within
             # the current loop (adjacent-time warm-start).
             if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
-                self._log(f'\tTM: Warm-starting psi at t={t} from previous loop converged solution.')
+                # self._log(f'\tTM: Warm-starting psi at t={t} from previous loop converged solution.')
                 self._tm.set_psi(self._psi_warm_start[i])
             elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
-                self._log(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current loop.')
+                # self._log(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current loop.')
                 self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
 
@@ -1639,7 +1746,7 @@ class TokTox:
                 with self._quiet_tm():
                     self._tm.save_eqdsk(eq_name,
                         lcfs_pad=0.001, run_info='TokaMaker EQDSK',
-                        cocos=2, nr=300, nz=300, truncate_eq=False)
+                        cocos=2, nr=150, nz=150, truncate_eq=False)
                 self._tm_update(i)
 
                 # Store diverted/limited flag for this timestep
@@ -1659,6 +1766,23 @@ class TokTox:
                 'level_name': _winning['name'] if _winning else None,
                 'error': _last_attempt.get('error') if not solve_succeeded else None,
             })
+
+            if self._debug_mode:
+                from toktox_visualization import tm_diagnostic_plot, profile_plot
+                _diag_path = os.path.join(self._out_dir, 'tm_plots',
+                                          f'{self._current_loop:03d}.{i:03d}_tm_diag.png')
+                try:
+                    tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded,
+                                       save_path=_diag_path, display=False)
+                except Exception as _e:
+                    self._log(f'tm_diagnostic_plot failed at i={i}: {_e}')
+                if solve_succeeded:
+                    _prof_path = os.path.join(self._out_dir, 'plots',
+                                              f'{self._current_loop:03d}.{i:03d}_profile.png')
+                    try:
+                        profile_plot(self, i, t, save_path=_prof_path, display=False)
+                    except Exception as _e:
+                        self._log(f'profile_plot failed at i={i}: {_e}')
 
             # Update progress bar postfix; print FAIL messages above the bar
             if solve_succeeded:
@@ -1684,6 +1808,15 @@ class TokTox:
 
         n_ok = sum(1 for e in _loop_level_log if e['succeeded'])
         self._print(f'  TokaMaker: {n_ok}/{len(self._times)} solved (cflux={consumed_flux:.4f} Wb)')
+
+        if self._debug_mode:
+            from toktox_visualization import tm_loop_summary_plot
+            _summary_path = os.path.join(self._out_dir, 'tm_plots',
+                                         f'{self._current_loop:03d}_tm_summary.png')
+            try:
+                tm_loop_summary_plot(self, _loop_level_log, save_path=_summary_path, display=False)
+            except Exception as _e:
+                self._log(f'tm_loop_summary_plot failed: {_e}')
 
         return consumed_flux, consumed_flux_integral
         
@@ -1760,7 +1893,7 @@ class TokTox:
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
         try:
-            self._log(f'Ip_ni = {self._state["Ip_ni_tx"][i]:.3f} A, vloop = {self._state["vloop_tx"][i]:.3f} V')
+            # self._log(f'Ip_ni = {self._state["Ip_ni_tx"][i]:.3f} A, vloop = {self._state["vloop_tx"][i]:.3f} V')
             self._state['vloop_tm'][i] = self._tm.calc_loopvoltage()
         except ValueError:
             self._log(f'WARNING: calc_loopvoltage failed at t-idx {i} '
@@ -1828,21 +1961,23 @@ class TokTox:
         print(msg)
         self._log(msg)
 
-    @staticmethod
-    def _quiet_tm():
-        r'''! Context manager: redirect C/Fortran-level stdout+stderr to /dev/null.
+    def _quiet_tm(self):
+        r'''! Context manager: redirect C/Fortran-level stdout+stderr.
 
-        Used to suppress TokaMaker iteration counters and "Saving gEQDSK" messages
-        that bypass Python logging and write directly to file descriptor 1/2.
+        In debug mode, redirects to the log file so nothing is lost.
+        Otherwise, redirects to /dev/null to suppress noise.
         '''
         import contextlib, os, sys
         @contextlib.contextmanager
         def _cm():
-            devnull_fd = os.open(os.devnull, os.O_WRONLY)
+            if getattr(self, '_debug_mode', False) and getattr(self, '_log_file', None):
+                target_fd = os.open(self._log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+            else:
+                target_fd = os.open(os.devnull, os.O_WRONLY)
             saved_out = os.dup(1)
             saved_err = os.dup(2)
-            os.dup2(devnull_fd, 1)
-            os.dup2(devnull_fd, 2)
+            os.dup2(target_fd, 1)
+            os.dup2(target_fd, 2)
             try:
                 yield
             finally:
@@ -1852,8 +1987,31 @@ class TokTox:
                 os.dup2(saved_err, 2)
                 os.close(saved_out)
                 os.close(saved_err)
-                os.close(devnull_fd)
+                os.close(target_fd)
         return _cm()
+
+    def configure_redirect_to_log(self):
+        r'''! Step 3/3 of setup to divert noisy outputs to log file.
+        In debug mode, captures DEBUG and above. Otherwise captures INFO and above.
+        '''
+        if self._logging_configured or not self._log_file:
+            return
+
+        root_logger = logging.getLogger()
+        file_handler = logging.FileHandler(self._log_file, mode='a')
+
+        if getattr(self, '_debug_mode', False):
+            root_logger.setLevel(logging.DEBUG)
+            file_handler.setLevel(logging.DEBUG)
+        else:
+            file_handler.setLevel(logging.INFO)
+
+        formatter = logging.Formatter('%(asctime)s [%(name)-12s:%(levelname)-8s] %(message)s')
+        file_handler.setFormatter(formatter)
+
+        root_logger.addHandler(file_handler)
+        self._logging_configured = True
+        logging.info(f"File logging configured. All logs will be written to {self._log_file}")
 
     # =========================================================================
     #  fly — main simulation loop
@@ -1862,60 +2020,67 @@ class TokTox:
 
     # ─── Main Simulation Loop ───────────────────────────────────────────────────
 
-    def fly(self, convergence_threshold=-1.0, max_loop=11, run_name='tmp',
-            save_outputs=False, diagnostics=False,
-            x_point_targets=None, x_point_weight=100.0, diverted_times=None,
-            skip_bad_init_eqdsks=False, save_states=False):
+    def fly(self, convergence_threshold=-1.0, max_loop=3, run_name='tmp', diverted_times=None, x_point_targets=None,
+            save_outputs=False, debug=False, x_point_weight=100.0, skip_bad_init_eqdsks=False):
         r'''! Run TokaMaker-TORAX coupled simulation loop.
 
         @param convergence_threshold Max fractional change in consumed flux between loops for convergence.
         @param max_loop Maximum number of coupling iterations.
         @param run_name Name tag for this run (used in output directory and log file).
         @param save_outputs If True, create persistent output directory with eqdsks, configs, and results JSON.
-        @param diagnostics If True, save per-timestep diagnostic plots (profiles, TM diagnostics) into output dir.
+        @param debug If True, redirect all outputs (including TM/TX noise) to the log file,
+               save intermediate states, and save diagnostic plots into the output directory.
         @param x_point_targets X-point target locations, shape (n_xpoints, 2) with [R, Z] pairs.
         @param x_point_weight Weight for saddle-point constraints (default 100).
         @param diverted_times Tuple (t_start, t_end) defining the diverted plasma window.
         @param skip_bad_init_eqdsks If True, skip broken initial gEQDSK files instead of raising.
-        @param save_states Save intermediate state dicts to JSON (debugging).
         '''
         import tempfile  # local import: only needed when fly() is called
-        import logging
-        # Suppress verbose INFO/WARNING output from TORAX (absl) and JAX via
-        # both the standard Python logging hierarchy and absl-py's own handler.
 
-        for _logger_name in ('absl', 'jax', 'torax'):
-            logging.getLogger(_logger_name).setLevel(logging.ERROR)
+        # Disable JAX's persistent XLA compilation cache before any TORAX/JAX JIT
+        # compilation occurs.  Since JAX 0.4.x the cache stores serialized XLA
+        # executables keyed by a hash that does NOT include the XLA/JAX version.
+        # After a JAX upgrade the old entries are loaded anyway (triggering the
+        # "Assume version compatibility. PjRt-IFRT does not track XLA executable
+        # versions" warnings) and can produce silently wrong numerical results or
+        # semaphore leaks.  Disabling the persistent cache here means JAX still
+        # JIT-compiles in memory for the duration of the session (fast after the
+        # first call) but never reads or writes stale on-disk entries.
         try:
-            import absl.logging as _absl_log
-            _absl_log.set_verbosity(_absl_log.ERROR)
-        except ImportError:
-            self._print('Failed to import absl-py, some terminal outputs will not be diverted.')
-            pass
+            import jax
+            jax.config.update('jax_enable_compilation_cache', False)
+        except Exception:
+            pass  # non-fatal: older JAX versions may not have this config key
 
         self._save_outputs = save_outputs
-        self._diagnostics = diagnostics
+        self._debug_mode = debug
+        self._diagnostics = debug
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
         self._run_name = run_name
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
+        _sim_start_time = time.time()
 
-        # ── Log file: created next to the calling script ──
-        import inspect
-        caller_dir = os.getcwd()
-        try:
-            for frame_info in inspect.stack():
-                if frame_info.filename != __file__ and not frame_info.filename.startswith('<'):
-                    caller_dir = os.path.dirname(os.path.abspath(frame_info.filename))
-                    break
-        except (TypeError, OSError):
-            pass
-        self._log_file = os.path.join(caller_dir, f'toktox_log_{run_name}_{dt_str}.log')
+        # ── Log file: same directory as toktox_outputs (i.e. cwd / './') ──
+        if run_name == 'tmp':
+            self._log_file = os.path.abspath('toktox_log_tmp.log')
+        else:
+            self._log_file = os.path.abspath(f'toktox_log_{run_name}_{dt_str}.log')
         with open(self._log_file, 'w'):
             pass
+        print(f'  Log file: {self._log_file}', flush=True)
+        self._log(f'Log file: {self._log_file}')
+
+        # In debug mode, attach file handler to Python logging so library
+        # messages (TORAX, JAX, etc.) are captured in the log file.
+        if debug:
+            self._logging_configured = False
+            self.configure_redirect_to_log()
 
         # ── Output directory ──
-        if save_outputs:
+        # debug=True forces output directory creation even if save_outputs=False
+        _needs_out_dir = save_outputs or debug
+        if _needs_out_dir:
             if run_name == 'tmp':
                 self._out_dir = os.path.join('./toktox_outputs', 'tmp')
                 if os.path.exists(self._out_dir):
@@ -1923,21 +2088,26 @@ class TokTox:
             else:
                 dir_name = f'{run_name}_{dt_str}'
                 self._out_dir = os.path.join('./toktox_outputs', dir_name)
-            os.makedirs(os.path.join(self._out_dir, 'equil'), exist_ok=True)
             os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
-            if diagnostics:
+            if debug:
                 os.makedirs(os.path.join(self._out_dir, 'plots'), exist_ok=True)
                 os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
+                os.makedirs(os.path.join(self._out_dir, 'equil'), exist_ok=True)
             self._fname_out = os.path.join(self._out_dir, 'results', 'results.json')
         else:
             # Lightweight mode: temp directory for transient eqdsks, no persistent output
-            self._out_dir = tempfile.mkdtemp(prefix='toktox_') # lets OS decide where to place temp files, deleted at end of sim
-            os.makedirs(os.path.join(self._out_dir, 'equil'), exist_ok=True)
+            self._out_dir = tempfile.mkdtemp(prefix='toktox_')
             os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
             self._fname_out = None
 
-        # ── Temp directory for eqdsk files (RAM-backed on Linux) ──
-        self._eqdsk_dir = os.path.join(self._out_dir, 'equil')
+        # ── EQDSK directory: persistent only when save_outputs, temp otherwise ──
+        if save_outputs:
+            self._eqdsk_dir = os.path.join(self._out_dir, 'equil')
+            os.makedirs(self._eqdsk_dir, exist_ok=True)
+            self._eqdsk_dir_is_temp = False
+        else:
+            self._eqdsk_dir = tempfile.mkdtemp(prefix='toktox_equil_')
+            self._eqdsk_dir_is_temp = True
 
         # ── Diverted / saddle-point configuration ──
         if diverted_times is not None and x_point_targets is not None:
@@ -1988,13 +2158,20 @@ class TokTox:
                 self._print(f'\n{"="*60}\n  Loop {self._current_loop}\n{"="*60}')
 
                 cflux_tx, cflux_tx_vloop = self._run_tx()
-                if save_states and save_outputs:
-                    self.save_state(os.path.join(self._out_dir, 'results', f'ts_state{self._current_loop}.json'))
+                # if debug:
+                #     self.save_state(os.path.join(self._out_dir, 'results', f'ts_state{self._current_loop}.json'))
 
                 cflux_tm, cflux_tm_vloop = self._run_tm()
-                if save_states and save_outputs:
-                    self.save_state(os.path.join(self._out_dir, 'results', f'tm_state{self._current_loop}.json'))
-                    self.save_res()
+                # if debug:
+                    # self.save_state(os.path.join(self._out_dir, 'results', f'tm_state{self._current_loop}.json'))
+                    # self.save_res()
+
+                if debug:
+                    from toktox_visualization import _render_equil_frames
+                    try:
+                        _render_equil_frames(self, self._current_loop, os.path.join(self._out_dir, 'equil'))
+                    except Exception as _e:
+                        self._log(f'_render_equil_frames failed at loop {self._current_loop}: {_e}')
 
                 tm_cflux_psi.append(cflux_tm)
                 tm_cflux_vloop.append(cflux_tm_vloop)
@@ -2010,18 +2187,33 @@ class TokTox:
                 self._log(f'TX Convergence error = {err*100.0:.3f} %')
                 self._log(f'Difference Convergence error = {cflux_diff:.4f} %')
 
+                if debug:
+                    from toktox_visualization import plot_scalars
+                    _scalars_path = os.path.join(self._out_dir, 'plots',
+                                                  f'scalars_loop{self._current_loop:03d}.png')
+                    try:
+                        plot_scalars(self, save_path=_scalars_path, display=False)
+                    except Exception as _e:
+                        self._log(f'plot_scalars failed at loop {self._current_loop}: {_e}')
+
                 cflux_tx_prev = cflux_tx
                 self._current_loop += 1
 
         finally:
-            # ── Cleanup temp directory if not saving outputs ──
-            if not save_outputs and hasattr(self, '_out_dir') and os.path.exists(self._out_dir):
+            # ── Cleanup temp directories ──
+            if not _needs_out_dir and hasattr(self, '_out_dir') and os.path.exists(self._out_dir):
                 try:
                     shutil.rmtree(self._out_dir)
                 except OSError:
                     pass
+            if getattr(self, '_eqdsk_dir_is_temp', False) and hasattr(self, '_eqdsk_dir') and os.path.exists(self._eqdsk_dir):
+                try:
+                    shutil.rmtree(self._eqdsk_dir)
+                except OSError:
+                    pass
 
         # ── Summary table ──
+        _sim_elapsed = time.time() - _sim_start_time
         n_loops = self._current_loop - 1
         converged = err <= convergence_threshold
         self._print(f'\n{"="*60}')
@@ -2038,7 +2230,11 @@ class TokTox:
             self._print(f'  {s+1:<6} {tx_cflux_psi[s]:<16.4f} {tm_cflux_psi[s]:<16.4f} {diff_pct:<14.4f}')
         self._print(f'{"="*60}')
 
-        if save_outputs:
+        # ── Elapsed time ──
+        _mins, _secs = divmod(_sim_elapsed, 60)
+        self._print(f'  Total sim time: {int(_mins)}m {_secs:.1f}s')
+
+        if save_outputs or debug:
             self.save_res()
             self._print(f'  Outputs saved to: {self._out_dir}')
         self._print(f'  Log file: {self._log_file}')
@@ -2048,32 +2244,41 @@ class TokTox:
 
     @property
     def results(self):
-        r'''! Access simulation results dict.
-
-        After fly() completes, results contains scalar time traces and profile
-        data from TORAX and TokaMaker.  Typical usage:
-            Q_max = tt.results['Q_max']
-            Q_trace = tt.results['Q']  # {'x': times, 'y': values}
-        '''
+        r'''! Access simulation results dict.'''
         return self._results
+    
+    @property
+    def state(self):
+        r'''! Access simulation state dict.'''
+        return self._state
 
     # =========================================================================
     #  Visualization wrapper methods (lazy-import from toktox_visualization)
     # =========================================================================
 
-    def make_movie(self, save_path=None, **kwargs):
+    def make_movie(self, save_bool=False, save_path=None, **kwargs):
         r'''! Generate pulse movie from stored psi snapshots.
         @param save_path Path to save MP4 file. If None, uses default naming.
         '''
         from toktox_visualization import make_movie
-        return make_movie(self, save_path=save_path, **kwargs)
+        if save_bool:
+            if save_path is None:
+                save_path = os.path.join(self._out_dir, f'toktox_pulse_loop{self._current_loop:03d}.mp4')
+        else: # if save_bool == True, but save_path has contents, for some reason, set save_path to None so nothing is saved.
+            save_path = None
+        return make_movie(self,save_path=save_path, **kwargs)
 
-    def plot_scalars(self, save_path=None, display=True, **kwargs):
+    def plot_scalars(self, save_bool=False, save_path=None, display=True, **kwargs):
         r'''! Plot scalar time traces (Ip, Q, Te, ne, power channels, etc.).
         @param save_path Path to save figure. If None, displays inline.
         @param display Whether to show the plot (for Jupyter).
         '''
         from toktox_visualization import plot_scalars
+        if save_bool:
+            if save_path is None:
+                save_path = os.path.join(self._out_dir, 'plots', f'toktox_pulse_loop{self._current_loop:03d}.mp4')
+        else:
+            save_path = None
         return plot_scalars(self, save_path=save_path, display=display, **kwargs)
 
     def plot_profiles(self, **kwargs):
@@ -2086,12 +2291,17 @@ class TokTox:
         from toktox_visualization import plot_equil_interactive
         return plot_equil_interactive(self, **kwargs)
 
-    def plot_coils(self, save_path=None, display=True, **kwargs):
+    def plot_coils(self, save_bool=False, save_path=None, display=True, **kwargs):
         r'''! Plot coil current traces over the pulse.
         @param save_path Path to save figure. If None, displays inline.
         @param display Whether to show the plot.
         '''
         from toktox_visualization import plot_coils
+        if save_bool:
+            if save_path is None:
+                save_path = os.path.join(self._out_dir, 'plots', f'toktox_pulse_loop{self._current_loop:03d}.mp4')
+        else:
+            save_path = None
         return plot_coils(self, save_path=save_path, display=display, **kwargs)
 
     def summary(self, **kwargs):
