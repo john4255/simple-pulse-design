@@ -42,7 +42,7 @@ class MyEncoder(json.JSONEncoder):
 class TokTox:
     '''! TokaMaker + TORAX Coupled Pulse Simulation Code'''
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -51,7 +51,11 @@ class TokTox:
         @param dt Time step (s).
         @param times Time points to sample output at.
         @param last_surface_factor Last surface factor for Torax.
+        @param n_rho Number of grid cells for torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
+        @param cocos COCOS version of input EQDSK.
+        @param oft_env OFT environment.
+        @param truncate_eq Whether to truncate equilibrium when saving TokaMaker output to EQDSK.
         '''
         if oft_env is not None:
             self._oftenv = oft_env
@@ -71,6 +75,7 @@ class TokTox:
         self._last_surface_factor = last_surface_factor
         self._n_rho = n_rho # resolution of TORAX grid
         self._psi_N = np.linspace(0.0, 1.0, N_PSI) # standardized psi_N grid all values should be mapped onto
+        self._trucate_eq = truncate_eq
 
         self._current_step = 0
 
@@ -315,6 +320,7 @@ class TokTox:
         self._eccd_loc = None
         self._nbi_loc = None
         self._ohmic_power = None
+        self._use_generic_current = False
 
         self._nbar = None
         self._n_e = None
@@ -491,7 +497,7 @@ class TokTox:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None):
+    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None, generic_current=False):
         r'''! Set heating sources for Torax.
         @param nbi NBI heating (dictionary of heating at times).
         @param eccd ECCD heating (dictionary of heating at times).
@@ -505,6 +511,8 @@ class TokTox:
             self._eccd_loc = eccd_loc
         if ohmic is not None:
             self._ohmic_power = ohmic
+        
+        self._use_generic_current = generic_current
 
     def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
@@ -701,7 +709,7 @@ class TokTox:
             t_safe = []
             for i, t in enumerate(self._eqtimes):
                 eq = self._init_files[i]
-                if self._test_eqdsk(eq):
+                if self._test_eqdsk(eq, self._cocos):
                     self._print_out(f'\tTX: Using eqdsk at t={t}')
                     eq_safe.append(eq)
                     t_safe.append(t)
@@ -720,7 +728,7 @@ class TokTox:
             n_tm = 0
             for i, t in enumerate(self._times):
                 eqdsk = os.path.join(self._out_dir, 'equil', '{:03}.{:03}.eqdsk'.format(self._current_step - 1, i))
-                tm_ok = (eqdsk not in self._eqdsk_skip) and self._test_eqdsk(eqdsk)
+                tm_ok = (eqdsk not in self._eqdsk_skip) and self._test_eqdsk(eqdsk, 2)
                 if tm_ok:
                     full_eqdsk_map[t] = eqdsk
                     n_tm += 1
@@ -736,7 +744,7 @@ class TokTox:
                 self._print_out(f'Step {self._current_step}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
             
             myconfig['geometry']['geometry_configs'] = {
-                t: {'geometry_file': eqdsk_f, 'cocos': self._cocos} for t, eqdsk_f in full_eqdsk_map.items()
+                t: {'geometry_file': eqdsk_f, 'cocos': 2} for t, eqdsk_f in full_eqdsk_map.items()
             }
 
         if self._tx_grid_type == 'n_rho':
@@ -802,9 +810,11 @@ class TokTox:
             myconfig['sources'].setdefault('generic_heat', {})
             myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
             myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
-            myconfig['sources'].setdefault('generic_current', {})
-            myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
-            myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
+
+            if self._use_generic_current:
+                myconfig['sources'].setdefault('generic_current', {})
+                myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
+                myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
         if self._T_i_ped is not None:
             myconfig.setdefault('pedestal', {})
@@ -906,7 +916,7 @@ class TokTox:
         # This ensures the psi evolved here satisfies the same GS metric coefficients
         # as the main sim, so injected psi produces smooth j at t=0 of step 1.
         init_eqdsk = self._init_files[0]
-        if not self._test_eqdsk(init_eqdsk):
+        if not self._test_eqdsk(init_eqdsk, self._cocos):
             raise ValueError(f'Transport init: first seed eqdsk is not valid: {init_eqdsk}')
         init_config['geometry'] = {
             'geometry_type': 'eqdsk',
@@ -1046,7 +1056,7 @@ class TokTox:
                 except TypeError:
                     pass
 
-    def _test_eqdsk(self, eqdsk):
+    def _test_eqdsk(self, eqdsk, cocos):
         myconfig = copy.deepcopy(BASE_CONFIG)
         if self._loaded_config is not None:
             self._config_merge(myconfig, self._loaded_config)
@@ -1056,13 +1066,14 @@ class TokTox:
             'last_surface_factor': self._last_surface_factor,
             'Ip_from_parameters': False,
             'geometry_file': eqdsk,
-            'cocos': self._cocos,
+            'cocos': cocos,
         }
         print(myconfig['geometry'])
         try:
             _ = torax.ToraxConfig.from_dict(myconfig)
             return True
         except Exception as e:
+            print('Test eq failed')
             print(e)
             return False
 
@@ -1525,8 +1536,8 @@ class TokTox:
 
             if solve_succeeded:
                 self._gs.save_eqdsk(eq_name,
-                    lcfs_pad=0.001,run_info='TokaMaker EQDSK',
-                    cocos=self._cocos, nr=200, nz=200, truncate_eq=False)
+                    lcfs_pad=1.0-self._last_surface_factor,run_info='TokaMaker EQDSK',
+                    cocos=2, nr=200, nz=200, truncate_eq=self._trucate_eq)
                 self._gs_update(i)
                 
                 # Only plot profiles in 'all' mode
