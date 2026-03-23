@@ -1108,9 +1108,6 @@ class TokTox:
 
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
 
-        print('hello world')
-        print(data_tree.scalars.Ip.sel(time=0.0, method='nearest'))
-
         # save data_tree object
         # data_tree_name = 'tmp/test.nc'
         # data_tree.to_netcdf(data_tree_name)
@@ -3183,7 +3180,7 @@ class TokTox:
 
         self._current_step = 1
 
-        while err > convergence_threshold and self._current_step <= max_step:
+        while abs(err) > convergence_threshold and self._current_step <= max_step:
             self._print_out(f'---- Step {self._current_step} ---- \n')
             cflux_tx, cflux_tx_vloop = self._run_transport(graph=self._graph_mode)
             if save_states:
