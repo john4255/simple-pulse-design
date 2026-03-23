@@ -111,6 +111,7 @@ class TokTox:
         self._state['q0_tm'] = np.zeros(len(self._times))
         self._state['q_prof_tm'] = {}
         self._state['q_prof_tx'] = {}
+        self._state['q_prof_eqdsk'] = {}
         self._state['psi_lcfs_tm'] = np.zeros(len(self._times))
         self._state['psi_axis_tm'] = np.zeros(len(self._times))
         self._state['psi_lcfs_tx'] = np.zeros(len(self._times))
@@ -123,6 +124,9 @@ class TokTox:
         self._state['lcfs_geo'] = {}
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
+        self._state['ffp_prof_eqdsk'] = {}
+        self._state['pp_prof_eqdsk'] = {}
+        self._state['p_prof_eqdsk'] = {}
         self._state['ffp_prof_save'] = {}
         self._state['pp_prof_save'] = {}
         self._state['pres'] = {}
@@ -173,7 +177,6 @@ class TokTox:
         
         # Current density profiles from TORAX
         self._state['j_tot'] = {}
-        self._state['j_parallel_total'] = {}
         self._state['j_ohmic'] = {}
         self._state['j_ni'] = {}
         self._state['j_bootstrap'] = {}
@@ -181,6 +184,13 @@ class TokTox:
         self._state['j_external'] = {}
         self._state['j_generic_current'] = {}
         self._state['j_ohmic_tx'] = {}
+        self._state['j_parallel_total'] = {}
+        self._state['j_parallel_ohmic'] = {}
+        self._state['j_parallel_ni'] = {}
+        self._state['j_parallel_bootstrap'] = {}
+        self._state['j_parallel_ecrh'] = {}
+        self._state['j_parallel_external'] = {}
+        self._state['j_parallel_generic_current'] = {}
         # self._state['j_ni_tx'] = {}
         self._state['f_NI'] = np.zeros(len(self._times))
 
@@ -212,6 +222,7 @@ class TokTox:
         lcfs = []
         ffp_prof = []
         pp_prof = []
+        q_prof = []
         psi_axis = []
         psi_lcfs = []
         pres_prof = []
@@ -250,8 +261,11 @@ class TokTox:
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])            
             ffp = np.interp(self._psi_N, psi_eqdsk, g['ffprim'])
             pp = np.interp(self._psi_N, psi_eqdsk, g['pprime'])
+            q = np.interp(self._psi_N, psi_eqdsk, g['qpsi'])
+
             ffp_prof.append(ffp)
             pp_prof.append(pp)
+            q_prof.append(q)
 
             pres = np.interp(self._psi_N, psi_eqdsk, g['pres'])
             fpol = np.interp(self._psi_N, psi_eqdsk, g['fpol'])
@@ -269,7 +283,7 @@ class TokTox:
                 elif time > self._eqtimes[i-1] and time <= self._eqtimes[i]:
                     dt = self._eqtimes[i] - self._eqtimes[i-1]
                     alpha = (time - self._eqtimes[i-1]) / dt
-                    return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
+                    return (1.0 - alpha) * np.array(profs[i-1]) + alpha * np.array(profs[i])
             return profs[-1]
 
         for i, t in enumerate(self._times):
@@ -292,6 +306,14 @@ class TokTox:
             # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
             self._state['ffpni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
 
+            self._state['ffp_prof_eqdsk'][i] = self._state['ffp_prof'][i].copy()
+            self._state['pp_prof_eqdsk'][i] = self._state['pp_prof'][i].copy()
+            self._state['p_prof_eqdsk'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(pres_prof, t), 'type': 'linterp'}
+            self._state['pp_prof_eqdsk'][i]['y'] /= self._state['pp_prof_eqdsk'][i]['y'][0]
+            self._state['p_prof_eqdsk'][i]['y'] /= self._state['p_prof_eqdsk'][i]['y'][0]
+            self._state['ffp_prof_eqdsk'][i]['y'] /= self._state['ffp_prof_eqdsk'][i]['y'][0]
+            self._state['q_prof_eqdsk'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(q_prof, t), 'type': 'linterp'}
+
             # Normalize profiles (disabled – use raw profiles)
             # self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
             # self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
@@ -302,7 +324,7 @@ class TokTox:
                 'type': 'linterp',
             }
             
-            self._state['pres'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(pres_prof, t), 'type': 'linterp'}
+            self._state['pres'][i] = self._state['p_prof_eqdsk'][i].copy()
             self._state['fpol'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(fpol_prof, t), 'type': 'linterp'}
 
         # Save seed values from initial equilibria
@@ -773,6 +795,7 @@ class TokTox:
         # when psi is None and initial_psi_from_j is False.
         myconfig.setdefault('profile_conditions', {})
         myconfig['profile_conditions']['initial_psi_mode'] = 'geometry'
+        myconfig['profile_conditions']['Ip'] = {t: self._state['Ip'][i] for i, t in enumerate(self._times)}
         # myconfig['profile_conditions']['current_profile_nu'] = 1.0
 
         # ── 6. Explicit set_*() overrides ──────────────────────────────────
@@ -888,7 +911,6 @@ class TokTox:
             f.write(f'# Step {self._current_step}\n\n')
             f.write('torax_config = ')
             f.write(pprint.pformat(self._to_plain_python(myconfig), width=100))
-
 
         torax_config = torax.ToraxConfig.from_dict(myconfig)
         return torax_config
@@ -1082,8 +1104,12 @@ class TokTox:
         @param graph Plotting mode (currently unused for transport, but kept for API consistency).
         @return Consumed flux.
         '''
-        myconfig = self._get_torax_config()       
+        myconfig = self._get_torax_config() 
+
         data_tree, hist = torax.run_simulation(myconfig, log_timestep_info=False)
+
+        print('hello world')
+        print(data_tree.scalars.Ip.sel(time=0.0, method='nearest'))
 
         # save data_tree object
         # data_tree_name = 'tmp/test.nc'
@@ -1188,11 +1214,19 @@ class TokTox:
         self._state['j_ohmic'][i] =          self._pull_torax_onto_psi(data_tree, 'j_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_ni'][i] =          self._pull_torax_onto_psi(data_tree, 'j_non_inductive',  t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_bootstrap'][i] =      self._pull_torax_onto_psi(data_tree, 'j_bootstrap',      t, load_into_state='state', profile_type='jphi-linterp')
-        
-
+        self._state['j_ecrh'][i] =      self._pull_torax_onto_psi(data_tree, 'j_ecrh',      t, load_into_state='state', profile_type='jphi-linterp')        
         self._state['j_ecrh'][i] = self._pull_torax_onto_psi(data_tree, 'j_ecrh', t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_external'][i] = self._pull_torax_onto_psi(data_tree, 'j_external', t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_generic_current'][i] = self._pull_torax_onto_psi(data_tree, 'j_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
+
+        self._state['j_parallel_total'][i] =            self._pull_torax_onto_psi(data_tree, 'j_parallel_total',          t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_ohmic'][i] =          self._pull_torax_onto_psi(data_tree, 'j_parallel_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_ni'][i] =          self._pull_torax_onto_psi(data_tree, 'j_parallel_non_inductive',  t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_bootstrap'][i] =      self._pull_torax_onto_psi(data_tree, 'j_parallel_bootstrap',      t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_ecrh'][i] =      self._pull_torax_onto_psi(data_tree, 'j_parallel_ecrh',      t, load_into_state='state', profile_type='jphi-linterp')        
+        self._state['j_parallel_ecrh'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_ecrh', t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_external'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_external', t, load_into_state='state', profile_type='jphi-linterp')
+        self._state['j_parallel_generic_current'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
 
         self._state['R_inv_avg_tx'][i] = self._pull_torax_onto_psi(data_tree, 'gm9', t, load_into_state='state', normalize=False)
 
@@ -1919,16 +1953,22 @@ class TokTox:
         # (0,0): p' and p comparison (real units) with dual y-axes
         ax_pp_real = axes[0,0]
         ax_pp_real.set_title("p' and p comparison (real units)")
-        ax_pp_real.plot(self._state['pp_prof_tx'][i]['x'], self._state['pp_prof_tx'][i]['y'], 'b-', label="p' TX", linewidth=2)
-        ax_pp_real.plot(self._psi_N, self._state['pp_prof_tm'][i]['y'], 'b--', label="p' TM", linewidth=2)
+        pp_prof_tx =  self._state['pp_prof_tx'][i]['y']# /  self._state['pp_prof_tx'][i]['y'][0]
+        pp_prof_tm =  self._state['pp_prof_tm'][i]['y']# /  self._state['pp_prof_tm'][i]['y'][0]
+        ax_pp_real.plot(self._state['pp_prof_tx'][i]['x'], pp_prof_tx, 'b-', label="p' TX", linewidth=2)
+        ax_pp_real.plot(self._psi_N, pp_prof_tm, 'b--', label="p' TM", linewidth=2)
+        ax_pp_real.plot(self._psi_N, self._state['pp_prof_eqdsk'][i]['y'], 'b-.', label="p' EQ", linewidth=2)
         ax_pp_real.set_ylabel("p' [Pa/Wb]", color='b')
         ax_pp_real.set_xlabel(r'$\hat{\psi}$')
         ax_pp_real.tick_params(axis='y', labelcolor='b')
         ax_pp_real.legend(fontsize=9, loc='upper left')
         # Secondary y-axis for p
         ax2_pp_real = ax_pp_real.twinx()
-        ax2_pp_real.plot(self._state['p_prof_tm'][i]['x'], self._state['p_prof_tm'][i]['y'], 'r-', label='p TM', linewidth=2)
-        ax2_pp_real.plot(self._state['ptot'][i]['x'], self._state['ptot'][i]['y'], 'r--', label='p TX', linewidth=2)
+        p_prof_tx = self._state['ptot'][i]['y']# / self._state['ptot'][i]['y'][0]
+        p_prof_tm = self._state['p_prof_tm'][i]['y']# / self._state['p_prof_tm'][i]['y'][0]
+        ax2_pp_real.plot(self._state['p_prof_tm'][i]['x'], p_prof_tm, 'r--', label='p TM', linewidth=2)
+        ax2_pp_real.plot(self._state['ptot'][i]['x'], p_prof_tx, 'r-', label='p TX', linewidth=2)
+        ax2_pp_real.plot(self._psi_N, self._state['pres'][i]['y'], 'r-.', label="p EQ", linewidth=2)
         ax2_pp_real.set_ylabel('p [Pa]', color='r')
         ax2_pp_real.tick_params(axis='y', labelcolor='r')
         ax2_pp_real.legend(fontsize=9, loc='upper right')
@@ -1970,11 +2010,24 @@ class TokTox:
         # (1,0): jPhi plot with j_tot, j_ohmic, j_ni, j_bootstrap
         ax_jphi = axes[1,0]
         ax_jphi.set_title('Current densities')
-        ax_jphi.plot(self._state['j_tot'][i]['x'], self._state['j_tot'][i]['y'] / 1e6, 'k--', label=r'$j_{tot}$', linewidth=2)
+        ax_jphi.plot(self._state['j_tot'][i]['x'], self._state['j_tot'][i]['y'] / 1e6, 'k-', label=r'$j_{tot}$', linewidth=2)
         ax_jphi.plot(self._state['j_ohmic'][i]['x'], self._state['j_ohmic'][i]['y'] / 1e6, 'r-', label=r'$j_{ohmic}$', linewidth=1.5)
-        ax_jphi.plot(self._state['j_ni'][i]['x'], self._state['j_ni'][i]['y'] / 1e6, 'b-', label=r'$j_{NI}$', linewidth=1.5)
-        if i in self._state['j_bootstrap']:
-            ax_jphi.plot(self._state['j_bootstrap'][i]['x'], self._state['j_bootstrap'][i]['y'] / 1e6, 'g-', label=r'$j_{bootstrap}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_ni'][i]['x'], self._state['j_ni'][i]['y'] / 1e6, 'b-', label=r'$j_{NI}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_external'][i]['x'], self._state['j_external'][i]['y'] / 1e6, 'y-', label=r'$j_{ext}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_generic_current'][i]['x'], self._state['j_generic_current'][i]['y'] / 1e6, 'g-', label=r'$j_{generic}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_ecrh'][i]['x'], self._state['j_ecrh'][i]['y'] / 1e6, 'm-', label=r'$j_{ECRH}$', linewidth=1.5)
+        # if i in self._state['j_bootstrap']:
+        #     ax_jphi.plot(self._state['j_bootstrap'][i]['x'], self._state['j_bootstrap'][i]['y'] / 1e6, 'g-', label=r'$j_{bootstrap}$', linewidth=1.5)
+
+        # ax_jphi.plot(self._state['j_parallel_total'][i]['x'], self._state['j_parallel_total'][i]['y'] / 1e6, 'k--', label=r'$j_{tot||}$', linewidth=2)
+        ax_jphi.plot(self._state['j_parallel_ohmic'][i]['x'], self._state['j_parallel_ohmic'][i]['y'] / 1e6, 'b-', label=r'$j_{ohmic||}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_parallel_ni'][i]['x'], self._state['j_parallel_ni'][i]['y'] / 1e6, 'b--', label=r'$j_{NI||}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_parallel_external'][i]['x'], self._state['j_parallel_external'][i]['y'] / 1e6, 'y--', label=r'$j_{ext||}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_parallel_generic_current'][i]['x'], self._state['j_parallel_generic_current'][i]['y'] / 1e6, 'g--', label=r'$j_{generic||}$', linewidth=1.5)
+        # ax_jphi.plot(self._state['j_parallel_ecrh'][i]['x'], self._state['j_parallel_ecrh'][i]['y'] / 1e6, 'm--', label=r'$j_{ECRH||}$', linewidth=1.5)
+        # if i in self._state['j_parallel_bootstrap']:
+        #     ax_jphi.plot(self._state['j_parallel_bootstrap'][i]['x'], self._state['j_parallel_bootstrap'][i]['y'] / 1e6, 'g--', label=r'$j_{bootstrap||}$', linewidth=1.5)
+
         ax_jphi.set_ylabel(r'$j$ [MA/m²]')
         ax_jphi.set_xlabel(r'$\hat{\psi}$')
         ax_jphi.legend(fontsize=9)
@@ -1991,10 +2044,14 @@ class TokTox:
         # (1,2): FF' comparison (real units)
         ax_ffp_real = axes[1,2]
         ax_ffp_real.set_title("FF' comparison (real units)")
-        ax_ffp_real.plot(self._psi_N, self._state['ffp_prof_tx'][i]['y'], 'k-', label="FF' total TX", linewidth=2)
-        ax_ffp_real.plot(self._state['ffpni_prof'][i]['x'], self._state['ffpni_prof'][i]['y'], 'b-', label="FF' NI")
+        ffp_tx = self._state['ffp_prof_tx'][i]['y'] / self._state['ffp_prof_tx'][i]['y'][0]
+        ffp_ni = self._state['ffpni_prof'][i]['y'] / self._state['ffpni_prof'][i]['y'][0]
+        ffp_tm = self._state['ffp_prof_tm'][i]['y'] / self._state['ffp_prof_tm'][i]['y'][0]
+        ax_ffp_real.plot(self._psi_N, ffp_tx, 'k-', label="FF' total TX", linewidth=2)
+        ax_ffp_real.plot(self._state['ffpni_prof'][i]['x'], ffp_ni, 'b-', label="FF' NI")
         ax_ffp_real.plot(self._psi_N, self._state['ffp_prof_tx'][i]['y'] - self._state['ffpni_prof'][i]['y'], 'r--', label="FF' inductive")
-        ax_ffp_real.plot(self._psi_N, self._state['ffp_prof_tm'][i]['y'], 'g--', label="FF' total TM", linewidth=1)
+        ax_ffp_real.plot(self._psi_N,ffp_tm, 'g--', label="FF' total TM", linewidth=1)
+        ax_ffp_real.plot(self._psi_N, self._state['ffp_prof_eqdsk'][i]['y'], 'm--', label="FF' total EQ", linewidth=1)
         ax_ffp_real.set_ylabel("FF'")
         ax_ffp_real.set_xlabel(r'$\hat{\psi}$')
         ax_ffp_real.legend(fontsize=9)
@@ -2068,6 +2125,7 @@ class TokTox:
         ax_q.set_title('q profile')
         ax_q.plot(self._state['q_prof_tx'][i]['x'], self._state['q_prof_tx'][i]['y'], 'b--', label='TX', linewidth=1)
         ax_q.plot(self._state['q_prof_tm'][i]['x'], self._state['q_prof_tm'][i]['y'], 'r--', label='TM', linewidth=2)  
+        ax_q.plot(self._state['q_prof_eqdsk'][i]['x'], self._state['q_prof_eqdsk'][i]['y'], 'g--', label='EQ', linewidth=2)  
         ax_q.set_xlabel(r'$\hat{\psi}$')
         ax_q.set_ylabel('q')
         ax_q.legend(fontsize=9)  
@@ -3013,6 +3071,18 @@ class TokTox:
         plt.savefig(os.path.join(self._out_dir, 'plots', f'coil_currents_step{self._current_step}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
 
+    def _kinetic_plots(self):
+        fig, axes = plt.subplots(3, 10)
+
+        idxs = np.linspace(0, len(self._times)-1, 10)
+        idxs = np.round(idxs).astype(int)
+        for i, idx in enumerate(idxs):
+            ne = self._results['n_e'][self._times[idx]]
+            axes[0, i].plot(ne['x'], ne['y'])
+
+        plt.savefig(os.path.join(self._out_dir, 'kplots', f'kinetics{self._current_step}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
 
     def fly(self, convergence_threshold=-1.0, save_states=False, graph='all', max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
              x_point_targets=None, x_point_weight=100.0, diverted_times=None):
@@ -3053,6 +3123,7 @@ class TokTox:
             self._log_file = os.path.join(self._out_dir, f'{dir_name}_log.txt')
         os.makedirs(os.path.join(self._out_dir, 'equil'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'plots'), exist_ok=True)
+        os.makedirs(os.path.join(self._out_dir, 'kplots'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
         os.makedirs(os.path.join(self._out_dir, 'vid'), exist_ok=True)
@@ -3095,7 +3166,7 @@ class TokTox:
 
 
 
-        err = convergence_threshold + 1.0
+        err = convergence_threshold + 100.0
         cflux_tx_prev = 0.0
         # records of flux consumption throughout steps
         tm_cflux_psi = []
@@ -3151,6 +3222,7 @@ class TokTox:
                 self._profile_evolution_plot()
                 self._scalar_plot()
                 self._coil_current_plot()
+                self._kinetic_plots()
                 from pulse_movie import generate_pulse_movie
                 generate_pulse_movie(self, self._current_step, run_name=run_name)
             elif self._graph_mode == 'only_movie':
@@ -3167,7 +3239,7 @@ class TokTox:
             self._current_step += 1
         
 
-        if err < convergence_threshold:
+        if abs(err) < convergence_threshold:
             self._print_out(f'Convergence achieved in {self._current_step-1} steps with error = {err*100.0:.3f} %')
         elif self._current_step >= max_step:
             self._print_out(f'Maximum steps {max_step} reached without convergence (last error = {err*100.0:.3f} %)')
