@@ -2,8 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pprint
 import scipy.io as sio
-from scipy.interpolate import make_smoothing_spline
-from scipy.interpolate import interp1d
+from scipy.interpolate import make_smoothing_spline, interp1d, CubicSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 import torax
@@ -188,7 +187,7 @@ class TokTox:
         self._state['j_parallel_ohmic'] = {}
         self._state['j_parallel_ni'] = {}
         self._state['j_parallel_bootstrap'] = {}
-        self._state['j_parallel_ecrh'] = {}
+        # self._state['j_parallel_ecrh'] = {}
         self._state['j_parallel_external'] = {}
         self._state['j_parallel_generic_current'] = {}
         # self._state['j_ni_tx'] = {}
@@ -228,6 +227,20 @@ class TokTox:
         pres_prof = []
         fpol_prof = []
 
+        def interp_lcfs(lcfs, n=1000):
+            x = lcfs[:, 0]
+            y = lcfs[:, 1]
+            u = np.cumsum(np.sqrt(np.diff(x)**2 + np.diff(y)**2))
+            x[-1] = x[0]
+            y[-1] = y[0]
+            u = np.r_[0, u]
+            cs_x = CubicSpline(u, x, bc_type='periodic')
+            cs_y = CubicSpline(u, y, bc_type='periodic')
+            u_new = np.linspace(u.min(), u.max(), n)
+            x_new_cs = cs_x(u_new)
+            y_new_cs = cs_y(u_new)
+            return [[x_new_cs[i], y_new_cs[i]] for i in range(n)]
+
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
             zmax = np.max(g['rzout'][:,1])
@@ -256,7 +269,7 @@ class TokTox:
             psi_axis.append(abs(g['psimag']))
             psi_lcfs.append(abs(g['psibry'])) # EQDSK stored psi in Wb/rad, same as stored in _state
 
-            lcfs.append(g['rzout'])
+            lcfs.append(interp_lcfs(g['rzout']))
 
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])            
             ffp = np.interp(self._psi_N, psi_eqdsk, g['ffprim'])
@@ -466,7 +479,7 @@ class TokTox:
         self._gs.setup_regions(cond_dict=cond_dict,coil_dict=coil_dict)
         self._gs.setup(order = 2, F0 = R0_geo*self._state['B0'][0])
 
-        self._gs.settings.maxits = 100
+        self._gs.settings.maxits = 200
         # self._gs.settings.pm = False
 
         if vsc is not None:
@@ -1220,8 +1233,7 @@ class TokTox:
         self._state['j_parallel_ohmic'][i] =          self._pull_torax_onto_psi(data_tree, 'j_parallel_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_parallel_ni'][i] =          self._pull_torax_onto_psi(data_tree, 'j_parallel_non_inductive',  t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_parallel_bootstrap'][i] =      self._pull_torax_onto_psi(data_tree, 'j_parallel_bootstrap',      t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_parallel_ecrh'][i] =      self._pull_torax_onto_psi(data_tree, 'j_parallel_ecrh',      t, load_into_state='state', profile_type='jphi-linterp')        
-        self._state['j_parallel_ecrh'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_ecrh', t, load_into_state='state', profile_type='jphi-linterp')
+        # self._state['j_parallel_ecrh'][i] =      self._pull_torax_onto_psi(data_tree, 'j_parallel_ecrh',      t, load_into_state='state', profile_type='jphi-linterp')        
         self._state['j_parallel_external'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_external', t, load_into_state='state', profile_type='jphi-linterp')
         self._state['j_parallel_generic_current'][i] = self._pull_torax_onto_psi(data_tree, 'j_parallel_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
 
@@ -1506,26 +1518,31 @@ class TokTox:
             
             # Pre-calculate all level profiles
             level_profiles = []
-            
-            # Level 0: raw
-            ffp_0, pp_0 = self._level0_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_0, 'pp': pp_0, 'name': 'lv0: raw'})
-            
-            # Level 1: sign flip
-            ffp_1, pp_1 = self._level1_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: sign_flip'})
-            
-            # Level 2: pedestal smoothing (takes p_profile as input) # TODO: read in actual n_rho_ped_top, have to add to state first
-            ffp_2, pp_2 = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i])) 
-            level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
-            
-            # Level 3: power flux
-            ffp_3, pp_3 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: power_flux'})
 
-            # Level 4: power flux + pax from initial eqdsk
-            ffp_4, pp_4 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_4, 'pp': pp_4, 'name': 'lv4: power_flux + pax'})
+            # Level 0: jphi
+            jphi = copy.deepcopy(self._state['j_tot'][i])
+            jphi['type'] = 'jphi-linterp'
+            level_profiles.append({'ffp': jphi, 'pp': copy.deepcopy(pp_prof_raw), 'name': 'lv0: jphi'})
+            
+            # Level 1: raw
+            ffp_1, pp_1 = self._level1_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: raw'})
+            
+            # Level 2: sign flip
+            ffp_2, pp_2 = self._level2_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: sign_flip'})
+            
+            # Level 3: pedestal smoothing (takes p_profile as input) # TODO: read in actual n_rho_ped_top, have to add to state first
+            ffp_3, pp_3 = self._level3_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i])) 
+            level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: pedestal_smoothing'})
+            
+            # Level 4: power flux
+            ffp_4, pp_4 = self._level4_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_4, 'pp': pp_4, 'name': 'lv4: power_flux'})
+
+            # Level 5: power flux + pax from initial eqdsk
+            ffp_5, pp_5 = self._level4_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_5, 'pp': pp_5, 'name': 'lv5: power_flux + pax'})
 
             # Try each level
             for level_idx, level_prof in enumerate(level_profiles):
@@ -1539,6 +1556,9 @@ class TokTox:
 
                 try:
                     print(f'{equals} trying level {level_idx} solve ({level_name})')
+                    print(ffp_level['type'])
+                    # if level_idx == 0:
+                    #     continue
                     self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
@@ -1556,6 +1576,14 @@ class TokTox:
                     level_attempts.append({'level': level_idx, 'name': level_name,
                                           'ffp': ffp_level, 'pp': pp_level,
                                           'succeeded': False, 'error': str(e)})
+
+            # fig, ax = plt.subplots(1, 2)
+            # ax[0].plot(self._state['T_e'][i]['x'], self._state['T_e'][i]['y'])
+            # ax[1].plot(self._state['T_i'][i]['x'], self._state['T_i'][i]['y'])
+            # betaN = round(self._state['beta_N_tx'][i], 3)
+            # fig.suptitle(f'solve_succeeded={solve_succeeded} betaN={betaN}%')
+            # fig.savefig(f'toktox_outputs/tmp/plots/temp_t={t}.png')
+            # plt.close(fig)
 
             if not solve_succeeded:
                 self._eqdsk_skip.append(eq_name)
@@ -1635,11 +1663,11 @@ class TokTox:
     # All levels receive deep copies of the raw TORAX profiles (not cumulative).
     # Level 0 is always identity. Add new levels by appending to self._profile_levels.
 
-    def _level0_raw(self, ffp_prof, pp_prof):
+    def _level1_raw(self, ffp_prof, pp_prof):
         r'''! Raw TORAX profiles passed through unchanged.'''
         return ffp_prof, pp_prof
 
-    def _level1_sign_flip(self, ffp_prof, pp_prof):
+    def _level2_sign_flip(self, ffp_prof, pp_prof):
         r'''! Sign-flip clipping: clip each profile to its dominant sign.'''
         def _clip(prof):
             y = prof['y']
@@ -1648,7 +1676,7 @@ class TokTox:
             return {**prof, 'y': y_new}
         return _clip(ffp_prof), _clip(pp_prof)
 
-    def _level2_pedestal_smoothing(self, ffp_prof, pp_prof, p_prof, transition_psi_N = 0.6, gauss_sigma=8, blend_width=0.02, sav_window=41, sav_order=3):
+    def _level3_pedestal_smoothing(self, ffp_prof, pp_prof, p_prof, transition_psi_N = 0.6, gauss_sigma=8, blend_width=0.02, sav_window=41, sav_order=3):
         r'''! Edge smoothing with Gaussian filter: smooth p profile and take derivative for pp_prof.'''
         
         # Extract pressure 'y' values and ensure they're 1D
@@ -1674,7 +1702,7 @@ class TokTox:
         # Return modified pp_prof with smoothed values, ffp_prof unchanged
         return ffp_prof, {**pp_prof, 'y': pp_new_smooth}
 
-    def _level3_power_flux(self, ffp_prof, pp_prof):
+    def _level4_power_flux(self, ffp_prof, pp_prof):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
         # ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
         # pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
@@ -3069,13 +3097,33 @@ class TokTox:
         plt.close(fig)
 
     def _kinetic_plots(self):
-        fig, axes = plt.subplots(3, 10)
+        # def interp_prof(t, times, profs):
+        #     if t <= times[0]:
+        #         return profs[0]
+        #     for i in range(1, len(self._eqtimes)):
+        #         if t == times[i]:
+        #             return profs[i]
+        #         elif t > times[i-1] and t <= times[i]:
+        #             dt = times[i] - times[i-1]
+        #             alpha = (t - times[i-1]) / dt
+        #             return (1.0 - alpha) * np.array(profs[i-1]) + alpha * np.array(profs[i])
+        #     return profs[-1]
+        
+        fig, axes = plt.subplots(2, 10, figsize=(20,20))
+        fig.suptitle('ne')
 
-        idxs = np.linspace(0, len(self._times)-1, 10)
+        idxs = np.linspace(0, len(self._times)-1, 20)
         idxs = np.round(idxs).astype(int)
         for i, idx in enumerate(idxs):
-            ne = self._results['n_e'][self._times[idx]]
-            axes[0, i].plot(ne['x'], ne['y'])
+            ne_sim = self._results['n_e'][self._times[idx]]
+
+            # ne_exp_times = sorted(self._validation_ne.keys())
+            # ne_exp_prof = [self._validation_ne[t] for t in ne_exp_times]
+            ne_exp = self._validation_ne[self._times[idx]]
+
+            axes[i // 10, i % 10].plot(ne_sim['x'], ne_sim['y'], color='lime', lable='Simulation')
+            axes[i // 10, i % 10].plot(ne_exp['x'], ne_exp['y'], color='magenta', lable='Experiment')
+            axes[i // 10, i % 10].set_title(f't={round(self._times[idx], 4)}s')
 
         plt.savefig(os.path.join(self._out_dir, 'kplots', f'kinetics{self._current_step}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
