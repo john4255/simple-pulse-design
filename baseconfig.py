@@ -92,7 +92,7 @@ BASE_CONFIG = {
         # }, # cyclotron radiation
         'impurity_radiation': { # impurity radiation + bremsstrahlung
             'model_name': 'mavrin_fit', # uses polynomial fit to experimental cooling rates
-            'radiation_multiplier': 1.0, # default value, this does nothing, can change to test sensitivity of plasma to radiated power
+            'radiation_multiplier': 1.0, # default value for TORAX
         },
         # 'gas_puff': {
         #   'S_total': 2.5e21,
@@ -104,6 +104,9 @@ BASE_CONFIG = {
         # },
     },
     'neoclassical': {
+        'bootstrap_current': {
+            'bootstrap_multiplier': 0.95,
+        },
     },
     'pedestal': {
         'model_name': 'set_T_ped_n_ped',

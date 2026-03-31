@@ -269,7 +269,7 @@ class TokTox:
             delta_lower = (rgeo - rlower) / minor_radius
 
             R.append(g['rcentr'])
-            Z.append(g['zmid'])
+            Z.append(g['zaxis'])  # magnetic axis Z, not grid midpoint (zmid)
             a.append(minor_radius)
             kappa.append((zmax - zmin) / (2.0 * minor_radius))
             delta.append((delta_upper + delta_lower) / 2.0)
@@ -1163,6 +1163,14 @@ class TokTox:
         init_config.setdefault('profile_conditions', {})
         init_config['profile_conditions']['initial_psi_mode'] = 'geometry'
 
+        # Propagate Ip from set_Ip() into the Loop 0 config.
+        # Without this, TORAX runs without an Ip constraint and may produce
+        # psi values with the wrong magnitude or sign (observed: ~10× too large
+        # for ITER). The loaded_config Ip (if any) is already merged above;
+        # set_Ip() values are stored separately in self._Ip and must be applied here.
+        if self._Ip is not None:
+            init_config['profile_conditions']['Ip'] = copy.deepcopy(self._Ip)
+
         # Flatten all time-dependent values to their initial value (steady-state inputs)
         self._flatten_time_dependent(init_config)
 
@@ -1746,7 +1754,7 @@ class TokTox:
                 with self._quiet_tm():
                     self._tm.save_eqdsk(eq_name,
                         lcfs_pad=0.001, run_info='TokaMaker EQDSK',
-                        cocos=2, nr=150, nz=150, truncate_eq=False)
+                        cocos=2, nr=300, nz=300, truncate_eq=False)
                 self._tm_update(i)
 
                 # Store diverted/limited flag for this timestep
