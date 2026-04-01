@@ -107,6 +107,35 @@ def _make_temp_dir():
     return tempfile.mkdtemp(prefix='toktox_viz_')
 
 
+def _x_points_active(tt, i, t=None):
+    """Return True when X-point targets should be applied at timestep index i."""
+    diverted = getattr(tt, '_diverted_times', None)
+    if diverted is None:
+        return False
+
+    div_arr = np.asarray(diverted)
+
+    # New API: diverted window defined as (t_start, t_end).
+    if (
+        div_arr.ndim == 1
+        and div_arr.size == 2
+        and np.issubdtype(div_arr.dtype, np.number)
+        and not np.issubdtype(div_arr.dtype, np.bool_)
+    ):
+        if t is None:
+            times = getattr(tt, '_times', None)
+            if times is None or i >= len(times):
+                return False
+            t = times[i]
+        return float(div_arr[0]) <= float(t) <= float(div_arr[1])
+
+    # Backward compatibility: per-timestep diverted mask.
+    if div_arr.ndim == 1 and i < div_arr.size:
+        return bool(div_arr[i])
+
+    return False
+
+
 # =========================================================================
 #  Profile plot (per-timestep diagnostic plot)
 # =========================================================================
@@ -958,8 +987,7 @@ def _render_equil_frames(tt, loop, equil_dir):
             cb.mappable.set_clim(min_bound, max_bound)
         tt._tm.plot_psi(fig, ax, equilibrium=equil, xpoint_color='r', vacuum_nlevels=4)
         x_pt = getattr(tt, '_x_point_targets', None)
-        diverted_times = getattr(tt, '_diverted_times', None)
-        if x_pt is not None and diverted_times is not None and diverted_times[i]:
+        if x_pt is not None and _x_points_active(tt, i, t=tt._times[i]):
             ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2, label='Saddle point targets')
         ax.set_aspect('equal')
         ax.legend(loc='upper right', fontsize=12)
@@ -1415,8 +1443,7 @@ def plot_equil_interactive(tt, loop=None, notebook_mode=None, save_path=None):
             tt._tm.plot_constraints(fig, ax, equilibrium=equil)
             tt._tm.plot_psi(fig, ax, equilibrium=equil, xpoint_color='r', vacuum_nlevels=4)
             x_pt = getattr(tt, '_x_point_targets', None)
-            diverted = getattr(tt, '_diverted_times', np.zeros(len(times), dtype=bool))
-            if x_pt is not None and diverted[i]:
+            if x_pt is not None and _x_points_active(tt, i, t=t):
                 ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2,
                         label='Saddle point targets')
             ax.set_aspect('equal')

@@ -1719,7 +1719,7 @@ class TokTox:
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
-            self._tm.set_isoflux_constraints(lcfs, isoflux_weights*10) # shape targets
+            self._tm.set_isoflux_constraints(lcfs, isoflux_weights) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
@@ -1727,7 +1727,7 @@ class TokTox:
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
             # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
             self._tm.set_psi_constraints(omp_point, targets=np.array([lcfs_psi_target]),
-                                         weights=np.array([LCFS_WEIGHT * 100])) # psi value target
+                                         weights=np.array([LCFS_WEIGHT * 0.1])) # psi value target
 
             
             
