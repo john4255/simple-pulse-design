@@ -98,6 +98,11 @@ BASE_CONFIG = {
         #   'S_total': 2.5e21,
         #   'puff_decay_length': 0.2,
         # },
+        # 'pellet': {
+        #   'pellet_deposition_location': 0.85,
+        #   'pellet_width': 0.1,
+        #   'S_total': 2.e22,
+        # },
         # 'generic_particle': {
         #   'deposition_location': 0.3,
         #   'S_total': 5e20,
@@ -118,8 +123,31 @@ BASE_CONFIG = {
         # 'n_e_ped': 0.85, # pedestal top n_e in units of fGW
         # 'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
     },
+    # 'transport': {
+    #     # updated 2026-04-01 using TORAX team recommendations (via Oak, in docs, not used when pedestal is set)
+    #     'model_name': 'combined',
+    #     'transport_models': [
+    #         # Base model: QLKNN applied everywhere (default ADD)
+    #         {
+    #             'model_name': 'qlknn',
+    #             'rho_max': 1.0,
+    #         },
+    #         # Edge overwrite: Sets D_e and V_e in the edge, ignoring QLKNN there.
+    #         # Keeps chi_i/chi_e from QLKNN (because they are disabled here).
+    #         {
+    #             'model_name': 'constant',
+    #             'rho_min': 0.9,
+    #             'D_e': 0.5,
+    #             'V_e': -1.0,
+    #             'merge_mode': 'overwrite',
+    #             'disable_chi_i': True,
+    #             'disable_chi_e': True,
+    #         },
+    #     ],
+    # },
     'transport': {
-        'model_name': 'qlknn',  # Using QLKNN_7_11 default
+        # old
+        'model_name': 'qlknn', 
         # set inner core transport coefficients (ad-hoc MHD/EM transport)
         'apply_inner_patch': True, # TODO: scan chi?
         # 'D_e_inner': 0.1,

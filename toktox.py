@@ -367,6 +367,10 @@ class TokTox:
         self._gp_s = None
         self._gp_dl = None
 
+        self._pellet_deposition_location = None
+        self._pellet_width = None
+        self._pellet_s_total = None
+
         # Transport / numerics overrides — None means "use value from
         # loaded config (or base config if no loaded config)".  Only set
         # to a real value when an explicit set_*() call is made AFTER
@@ -394,10 +398,16 @@ class TokTox:
         self._tx_grid_type = None
         self._tx_grid = None
 
+        self._diverted_times = None
+        self._x_point_targets = None
+        self._x_point_weight = 100.0
+
         self._eqdsk_skip = []
 
         # Psi snapshots for movie generation (populated during _run_tm)
         self._tm_psi_on_nodes = {}  # {loop: {i: psi_array}}
+        # Equilibrium object snapshots for visualization (populated during _tm_update)
+        self._state['equil'] = {}  # {i: TokaMaker_equilibrium}
 
         # Temp/output directory state (set in fly())
         self._eqdsk_dir = None
@@ -760,13 +770,23 @@ class TokTox:
     #     for i in range(len(self._times)):
     #         self._state['vloop_tm'][i] = vloop[i]
 
-    def set_gaspuff(self, s=None, decay_length=None):
+    def set_gas_puff(self, S_total=None, decay_length=None):
         r'''! Set gas puff particle source.
-        @param s Particle source (particles/s).
+        @param S_total Particle source (particles/s).
         @param decay_length Decay length from edge (normalized rho coordinates).
         '''
-        self._gp_s = s
+        self._gp_s = S_total
         self._gp_dl = decay_length
+
+    def set_pellet(self, pellet_deposition_location=None, pellet_width=None, S_total=None):
+        r'''! Set pellet fueling particle source.
+        @param pellet_deposition_location Pellet deposition location (normalized rho coordinates).
+        @param pellet_width Pellet deposition width (normalized rho coordinates).
+        @param S_total Particle source (particles/s).
+        '''
+        self._pellet_deposition_location = pellet_deposition_location
+        self._pellet_width = pellet_width
+        self._pellet_s_total = S_total
 
     def set_chi(self, chi_min=None, chi_max=None):
         if chi_min is not None:
@@ -785,6 +805,20 @@ class TokTox:
             self._Ve_min = Ve_min
         if Ve_max is not None:
             self._Ve_max = Ve_max
+
+    def set_x_points(self, diverted_times=None, x_point_targets=None, x_point_weight=100.0):
+        r'''! Configure diverted window and X-point targets for TM saddle constraints.
+
+        @param diverted_times Tuple (t_start, t_end) defining the diverted plasma window.
+        @param x_point_targets X-point target locations, shape (n_xpoints, 2) with [R, Z] pairs.
+        @param x_point_weight Weight for saddle-point constraints.
+        '''
+        if diverted_times is not None and len(diverted_times) != 2:
+            raise ValueError('diverted_times must be a (t_start, t_end) tuple.')
+
+        self._diverted_times = diverted_times
+        self._x_point_targets = None if x_point_targets is None else np.atleast_2d(x_point_targets)
+        self._x_point_weight = x_point_weight
 
 
     # ─── TORAX (TX) Methods ───────────────────────────────────────────────────
@@ -1064,6 +1098,18 @@ class TokTox:
             myconfig['sources']['gas_puff'] = {
                 'S_total': self._gp_s,
                 'puff_decay_length': self._gp_dl,
+            }
+
+        if (
+            self._pellet_deposition_location is not None
+            and self._pellet_width is not None
+            and self._pellet_s_total is not None
+        ):
+            myconfig.setdefault('sources', {})
+            myconfig['sources']['pellet'] = {
+                'S_total': self._pellet_s_total,
+                'pellet_width': self._pellet_width,
+                'pellet_deposition_location': self._pellet_deposition_location,
             }
 
         myconfig.setdefault('transport', {})
@@ -1606,9 +1652,9 @@ class TokTox:
                     bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]{postfix}')
         for i, t in _pbar:
             # Clear isoflux, flux, and saddle targets from previous timepoint
-            self._tm.set_isoflux(None)
-            self._tm.set_flux(None,None)
-            self._tm.set_saddles(None)
+            self._tm.set_isoflux_constraints(None)
+            self._tm.set_psi_constraints(None, None)
+            self._tm.set_saddle_constraints(None)
 
 
 
@@ -1649,9 +1695,14 @@ class TokTox:
             lcfs = self._state['lcfs_geo'][i]
 
             # Set saddle-point (X-point) constraints during diverted phase
-            if self._diverted_times[i] and self._x_point_targets is not None:
+            use_x_points = (
+                self._x_point_targets is not None
+                and self._diverted_times is not None
+                and self._diverted_times[0] <= t <= self._diverted_times[1]
+            )
+            if use_x_points:
                 saddle_weights = self._x_point_weight * np.ones(self._x_point_targets.shape[0])
-                self._tm.set_saddles(self._x_point_targets, saddle_weights)
+                self._tm.set_saddle_constraints(self._x_point_targets, saddle_weights)
 
                 # trims lcfs targets near X-point(s)
                 perc_limit = 0.60       # LCFS points above percentage limit* max(abs(Z)) are removed from isoflux targets
@@ -1668,15 +1719,15 @@ class TokTox:
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
-            self._tm.set_isoflux(lcfs, isoflux_weights*10) # shape targets
+            self._tm.set_isoflux_constraints(lcfs, isoflux_weights*10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
             z_axis = self._state['Z'][i]
             omp_idx = np.argmax(lcfs[:, 0] * np.exp(-0.5 * ((lcfs[:, 1] - z_axis) / (0.3 * self._state['a'][i]))**2))
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
             # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
-            self._tm.set_flux(omp_point, targets=np.array([lcfs_psi_target]),
-                              weights=np.array([LCFS_WEIGHT * 100])) # psi value target
+            self._tm.set_psi_constraints(omp_point, targets=np.array([lcfs_psi_target]),
+                                         weights=np.array([LCFS_WEIGHT * 100])) # psi value target
 
             
             
@@ -1729,7 +1780,7 @@ class TokTox:
                     self._tm.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
                                           ffp_NI_prof=self._state['ffp_ni_prof'][i])
                     with self._quiet_tm():
-                        self._tm.solve()
+                        self._state['equil'][i] = self._tm.solve()
                     self._log(f'\tTM: Solve succeeded at t={t} (level {level_idx}: {level_name}).')
 
                     level_attempts.append({'level': level_idx, 'name': level_name,
@@ -1752,18 +1803,36 @@ class TokTox:
             
             if solve_succeeded:
                 with self._quiet_tm():
-                    self._tm.save_eqdsk(eq_name,
+                    self._state['equil'][i].save_eqdsk(eq_name,
                         lcfs_pad=0.001, run_info='TokaMaker EQDSK',
                         cocos=2, nr=300, nz=300, truncate_eq=False)
                 self._tm_update(i)
+                # #### temp debug plot
+                # import matplotlib.pyplot as plt
+                # fig, ax = plt.subplots()
+                # self._tm.plot_machine(fig, ax, coil_colormap='seismic', coil_symmap=False,
+                #                         coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+                # self._tm.plot_constraints(fig, ax, equilibrium=self._state['equil'][i])
+                # self._tm.plot_psi(fig, ax, equilibrium=self._state['equil'][i])
+                # if (self._x_point_targets is not None and self._diverted_times is not None
+                #         and self._diverted_times[0] <= t <= self._diverted_times[1]):
+                #     ax.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'rx', label='X-point targets')
+                # ax.set_title(f'TM psi at t={t:.2f}s (level {level_idx}: {level_name})')
+                # ax.legend()
+                # plt_path = os.path.join(self._out_dir, 'tm_plots', f'TEMP_{self._current_loop:03d}.{i:03d}_tm_psi.png')
+                # plt.savefig(plt_path)
+                # plt.close(fig)
+                # #### temp debug plot
+
+
 
                 # Store diverted/limited flag for this timestep
                 if not hasattr(self, '_diverted_flags'):
                     self._diverted_flags = {}
-                self._diverted_flags[i] = self._tm.diverted
+                self._diverted_flags[i] = self._state['equil'][i].diverted
 
                 # Store psi on nodes for later movie generation
-                self._tm_psi_on_nodes.setdefault(self._current_loop, {})[i] = self._tm.get_psi(normalized=False)
+                self._tm_psi_on_nodes.setdefault(self._current_loop, {})[i] = self._state['equil'][i].get_psi(normalized=False)
 
             _winning = next((a for a in level_attempts if a['succeeded']), None)
             _last_attempt = level_attempts[-1] if level_attempts else {}
@@ -1807,7 +1876,7 @@ class TokTox:
                     cfg = getattr(self, '_coil_reg_config', {})
                     self.set_coil_reg(i=i+1, **{k: v for k, v in cfg.items() if k != 'targets'})
             elif not skip_coil_update:
-                coil_targets, _ = self._tm.get_coil_currents()
+                coil_targets, _ = self._state['equil'][i].get_coil_currents()
                 cfg = getattr(self, '_coil_reg_config', {})
                 self.set_coil_reg(targets=coil_targets, **{k: v for k, v in cfg.items() if k != 'targets'})
 
@@ -1886,30 +1955,30 @@ class TokTox:
         r'''! Update internal state and coil current results based on results of GS solver.
         @param i Timestep of the solve.
         '''
-        eq_stats = self._tm.get_stats()
+        eq_stats = self._state['equil'][i].get_stats()
         self._state['Ip'][i] = eq_stats['Ip']
         self._state['Ip_tm'][i] = eq_stats['Ip']
         self._state['pax_tm'][i] = eq_stats['P_ax']
         self._state['beta_N_tm'][i] = eq_stats['beta_n']
         self._state['l_i_tm'][i] = eq_stats['l_i']
-        
+
         eq_read_extended = read_eqdsk_extended(os.path.join(self._eqdsk_dir, f'{self._current_loop:03d}.{i:03d}.eqdsk'))
         vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vol'])
         self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
-        self._state['psi_lcfs_tm'][i] = self._tm.psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
-        self._state['psi_axis_tm'][i] = self._tm.psi_bounds[1] 
+        self._state['psi_lcfs_tm'][i] = self._state['equil'][i].psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
+        self._state['psi_axis_tm'][i] = self._state['equil'][i].psi_bounds[1]
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
         try:
             # self._log(f'Ip_ni = {self._state["Ip_ni_tx"][i]:.3f} A, vloop = {self._state["vloop_tx"][i]:.3f} V')
-            self._state['vloop_tm'][i] = self._tm.calc_loopvoltage()
+            self._state['vloop_tm'][i] = self._state['equil'][i].calc_loopvoltage()
         except ValueError:
             self._log(f'WARNING: calc_loopvoltage failed at t-idx {i} '
                       f'(likely Ip_ni > Ip); using TORAX vloop as fallback.')
             self._state['vloop_tm'][i] = float(self._state['vloop_tx'][i])
-        
+
         # store TokaMaker pressure profile from get_profiles()
-        tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._tm.get_profiles(npsi=N_PSI)
+        tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._state['equil'][i].get_profiles(npsi=N_PSI)
 
         self._state['ffp_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_fp_prof*tm_f_prof), 'type': 'linterp'}
         self._state['pp_prof_tm'][i] =  {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_pp_prof), 'type': 'linterp'}
@@ -1917,17 +1986,17 @@ class TokTox:
         self._state['f_prof_tm'][i] =   {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, tm_psi, tm_f_prof), 'type': 'linterp'}
 
         # pull geo profiles
-        psi_geo, q_tm, geo, _, _, _ = self._tm.get_q(npsi=N_PSI, psi_pad=0.02)
-        
+        psi_geo, q_tm, geo, _, _, _ = self._state['equil'][i].get_q(npsi=N_PSI, psi_pad=0.02)
+
         self._state['q0_tm'][i] = q_tm[0] if len(q_tm) > 0 else np.nan
         self._state['q95_tm'][i] = np.interp(0.95, psi_geo, q_tm) if len(psi_geo) > 0 and len(q_tm) > 0 else np.nan
         self._state['q_prof_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, q_tm), 'type': 'linterp'}
 
         self._state['R_avg_tm'][i] =     {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[0])), 'type': 'linterp'}
         self._state['R_inv_avg_tm'][i] = {'x': self._psi_N.copy(), 'y': np.interp(self._psi_N, psi_geo, np.array(geo[1])), 'type': 'linterp'}
-        
+
         # Update Results
-        coils, _ = self._tm.get_coil_currents()
+        coils, _ = self._state['equil'][i].get_coil_currents()
         if 'COIL' not in self._results:
             self._results['COIL'] = {coil: {} for coil in coils}
         for coil, current in coils.items():
@@ -1936,9 +2005,8 @@ class TokTox:
             self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
 
         # get psi to use in next timestep
-        self._state['psi_grid_prev_tm'][i] = self._tm.get_psi(normalized=False)
-        self._psi_warm_start[i] = self._tm.get_psi(normalized=False)  # persist across steps
-
+        self._state['psi_grid_prev_tm'][i] = self._state['equil'][i].get_psi(normalized=False)
+        self._psi_warm_start[i] = self._state['equil'][i].get_psi(normalized=False)  # persist across steps
 
         # TODO: pull LCFS geometry from gs solve (trace_surf often silently fails)
 
@@ -2028,8 +2096,8 @@ class TokTox:
 
     # ─── Main Simulation Loop ───────────────────────────────────────────────────
 
-    def fly(self, convergence_threshold=-1.0, max_loop=3, run_name='tmp', diverted_times=None, x_point_targets=None,
-            save_outputs=False, debug=False, x_point_weight=100.0, skip_bad_init_eqdsks=False):
+    def fly(self, convergence_threshold=-1.0, max_loop=3, run_name='tmp',
+            save_outputs=False, debug=False, skip_bad_init_eqdsks=False):
         r'''! Run TokaMaker-TORAX coupled simulation loop.
 
         @param convergence_threshold Max fractional change in consumed flux between loops for convergence.
@@ -2038,9 +2106,6 @@ class TokTox:
         @param save_outputs If True, create persistent output directory with eqdsks, configs, and results JSON.
         @param debug If True, redirect all outputs (including TM/TX noise) to the log file,
                save intermediate states, and save diagnostic plots into the output directory.
-        @param x_point_targets X-point target locations, shape (n_xpoints, 2) with [R, Z] pairs.
-        @param x_point_weight Weight for saddle-point constraints (default 100).
-        @param diverted_times Tuple (t_start, t_end) defining the diverted plasma window.
         @param skip_bad_init_eqdsks If True, skip broken initial gEQDSK files instead of raising.
         '''
         import tempfile  # local import: only needed when fly() is called
@@ -2117,19 +2182,12 @@ class TokTox:
             self._eqdsk_dir = tempfile.mkdtemp(prefix='toktox_equil_')
             self._eqdsk_dir_is_temp = True
 
-        # ── Diverted / saddle-point configuration ──
-        if diverted_times is not None and x_point_targets is not None:
-            x_point_targets = np.atleast_2d(x_point_targets)
-            t_div_start, t_div_end = diverted_times
-            self._diverted_times = np.array([(t >= t_div_start and t <= t_div_end) for t in self._times])
-            self._x_point_targets = x_point_targets
-            self._x_point_weight  = x_point_weight
+        # ── Diverted / saddle-point configuration (set via set_x_points) ──
+        if self._diverted_times is not None and self._x_point_targets is not None:
+            t_div_start, t_div_end = self._diverted_times
+            n_diverted = int(np.sum([(t_div_start <= t <= t_div_end) for t in self._times]))
             self._log(f'Diverted window: t=[{t_div_start}, {t_div_end}] s '
-                      f'({int(self._diverted_times.sum())}/{len(self._times)} timesteps)')
-        else:
-            self._diverted_times  = np.zeros(len(self._times), dtype=bool)
-            self._x_point_targets = None
-            self._x_point_weight  = x_point_weight
+                      f'({n_diverted}/{len(self._times)} timesteps)')
 
         # ── Flattop detection ──
         Ip_arr = np.array(self._state['Ip'])
@@ -2294,10 +2352,13 @@ class TokTox:
         from toktox_visualization import plot_profiles_interactive
         return plot_profiles_interactive(self, **kwargs)
 
-    def plot_equil(self, **kwargs):
-        r'''! Interactive equilibrium viewer (ipywidgets slider in Jupyter, static otherwise).'''
+    def plot_equil(self, notebook_mode=None, save_path=None, **kwargs):
+        r'''! Equilibrium viewer.
+        @param notebook_mode True=widget, False=save PNGs, None=auto (widget if in Jupyter).
+        @param save_path Directory for saved PNGs when notebook_mode=False.
+        '''
         from toktox_visualization import plot_equil_interactive
-        return plot_equil_interactive(self, **kwargs)
+        return plot_equil_interactive(self, notebook_mode=notebook_mode, save_path=save_path, **kwargs)
 
     def plot_coils(self, save_bool=False, save_path=None, display=True, **kwargs):
         r'''! Plot coil current traces over the pulse.

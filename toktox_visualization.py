@@ -864,7 +864,7 @@ def plot_coils(tt, save_path=None, display=True):
 #  Movie generation
 # =========================================================================
 
-def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None):
+def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None, notebook_mode=None):
     """Create pulse movie from simulation data.
 
     Renders equilibrium plots from stored psi snapshots (tt._tm_psi_on_nodes),
@@ -882,6 +882,10 @@ def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None):
         Playback speed relative to real time.
     loop : int, optional
         Loop to visualize. Default: last completed loop.
+    notebook_mode : bool or None
+        True  → embed video in notebook after saving.
+        False → save to file only, do not embed.
+        None  → auto-detect (embed if in Jupyter and display=True).
     """
     if loop is None:
         loop = tt._current_loop - 1
@@ -917,7 +921,8 @@ def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None):
 
         _encode_video_from_dir(tmp_dir, save_path, fps=fps)
 
-        if display and _in_jupyter():
+        show_in_nb = notebook_mode if notebook_mode is not None else (display and _in_jupyter())
+        if show_in_nb:
             _embed_video_jupyter(save_path)
 
     finally:
@@ -925,13 +930,14 @@ def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None):
 
 
 def _render_equil_frames(tt, loop, equil_dir):
-    """Render equilibrium plots from stored psi snapshots to PNG files."""
-    psi_data = tt._tm_psi_on_nodes.get(loop, {})
+    """Render equilibrium plots from stored equilibrium snapshots to PNG files."""
+    equil_data = tt._state.get('equil', {})
     coil_bounds = getattr(tt, '_coil_bounds', {})
 
     for i in range(len(tt._times)):
         out_path = os.path.join(equil_dir, f'equil_{loop:03d}.{i:03d}.png')
-        if i not in psi_data or psi_data[i] is None:
+        equil = equil_data.get(i)
+        if equil is None:
             # Create a "failed" placeholder
             fig, ax = plt.subplots(1, 1, figsize=(11, 12))
             ax.text(0.5, 0.5, 'TokaMaker failed\nto converge',
@@ -942,16 +948,19 @@ def _render_equil_frames(tt, loop, equil_dir):
             plt.close(fig)
             continue
 
-        # Load psi into TokaMaker and render
-        tt._tm.set_psi(psi_data[i])
         fig, ax = plt.subplots(1, 1, figsize=(11, 12))
         min_bound = min(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else -1
         max_bound = max(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else 1
-        cb = tt._tm.plot_machine(fig, ax, coil_colormap='seismic', coil_symmap=False,
+        cb = tt._tm.plot_machine(fig, ax, equilibrium=equil, coil_colormap='seismic', coil_symmap=False,
                                   coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+        tt._tm.plot_constraints(fig, ax, equilibrium=equil)
         if cb is not None:
             cb.mappable.set_clim(min_bound, max_bound)
-        tt._tm.plot_psi(fig, ax, xpoint_color='r', vacuum_nlevels=4)
+        tt._tm.plot_psi(fig, ax, equilibrium=equil, xpoint_color='r', vacuum_nlevels=4)
+        x_pt = getattr(tt, '_x_point_targets', None)
+        diverted_times = getattr(tt, '_diverted_times', None)
+        if x_pt is not None and diverted_times is not None and diverted_times[i]:
+            ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2, label='Saddle point targets')
         ax.set_aspect('equal')
         ax.legend(loc='upper right', fontsize=12)
         ax.tick_params(labelsize=11)
@@ -1370,53 +1379,89 @@ def plot_profiles_interactive(tt):
     _update(0)
 
 
-def plot_equil_interactive(tt, loop=None):
-    """Interactive equilibrium viewer with ipywidgets slider."""
-    try:
-        import ipywidgets as widgets
-        from IPython.display import display, clear_output
-    except ImportError:
-        print("ipywidgets not installed. Install with: pip install ipywidgets")
-        return
+def plot_equil_interactive(tt, loop=None, notebook_mode=None, save_path=None):
+    """Equilibrium viewer — widget slider in notebook, saved PNGs otherwise.
+
+    Parameters
+    ----------
+    notebook_mode : bool or None
+        True  → ipywidgets slider (Jupyter).
+        False → save PNG files to save_path.
+        None  → auto-detect (widget if in Jupyter, save files otherwise).
+    save_path : str, optional
+        Directory for PNG files when notebook_mode=False.
+        Defaults to ./equil_loop<N>/ in the current directory.
+    """
+    if notebook_mode is None:
+        notebook_mode = _in_jupyter()
 
     if loop is None:
         loop = tt._current_loop - 1
 
-    psi_data = tt._tm_psi_on_nodes.get(loop, {})
+    equil_data = tt._state.get('equil', {})
     times = tt._times
     coil_bounds = getattr(tt, '_coil_bounds', {})
-    out = widgets.Output()
 
-    def _update(i):
-        with out:
-            clear_output(wait=True)
-            t = times[i]
+    def _draw_equil_ax(fig, ax, i):
+        t = times[i]
+        equil = equil_data.get(i)
+        if equil is not None:
+            min_bound = min(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else -1
+            max_bound = max(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else 1
+            cb = tt._tm.plot_machine(fig, ax, equilibrium=equil, coil_colormap='seismic', coil_symmap=False,
+                                      coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
+            if cb is not None:
+                cb.mappable.set_clim(min_bound, max_bound)
+            tt._tm.plot_constraints(fig, ax, equilibrium=equil)
+            tt._tm.plot_psi(fig, ax, equilibrium=equil, xpoint_color='r', vacuum_nlevels=4)
+            x_pt = getattr(tt, '_x_point_targets', None)
+            diverted = getattr(tt, '_diverted_times', np.zeros(len(times), dtype=bool))
+            if x_pt is not None and diverted[i]:
+                ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2,
+                        label='Saddle point targets')
+            ax.set_aspect('equal')
+            ax.set_title(f't = {t:.3f} s  (index {i})', fontsize=14)
+        else:
+            ax.text(0.5, 0.5, 'TokaMaker failed to converge', transform=ax.transAxes,
+                    fontsize=14, ha='center', va='center', color='darkred')
+            ax.set_title(f't = {t:.3f} s  (FAILED)', fontsize=14, color='darkred')
+
+    if notebook_mode:
+        try:
+            import ipywidgets as widgets
+            from IPython.display import display, clear_output
+        except ImportError:
+            print("ipywidgets not installed. Install with: pip install ipywidgets")
+            return
+
+        out = widgets.Output()
+
+        def _update(i):
+            with out:
+                clear_output(wait=True)
+                fig, ax = plt.subplots(1, 1, figsize=(8, 9))
+                _draw_equil_ax(fig, ax, i)
+                plt.tight_layout()
+                display(fig)
+                plt.close(fig)
+
+        slider = widgets.IntSlider(value=0, min=0, max=len(times) - 1, loop=1,
+                                    description='Time idx:', continuous_update=False)
+        slider.observe(lambda change: _update(change['new']), names='value')
+        display(slider, out)
+        _update(0)
+    else:
+        if save_path is None:
+            save_path = os.path.join(os.getcwd(), f'equil_loop{loop:03d}')
+        os.makedirs(save_path, exist_ok=True)
+        for i in range(len(times)):
             fig, ax = plt.subplots(1, 1, figsize=(8, 9))
-
-            if i in psi_data and psi_data[i] is not None:
-                tt._tm.set_psi(psi_data[i])
-                min_bound = min(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else -1
-                max_bound = max(b for bounds in coil_bounds.values() for b in bounds) * 1.E-6 if coil_bounds else 1
-                cb = tt._tm.plot_machine(fig, ax, coil_colormap='seismic', coil_symmap=False,
-                                          coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
-                if cb is not None:
-                    cb.mappable.set_clim(min_bound, max_bound)
-                tt._tm.plot_psi(fig, ax, xpoint_color='r', vacuum_nlevels=4)
-                ax.set_aspect('equal')
-                ax.set_title(f't = {t:.3f} s  (index {i})', fontsize=14)
-            else:
-                ax.text(0.5, 0.5, 'TokaMaker failed to converge', transform=ax.transAxes,
-                        fontsize=14, ha='center', va='center', color='darkred')
-                ax.set_title(f't = {t:.3f} s  (FAILED)', fontsize=14, color='darkred')
-
+            _draw_equil_ax(fig, ax, i)
             plt.tight_layout()
-            plt.show()
-
-    slider = widgets.IntSlider(value=0, min=0, max=len(times) - 1, loop=1,
-                                description='Time idx:', continuous_update=False)
-    slider.observe(lambda change: _update(change['new']), names='value')
-    display(slider, out)
-    _update(0)
+            out_path = os.path.join(save_path, f'equil_{i:03d}.png')
+            fig.savefig(out_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+        print(f'Saved {len(times)} equilibrium plots to {save_path}')
 
 
 # =========================================================================
