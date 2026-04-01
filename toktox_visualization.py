@@ -989,6 +989,9 @@ def _render_equil_frames(tt, loop, equil_dir):
         x_pt = getattr(tt, '_x_point_targets', None)
         if x_pt is not None and _x_points_active(tt, i, t=tt._times[i]):
             ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2, label='Saddle point targets')
+        sp = tt._state.get('strike_pts', {}).get(i)
+        if sp is not None and len(sp) > 0:
+            ax.plot(sp[:, 0], sp[:, 1], 'g^', markersize=10, markeredgewidth=2, label='Strike point targets')
         ax.set_aspect('equal')
         ax.legend(loc='upper right', fontsize=12)
         ax.tick_params(labelsize=11)
@@ -1148,17 +1151,15 @@ def _draw_scalars_movie(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
 
     # 5: psi_axis and psi_lcfs
     ax = axes[4]
-    ax.plot(times, s['psi_axis_tm'], color=COLOR_TM, ls=LS_PRI, lw=LW, marker=MK_TM, ms=MK_SZ, label='\u03c8_ax TM')
-    ax.plot(times, s['psi_axis_tx'], color=COLOR_TX, ls=LS_PRI, lw=LW, label='\u03c8_ax TX')
-    ax.set_ylabel('\u03c8_axis [Wb/rad]', fontsize=LABEL_FS)
-    ax.legend(fontsize=LEGEND_FS, loc='upper left')
+    ax.plot(times, s['psi_axis_tm'], color=COLOR_TM, ls=LS_PRI, lw=LW, marker=MK_TM, ms=MK_SZ, label='\u03c8_axis TM')
+    ax.plot(times, s['psi_axis_tx'], color=COLOR_TX, ls=LS_PRI, lw=LW, label='\u03c8_axis TX')
+    ax.set_ylabel('\u03c8 [Wb/rad]', fontsize=LABEL_FS)
+    ax.plot(times, s['psi_lcfs_tm'], color=COLOR_TM, ls=LS_SEC, lw=LW, marker=MK_TM, ms=MK_SZ, label='\u03c8_lcfs TM')
+    ax.plot(times, s['psi_lcfs_tx'], color=COLOR_TX, ls=LS_SEC, lw=LW, label='\u03c8_lcfs TX')
+    ax.tick_params(labelsize=TICK_FS)
     _style(ax)
-    ax2 = ax.twinx()
-    ax2.plot(times, s['psi_lcfs_tm'], color=COLOR_TM, ls=LS_SEC, lw=LW, marker=MK_TM, ms=MK_SZ, label='\u03c8_lcfs TM')
-    ax2.plot(times, s['psi_lcfs_tx'], color=COLOR_TX, ls=LS_SEC, lw=LW, label='\u03c8_lcfs TX')
-    ax2.set_ylabel('\u03c8_lcfs [Wb/rad]', fontsize=LABEL_FS)
-    ax2.tick_params(labelsize=TICK_FS)
-    ax2.legend(fontsize=LEGEND_FS, loc='lower right')
+    ax.legend(fontsize=LEGEND_FS, loc='best')
+
 
     # 6: Coil currents
     ax = axes[5]
@@ -1446,6 +1447,9 @@ def plot_equil_interactive(tt, loop=None, notebook_mode=None, save_path=None):
             if x_pt is not None and _x_points_active(tt, i, t=t):
                 ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2,
                         label='Saddle point targets')
+            sp = tt._state.get('strike_pts', {}).get(i)
+            if sp is not None and len(sp) > 0:
+                ax.plot(sp[:, 0], sp[:, 1], 'g^', markersize=10, markeredgewidth=2, label='Strike points')
             ax.set_aspect('equal')
             ax.set_title(f't = {t:.3f} s  (index {i})', fontsize=14)
         else:

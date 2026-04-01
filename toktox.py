@@ -401,6 +401,7 @@ class TokTox:
         self._diverted_times = None
         self._x_point_targets = None
         self._x_point_weight = 100.0
+        self._strike_point_targets = None
 
         self._eqdsk_skip = []
 
@@ -408,6 +409,7 @@ class TokTox:
         self._tm_psi_on_nodes = {}  # {loop: {i: psi_array}}
         # Equilibrium object snapshots for visualization (populated during _tm_update)
         self._state['equil'] = {}  # {i: TokaMaker_equilibrium}
+        self._state['strike_pts'] = {}  # {i: (N,2) array of [R,Z] strike points, or empty}
 
         # Temp/output directory state (set in fly())
         self._eqdsk_dir = None
@@ -819,6 +821,19 @@ class TokTox:
         self._diverted_times = diverted_times
         self._x_point_targets = None if x_point_targets is None else np.atleast_2d(x_point_targets)
         self._x_point_weight = x_point_weight
+
+    def set_strike_points(self, strike_point_targets):
+        r'''! Manually specify strike point locations to add as isoflux targets during the diverted phase.
+
+        Strike points are where the separatrix legs intersect the divertor/limiter surface.
+        They are added to the isoflux constraint array during the diverted window alongside
+        the LCFS shape targets. Automatic detection from the EQDSK boundary is not possible
+        because rzout traces only the closed plasma boundary (inside the vessel).
+
+        @param strike_point_targets Strike point locations, shape (n_points, 2) with [R, Z] pairs,
+                                    or None to disable.
+        '''
+        self._strike_point_targets = None if strike_point_targets is None else np.atleast_2d(strike_point_targets)
 
 
     # ─── TORAX (TX) Methods ───────────────────────────────────────────────────
@@ -1714,6 +1729,13 @@ class TokTox:
                     lcfs = lcfs[lcfs[:, 1] >= -Z_lim]
                 elif np.shape(self._x_point_targets)[0] == 2: # double null
                     lcfs = lcfs[np.abs(lcfs[:, 1]) <= Z_lim]
+
+            # When diverted, add manually specified strike points to isoflux targets
+            if use_x_points and self._strike_point_targets is not None:
+                self._state['strike_pts'][i] = self._strike_point_targets
+                lcfs = np.vstack([lcfs, self._strike_point_targets])
+            else:
+                self._state['strike_pts'][i] = np.empty((0, 2))
 
             isoflux_weights = LCFS_WEIGHT * np.ones(len(lcfs))
             lcfs_psi_target = self._state['psi_lcfs_tx'][i] # _state in Wb/rad, TM expects Wb/rad (AKA Wb-rad)
