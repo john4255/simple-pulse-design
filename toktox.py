@@ -239,7 +239,7 @@ class TokTox:
             u_new = np.linspace(u.min(), u.max(), n)
             x_new_cs = cs_x(u_new)
             y_new_cs = cs_y(u_new)
-            return [[x_new_cs[i], y_new_cs[i]] for i in range(n)]
+            return np.array([[x_new_cs[i], y_new_cs[i]] for i in range(n)])
 
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
@@ -615,8 +615,14 @@ class TokTox:
     def set_ohmic(self, times, rho, values):
         self._ohmic = ((times), (rho), (values))
     
-    def set_validation_density(self, ne):
+    def set_validation_ne(self, ne):
         self._validation_ne = ne
+
+    def set_validation_Te(self, Te):
+        self._validation_Te = Te
+
+    def set_validation_Ti(self, Ti):
+        self._validation_Ti = Ti
 
     def _pull_torax_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'):
         r'''! Load TORAX variable onto psi_norm grid.
@@ -1457,14 +1463,6 @@ class TokTox:
 
             # self._gs.set_isoflux(np.array(lcfs), isoflux_weights)
 
-            # Initialize psi from geometry parameters # TODO this is probably not doing anything, remove (and test)
-            # Using the seed EQDSK geometry should give a good initial guess
-            self._gs.init_psi(self._state['R0_mag'][i],
-                                         self._state['Z'][i],
-                                         self._state['a'][i],
-                                         self._state['kappa'][i],
-                                         self._state['delta'][i])
-
             # Warm-start: prefer previous step's converged solution for this # TODO this might be unecessarily complication, not sure i like using i-1 for warmstart, mighe be fine
             # timestep; fall back to the previous timestep's solution within
             # the current step (adjacent-time warm-start).
@@ -1482,6 +1480,7 @@ class TokTox:
 
 
             # Shape control: set_isoflux on all LCFS points for lcfs shape targets.
+            print(lcfs)
             self._gs.set_isoflux(lcfs, isoflux_weights * 10) # shape targets
 
             # Pick outboard midplane point (largest R at approx Z = Z_axis)
@@ -1557,8 +1556,17 @@ class TokTox:
                 try:
                     print(f'{equals} trying level {level_idx} solve ({level_name})')
                     print(ffp_level['type'])
-                    # if level_idx == 0:
-                    #     continue
+                    if level_idx == 0:
+                        continue
+
+                    # Initialize psi from geometry parameters # TODO this is probably not doing anything, remove (and test)
+                    # Using the seed EQDSK geometry should give a good initial guess
+                    self._gs.init_psi(self._state['R0_mag'][i],
+                                         self._state['Z'][i],
+                                         self._state['a'][i],
+                                         self._state['kappa'][i],
+                                         self._state['delta'][i])
+
                     self._gs.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
                                           ffp_NI_prof=self._state['ffpni_prof'][i])
                     err_flag = self._gs.solve()
@@ -3112,22 +3120,63 @@ class TokTox:
         fig, axes = plt.subplots(2, 10, figsize=(20,20))
         fig.suptitle('ne')
 
-        idxs = np.linspace(0, len(self._times)-1, 20)
-        idxs = np.round(idxs).astype(int)
-        for i, idx in enumerate(idxs):
-            ne_sim = self._results['n_e'][self._times[idx]]
+        # idxs = np.linspace(0, len(self._times)-1, 20)
+        # idxs = np.round(idxs).astype(int)
+        for i in range(len(self._times)):
+            if i >= len(self._times):
+                break
+            ne_sim = self._results['n_e'][self._times[i]]
 
             # ne_exp_times = sorted(self._validation_ne.keys())
             # ne_exp_prof = [self._validation_ne[t] for t in ne_exp_times]
-            ne_exp = self._validation_ne[self._times[idx]]
+            ne_exp = self._validation_ne[self._times[i]]
+            ne_exp_x = sorted(ne_exp.keys())
+            ne_exp_y = [ne_exp[x] for x in ne_exp_x]
 
-            axes[i // 10, i % 10].plot(ne_sim['x'], ne_sim['y'], color='lime', lable='Simulation')
-            axes[i // 10, i % 10].plot(ne_exp['x'], ne_exp['y'], color='magenta', lable='Experiment')
-            axes[i // 10, i % 10].set_title(f't={round(self._times[idx], 4)}s')
+            axes[i // 10, i % 10].plot(ne_sim['x'], ne_sim['y'], color='lime', label='Simulation')
+            axes[i // 10, i % 10].plot(ne_exp_x, ne_exp_y, color='magenta', label='Experiment')
+            axes[i // 10, i % 10].set_title(f't={round(self._times[i], 4)}s')
 
-        plt.savefig(os.path.join(self._out_dir, 'kplots', f'kinetics{self._current_step}.png'), dpi=150, bbox_inches='tight')
+        plt.savefig(os.path.join(self._out_dir, 'kplots', f'ne{self._current_step}.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
 
+        fig, axes = plt.subplots(2, 10, figsize=(20,20))
+        fig.suptitle('Te')
+
+        for i in range(len(self._times)):
+            if i >= len(self._times):
+                break
+            Te_sim = self._results['T_e'][self._times[i]]
+
+            Te_exp = self._validation_Te[self._times[i]]
+            Te_exp_x = sorted(Te_exp.keys())
+            Te_exp_y = [Te_exp[x] for x in Te_exp_x]
+
+            axes[i // 10, i % 10].plot(Te_sim['x'], Te_sim['y'], color='lime', label='Simulation')
+            axes[i // 10, i % 10].plot(Te_exp_x, Te_exp_y, color='magenta', label='Experiment')
+            axes[i // 10, i % 10].set_title(f't={round(self._times[i], 4)}s')
+
+        plt.savefig(os.path.join(self._out_dir, 'kplots', f'Te{self._current_step}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+        fig, axes = plt.subplots(2, 10, figsize=(20,20))
+        fig.suptitle('Ti')
+
+        for i in range(len(self._times)):
+            if i >= len(self._times):
+                break
+            Ti_sim = self._results['T_i'][self._times[i]]
+
+            Ti_exp = self._validation_Ti[self._times[i]]
+            Ti_exp_x = sorted(Ti_exp.keys())
+            Ti_exp_y = [Ti_exp[x] for x in Ti_exp_x]
+
+            axes[i // 10, i % 10].plot(Ti_sim['x'], Ti_sim['y'], color='lime', label='Simulation')
+            axes[i // 10, i % 10].plot(Ti_exp_x, Ti_exp_y, color='magenta', label='Experiment')
+            axes[i // 10, i % 10].set_title(f't={round(self._times[i], 4)}s')
+
+        plt.savefig(os.path.join(self._out_dir, 'kplots', f'Ti{self._current_step}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
     def fly(self, convergence_threshold=-1.0, save_states=False, graph='all', max_step=11, out='results.json', run_name = 'tmp', skip_bad_init_eqdsks=False,
              x_point_targets=None, x_point_weight=100.0, diverted_times=None):
