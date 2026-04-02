@@ -1,6 +1,7 @@
 import numpy as np
 import pprint
-from scipy.interpolate import interp1d
+import scipy.io as sio
+from scipy.interpolate import make_smoothing_spline, interp1d, CubicSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 import copy
@@ -101,7 +102,7 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -110,9 +111,12 @@ class TokTox:
         @param dt Time step (s).
         @param times Time points to sample output at.
         @param last_surface_factor Last surface factor for Torax.
+        @param n_rho Number of grid cells for torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
-        @param oft_env OFT environment if one is already initialized.
-        @param oft_threads Number of threads OFT can use.
+        @param cocos COCOS version of input EQDSK.
+        @param oft_env OFT environment.
+        @param truncate_eq Whether to truncate equilibrium when saving TokaMaker output to EQDSK.
+        @param oft_threads Number of threads for OFT.
         '''
         if oft_env is not None:
             self._oftenv = oft_env
@@ -132,6 +136,7 @@ class TokTox:
         self._last_surface_factor = last_surface_factor
         self._n_rho = n_rho # resolution of TORAX grid
         self._psi_N = np.linspace(0.0, 1.0, N_PSI) # standardized psi_N grid all values should be mapped onto
+        self._truncate_eq = truncate_eq
 
         self._current_loop = 0
 
@@ -164,6 +169,7 @@ class TokTox:
         self._state['q0_tm'] = np.zeros(len(self._times))
         self._state['q_prof_tm'] = {}
         self._state['q_prof_tx'] = {}
+        self._state['q_prof_eqdsk'] = {}
         self._state['psi_lcfs_tm'] = np.zeros(len(self._times))
         self._state['psi_axis_tm'] = np.zeros(len(self._times))
         self._state['psi_lcfs_tx'] = np.zeros(len(self._times))
@@ -176,6 +182,13 @@ class TokTox:
         self._state['lcfs_geo'] = {}
         self._state['ffp_prof'] = {}
         self._state['pp_prof'] = {}
+        self._state['ffp_prof_eqdsk'] = {}
+        self._state['pp_prof_eqdsk'] = {}
+        self._state['p_prof_eqdsk'] = {}
+        self._state['ffp_prof_save'] = {}
+        self._state['pp_prof_save'] = {}
+        self._state['pres'] = {}
+        self._state['fpol'] = {}
         self._state['eta_prof'] = {}
         self._state['T_e'] = {}
         self._state['T_i'] = {}
@@ -248,10 +261,25 @@ class TokTox:
         lcfs = []
         ffp_prof = []
         pp_prof = []
+        q_prof = []
         psi_axis = []
         psi_lcfs = []
         pres_prof = []
         fpol_prof = []
+
+        def interp_lcfs(lcfs, n=1000):
+            x = lcfs[:, 0]
+            y = lcfs[:, 1]
+            u = np.cumsum(np.sqrt(np.diff(x)**2 + np.diff(y)**2))
+            x[-1] = x[0]
+            y[-1] = y[0]
+            u = np.r_[0, u]
+            cs_x = CubicSpline(u, x, bc_type='periodic')
+            cs_y = CubicSpline(u, y, bc_type='periodic')
+            u_new = np.linspace(u.min(), u.max(), n)
+            x_new_cs = cs_x(u_new)
+            y_new_cs = cs_y(u_new)
+            return np.array([[x_new_cs[i], y_new_cs[i]] for i in range(n)])
 
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
@@ -281,13 +309,16 @@ class TokTox:
             psi_axis.append(abs(g['psimag']))
             psi_lcfs.append(abs(g['psibry'])) # EQDSK stored psi in Wb/rad, same as stored in _state
 
-            lcfs.append(g['rzout'])
+            lcfs.append(interp_lcfs(g['rzout']))
 
             psi_eqdsk = np.linspace(0.0, 1.0, g['nr'])            
             ffp = np.interp(self._psi_N, psi_eqdsk, g['ffprim'])
             pp = np.interp(self._psi_N, psi_eqdsk, g['pprime'])
+            q = np.interp(self._psi_N, psi_eqdsk, g['qpsi'])
+
             ffp_prof.append(ffp)
             pp_prof.append(pp)
+            q_prof.append(q)
 
             pres = np.interp(self._psi_N, psi_eqdsk, g['pres'])
             fpol = np.interp(self._psi_N, psi_eqdsk, g['fpol'])
@@ -305,7 +336,7 @@ class TokTox:
                 elif time > self._eqtimes[i-1] and time <= self._eqtimes[i]:
                     dt = self._eqtimes[i] - self._eqtimes[i-1]
                     alpha = (time - self._eqtimes[i-1]) / dt
-                    return (1.0 - alpha) * profs[i-1] + alpha * profs[i]
+                    return (1.0 - alpha) * np.array(profs[i-1]) + alpha * np.array(profs[i])
             return profs[-1]
 
         for i, t in enumerate(self._times):
@@ -325,7 +356,20 @@ class TokTox:
             self._state['lcfs_geo'][i] = interp_prof(lcfs, t)
             self._state['ffp_prof'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
+            # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
             self._state['ffp_ni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
+
+            self._state['ffp_prof_eqdsk'][i] = self._state['ffp_prof'][i].copy()
+            self._state['pp_prof_eqdsk'][i] = self._state['pp_prof'][i].copy()
+            self._state['p_prof_eqdsk'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(pres_prof, t), 'type': 'linterp'}
+            self._state['pp_prof_eqdsk'][i]['y'] /= self._state['pp_prof_eqdsk'][i]['y'][0]
+            self._state['p_prof_eqdsk'][i]['y'] /= self._state['p_prof_eqdsk'][i]['y'][0]
+            self._state['ffp_prof_eqdsk'][i]['y'] /= self._state['ffp_prof_eqdsk'][i]['y'][0]
+            self._state['q_prof_eqdsk'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(q_prof, t), 'type': 'linterp'}
+
+            # Normalize profiles (disabled – use raw profiles)
+            # self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
+            # self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
 
             self._state['eta_prof'][i]= {
                 'x': self._psi_N.copy(),
@@ -333,6 +377,9 @@ class TokTox:
                 'type': 'linterp',
             }
             
+            self._state['pres'][i] = self._state['p_prof_eqdsk'][i].copy()
+            self._state['fpol'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(fpol_prof, t), 'type': 'linterp'}
+
         # Save seed values from initial equilibria
         self._psi_axis_seed = self._state['psi_axis_tm'].copy()
         self._psi_lcfs_seed = self._state['psi_lcfs_tm'].copy()
@@ -349,6 +396,8 @@ class TokTox:
         self._eccd_heating = None
         self._eccd_loc = None
         self._nbi_loc = None
+        self._ohmic_power = None
+        self._use_generic_current = False
 
         self._nbar = None
         self._n_e = None
@@ -719,7 +768,7 @@ class TokTox:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None):
+    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None, generic_current=False):
         r'''! Set heating sources for Torax.
 
         Ohmic heating is always enabled (it is on by default in BASE_CONFIG).
@@ -734,6 +783,10 @@ class TokTox:
         if eccd is not None and eccd_loc is not None:
             self._eccd_heating = eccd
             self._eccd_loc = eccd_loc
+        if ohmic is not None:
+            self._ohmic_power = ohmic
+        
+        self._use_generic_current = generic_current
 
     def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
@@ -807,7 +860,15 @@ class TokTox:
             self._Ve_min = Ve_min
         if Ve_max is not None:
             self._Ve_max = Ve_max
+    def set_validation_ne(self, ne):
+        self._validation_ne = ne
 
+    def set_validation_Te(self, Te):
+        self._validation_Te = Te
+
+    def set_validation_Ti(self, Ti):
+        self._validation_Ti = Ti
+        
     def set_x_points(self, diverted_times=None, x_point_targets=None, x_point_weight=100.0):
         r'''! Configure diverted window and X-point targets for TM saddle constraints.
 
@@ -1075,6 +1136,8 @@ class TokTox:
             myconfig['sources'].setdefault('generic_heat', {})
             myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
             myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
+
+        if self._use_generic_current:
             myconfig['sources'].setdefault('generic_current', {})
             myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
             myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
@@ -1212,7 +1275,7 @@ class TokTox:
             'last_surface_factor': self._last_surface_factor,
             'n_surfaces': 50,
             'Ip_from_parameters': True,
-            'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': 2}},
+            'geometry_configs': {self._t_init: {'geometry_file': init_eqdsk, 'cocos': self._cocos}},
         }
 
         if self._tx_grid_type == 'n_rho':
@@ -1783,26 +1846,31 @@ class TokTox:
             
             # Pre-calculate all level profiles
             level_profiles = []
-            
-            # Level 0: raw
-            ffp_0, pp_0 = self._level0_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_0, 'pp': pp_0, 'name': 'lv0: raw'})
-            
-            # Level 1: sign flip
-            ffp_1, pp_1 = self._level1_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: sign_flip'})
-            
-            # Level 2: pedestal smoothing (takes p_profile as input) # TODO: read in actual n_rho_ped_top, have to add to state first
-            ffp_2, pp_2 = self._level2_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i])) 
-            level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: pedestal_smoothing'})
-            
-            # Level 3: power flux
-            ffp_3, pp_3 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: power_flux'})
 
-            # Level 4: power flux + pax from initial eqdsk
-            ffp_4, pp_4 = self._level3_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
-            level_profiles.append({'ffp': ffp_4, 'pp': pp_4, 'name': 'lv4: power_flux + pax'})
+            # Level 0: jphi
+            jphi = copy.deepcopy(self._state['j_tot'][i])
+            jphi['type'] = 'jphi-linterp'
+            level_profiles.append({'ffp': jphi, 'pp': copy.deepcopy(pp_prof_raw), 'name': 'lv0: jphi'})
+            
+            # Level 1: raw
+            ffp_1, pp_1 = self._level1_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: raw'})
+            
+            # Level 2: sign flip
+            ffp_2, pp_2 = self._level2_sign_flip(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_2, 'pp': pp_2, 'name': 'lv2: sign_flip'})
+            
+            # Level 3: pedestal smoothing (takes p_profile as input) # TODO: read in actual n_rho_ped_top, have to add to state first
+            ffp_3, pp_3 = self._level3_pedestal_smoothing(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw), copy.deepcopy(self._state['p_prof_tx'][i])) 
+            level_profiles.append({'ffp': ffp_3, 'pp': pp_3, 'name': 'lv3: pedestal_smoothing'})
+            
+            # Level 4: power flux
+            ffp_4, pp_4 = self._level4_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_4, 'pp': pp_4, 'name': 'lv4: power_flux'})
+
+            # Level 5: power flux + pax from initial eqdsk
+            ffp_5, pp_5 = self._level4_power_flux(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
+            level_profiles.append({'ffp': ffp_5, 'pp': pp_5, 'name': 'lv5: power_flux + pax'})
 
             # Try each level
             for level_idx, level_prof in enumerate(level_profiles):
@@ -1829,6 +1897,7 @@ class TokTox:
                                           'ffp': ffp_level, 'pp': pp_level,
                                           'succeeded': False, 'error': str(e)})
 
+
             if not solve_succeeded:
                 self._eqdsk_skip.append(eq_name)
                 skip_coil_update = True
@@ -1838,8 +1907,8 @@ class TokTox:
             if solve_succeeded:
                 with self._quiet_tm():
                     self._state['equil'][i].save_eqdsk(eq_name,
-                        lcfs_pad=0.001, run_info='TokaMaker EQDSK',
-                        cocos=2, nr=300, nz=300, truncate_eq=False)
+                        lcfs_pad=1-self._last_surface_factor, run_info='TokaMaker EQDSK',
+                        cocos=self._cocos, nr=300, nz=300, truncate_eq=self._truncate_eq)
                 self._tm_update(i)
                 # #### temp debug plot
                 # import matplotlib.pyplot as plt
@@ -1936,11 +2005,11 @@ class TokTox:
     # All levels receive deep copies of the raw TORAX profiles (not cumulative).
     # Level 0 is always identity. Add new levels by appending to self._profile_levels.
 
-    def _level0_raw(self, ffp_prof, pp_prof):
+    def _level1_raw(self, ffp_prof, pp_prof):
         r'''! Raw TORAX profiles passed through unchanged.'''
         return ffp_prof, pp_prof
 
-    def _level1_sign_flip(self, ffp_prof, pp_prof):
+    def _level2_sign_flip(self, ffp_prof, pp_prof):
         r'''! Sign-flip clipping: clip each profile to its dominant sign.'''
         def _clip(prof):
             y = prof['y']
@@ -1949,7 +2018,7 @@ class TokTox:
             return {**prof, 'y': y_new}
         return _clip(ffp_prof), _clip(pp_prof)
 
-    def _level2_pedestal_smoothing(self, ffp_prof, pp_prof, p_prof, transition_psi_N = 0.6, gauss_sigma=8, blend_width=0.02, sav_window=41, sav_order=3):
+    def _level3_pedestal_smoothing(self, ffp_prof, pp_prof, p_prof, transition_psi_N = 0.6, gauss_sigma=8, blend_width=0.02, sav_window=41, sav_order=3):
         r'''! Edge smoothing with Gaussian filter: smooth p profile and take derivative for pp_prof.'''
         
         # Extract pressure 'y' values and ensure they're 1D
@@ -1975,7 +2044,7 @@ class TokTox:
         # Return modified pp_prof with smoothed values, ffp_prof unchanged
         return ffp_prof, {**pp_prof, 'y': pp_new_smooth}
 
-    def _level3_power_flux(self, ffp_prof, pp_prof):
+    def _level4_power_flux(self, ffp_prof, pp_prof):
         r'''! Generic power-flux shape, sign matched to raw profile means.'''
         # ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
         # pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
@@ -2042,7 +2111,7 @@ class TokTox:
         self._state['psi_grid_prev_tm'][i] = self._state['equil'][i].get_psi(normalized=False)
         self._psi_warm_start[i] = self._state['equil'][i].get_psi(normalized=False)  # persist across steps
 
-        # TODO: pull LCFS geometry from gs solve (trace_surf often silently fails)
+        # TODO: pull LCFS geometry from tm solve (trace_surf often silently fails)
 
 
     # ─── I/O & Logging ──────────────────────────────────────────────────────────

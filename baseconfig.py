@@ -123,8 +123,7 @@ BASE_CONFIG = {
         # 'n_e_ped': 0.85, # pedestal top n_e in units of fGW
         # 'rho_norm_ped_top': 0.95,  # set ped top location in normalized radius
     },
-    # 'transport': {
-    #     # updated 2026-04-01 using TORAX team recommendations (via Oak, in docs, not used when pedestal is set)
+    # 'transport': { # updated 2026-04-01 using TORAX team recommendations (via Oak, in docs, not used when pedestal is set)
     #     'model_name': 'combined',
     #     'transport_models': [
     #         # Base model: QLKNN applied everywhere (default ADD)
@@ -145,8 +144,7 @@ BASE_CONFIG = {
     #         },
     #     ],
     # },
-    'transport': {
-        # old
+    'transport': { # old
         'model_name': 'qlknn', 
         # set inner core transport coefficients (ad-hoc MHD/EM transport)
         'apply_inner_patch': True, # TODO: scan chi?
