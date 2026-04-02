@@ -977,7 +977,8 @@ class TokTox:
             }
         else:
             # For times where TM succeeded last loop, use the TM-solved EQDSK.
-            # For times where TM failed, fall back to the nearest solved EQDSK and
+            # For times where TM failed, omit from the map (TORAX interpolates from neighbors),
+            # except t=0 which always gets a seed fallback (see below).
             eqtimes_arr = np.array(self._eqtimes)
             full_eqdsk_map = {}
             n_tm = 0
@@ -987,6 +988,18 @@ class TokTox:
                 if tm_ok:
                     full_eqdsk_map[t] = eqdsk
                     n_tm += 1
+            # If i=0 TM failed, always fall back to the seed EQDSK so TORAX
+            # has a valid initial geometry. Other failed timesteps are left out of the
+            # map and TORAX interpolates from neighboring solved entries.
+            t0 = self._times[0]
+            if t0 not in full_eqdsk_map:
+                seed_eqdsk = self._init_files[0]
+                if self._test_eqdsk(seed_eqdsk):
+                    full_eqdsk_map[t0] = seed_eqdsk
+                    self._log(f'Loop {self._current_loop}: TM failed at t=0, falling back to seed EQDSK for t=0.')
+                else:
+                    self._log(f'Warning: Loop {self._current_loop}: TM failed at t=0 and seed EQDSK is also invalid.')
+
             if n_tm == 0:
                 self._log(f'Warning: Loop {self._current_loop}: no valid TM EQDSKs from loop {self._current_loop-1}, using all seed EQDSKs.')
             else:
@@ -1749,8 +1762,7 @@ class TokTox:
             omp_point = lcfs[omp_idx:omp_idx+1, :]  # shape (1, 2)
             # Set lcfs psi value target (from torax) only at midplane outboard side of lcfs.
             self._tm.set_psi_constraints(omp_point, targets=np.array([lcfs_psi_target]),
-                                         weights=np.array([LCFS_WEIGHT * 0.1])) # psi value target
-
+                                         weights=np.array([LCFS_WEIGHT * 10.])) # psi value target
             
             
             self._tm.update_settings() # TODO what does this do?
