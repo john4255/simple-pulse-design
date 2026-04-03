@@ -108,10 +108,12 @@ BASE_CONFIG = {
         #   'S_total': 5e20,
         # },
     },
+    'mhd': {'sawtooth': {'redistribution_model': {'model_name': 'simple'},
+                        'trigger_model': {'minimum_radius': 0.1,
+                                            'model_name': 'simple',
+                                            's_critical': 0.4}}},
     'neoclassical': {
-        'bootstrap_current': {
-            'bootstrap_multiplier': 0.95,
-        },
+        'bootstrap_current': {}, # turns on bootstrap current with default parameters 
     },
     'pedestal': {
         'model_name': 'set_T_ped_n_ped',

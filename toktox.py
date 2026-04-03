@@ -102,13 +102,13 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2, truncate_eq=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
         @param eqtimes Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
-        @param dt Time step (s).
+        @param tx_dt Time step (s) of TORAX simulation.
         @param times Time points to sample output at.
         @param last_surface_factor Last surface factor for Torax.
         @param n_rho Number of grid cells for torax.
@@ -131,7 +131,7 @@ class TokTox:
         self._init_files = g_eqdsk_arr
         self._t_init = t_init
         self._t_final = t_final
-        self._dt = dt # TORAX timestep
+        self._dt = tx_dt # TORAX timestep
         self._prescribed_currents = prescribed_currents
         self._last_surface_factor = last_surface_factor
         self._n_rho = n_rho # resolution of TORAX grid
@@ -306,8 +306,8 @@ class TokTox:
             pax.append(g['pres'][0])
             Ip.append(abs(g['ip']))
 
-            psi_axis.append(abs(g['psimag']))
-            psi_lcfs.append(abs(g['psibry'])) # EQDSK stored psi in Wb/rad, same as stored in _state
+            psi_axis.append(g['psimag'])
+            psi_lcfs.append(g['psibry']) # EQDSK psi is stored in Wb/rad, same units as _state
 
             lcfs.append(interp_lcfs(g['rzout']))
 
@@ -686,6 +686,31 @@ class TokTox:
             'symmetry_weight': symmetry_weight,
             'disable_virtual_vsc': disable_virtual_vsc, 'vsc_weight': vsc_weight,
         }
+
+    def _get_i0_coil_targets(self):
+        r'''! Resolve i=0 coil-current targets for the current TM loop.
+
+        Behavior:
+          1. Loop 1: force zero coil-current targets (None) so i=0 is
+             constrained by LCFS/psi targets rather than seeded coil currents.
+          2. Loop 2+: use previous loop solved equilibrium at i=0 when available.
+          3. Fallback: None (caller uses zeros in set_coil_reg).
+
+        @return Tuple (targets_dict_or_None, source_label).
+        '''
+        if self._current_loop <= 1:
+            return None, 'forced to zero on loop 1'
+
+        eq0 = self._state.get('equil', {}).get(0)
+        if eq0 is not None:
+            try:
+                coil_targets, _ = eq0.get_coil_currents()
+                if coil_targets:
+                    return coil_targets, 'previous loop i=0 equilibrium'
+            except Exception as e:
+                self._log(f'TM: failed to pull i=0 coil targets from previous equilibrium: {e}')
+
+        return None, 'no previous loop i=0 equilibrium available'
 
 
     # ─── Property Setters ───────────────────────────────────────────────────────
@@ -1728,11 +1753,18 @@ class TokTox:
         # Reset coil regularization to i=0 targets so stale end-of-loop targets
         # from the previous loop don't carry over.
         cfg = getattr(self, '_coil_reg_config', {})
+        reg_kwargs = {k: v for k, v in cfg.items() if k != 'targets'} if cfg else {}
+        prev_coil_targets = None
         if cfg:
             if self._prescribed_currents:
-                self.set_coil_reg(i=0, **{k: v for k, v in cfg.items() if k != 'targets'})
+                self.set_coil_reg(i=0, **reg_kwargs)
             else:
-                self.set_coil_reg(targets=None, **{k: v for k, v in cfg.items() if k != 'targets'})
+                prev_coil_targets, target_src = self._get_i0_coil_targets()
+                if prev_coil_targets is None:
+                    self._log(f'\tTM: i=0 coil targets {target_src}; using zero targets with regularization weight.')
+                else:
+                    self._log(f'\tTM: i=0 coil targets seeded from {target_src}.')
+                self.set_coil_reg(targets=prev_coil_targets, **reg_kwargs)
 
         # Warm-start psi at t=0: set psi_dt so eddy-current contribution is negligible.
         if 0 in self._psi_warm_start and self._psi_warm_start[0] is not None:
@@ -1848,9 +1880,9 @@ class TokTox:
             level_profiles = []
 
             # Level 0: jphi
-            jphi = copy.deepcopy(self._state['j_tot'][i])
-            jphi['type'] = 'jphi-linterp'
-            level_profiles.append({'ffp': jphi, 'pp': copy.deepcopy(pp_prof_raw), 'name': 'lv0: jphi'})
+            # jphi = copy.deepcopy(self._state['j_tot'][i])
+            # jphi['type'] = 'jphi-linterp'
+            # level_profiles.append({'ffp': jphi, 'pp': copy.deepcopy(pp_prof_raw), 'name': 'lv0: jphi'})
             
             # Level 1: raw
             ffp_1, pp_1 = self._level1_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
@@ -1975,13 +2007,11 @@ class TokTox:
                 _pbar.set_postfix_str(f't={t:.2f}s FAIL', refresh=False)
 
             if self._prescribed_currents:
-                if i < len(self._times):
-                    cfg = getattr(self, '_coil_reg_config', {})
-                    self.set_coil_reg(i=i+1, **{k: v for k, v in cfg.items() if k != 'targets'})
+                if i + 1 < len(self._times):
+                    self.set_coil_reg(i=i+1, **reg_kwargs)
             elif not skip_coil_update:
-                coil_targets, _ = self._state['equil'][i].get_coil_currents()
-                cfg = getattr(self, '_coil_reg_config', {})
-                self.set_coil_reg(targets=coil_targets, **{k: v for k, v in cfg.items() if k != 'targets'})
+                prev_coil_targets, _ = self._state['equil'][i].get_coil_currents()
+                self.set_coil_reg(targets=prev_coil_targets, **reg_kwargs)
 
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi
         consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])

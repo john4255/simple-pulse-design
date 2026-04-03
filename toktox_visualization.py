@@ -760,7 +760,7 @@ def plot_scalars(tt, save_path=None, display=True):
     ax2.plot(times, s['f_GW'], 'm--', markersize=3, label='f_GW_line')
     ax2.plot(times, s['f_GW_vol'], 'c--', markersize=3, label='f_GW_vol')
     ax2.set_ylabel('f_GW')
-    ax2.set_ylim(0, 1)
+    # ax2.set_ylim(0, 1)
     ax2.legend(fontsize=8)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
