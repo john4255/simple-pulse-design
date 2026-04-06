@@ -393,8 +393,8 @@ class TokTox:
         self._Zeff = None
 
         self._nbi_heating = None
-        self._eccd_heating = None
-        self._eccd_loc = None
+        self._ecrh_heating = None
+        self._ecrh_loc = None
         self._nbi_loc = None
         self._ohmic_power = None
         self._use_generic_current = False
@@ -793,25 +793,25 @@ class TokTox:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, eccd=None, eccd_loc=None, ohmic=None, generic_current=False):
+    def set_heating(self, nbi=None, nbi_loc=None, ecrh=None, ecrh_loc=None, ohmic=None, nbi_current=False):
         r'''! Set heating sources for Torax.
 
         Ohmic heating is always enabled (it is on by default in BASE_CONFIG).
         @param nbi NBI heating (dictionary of {time: power_in_watts}).
         @param nbi_loc NBI deposition location (normalized rho).
-        @param eccd ECCD heating (dictionary of {time: power_in_watts}).
-        @param eccd_loc ECCD deposition location (normalized rho).
+        @param ecrh ECRH heating (dictionary of {time: power_in_watts}).
+        @param ecrh_loc ECRH deposition location (normalized rho).
         '''
         if nbi is not None and nbi_loc is not None:
             self._nbi_heating = nbi
             self._nbi_loc = nbi_loc
-        if eccd is not None and eccd_loc is not None:
-            self._eccd_heating = eccd
-            self._eccd_loc = eccd_loc
+        if ecrh is not None and ecrh_loc is not None:
+            self._ecrh_heating = ecrh
+            self._ecrh_loc = ecrh_loc
         if ohmic is not None:
             self._ohmic_power = ohmic
         
-        self._use_generic_current = generic_current
+        self._use_nbi_current = nbi_current
 
     def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
@@ -1149,11 +1149,11 @@ class TokTox:
             myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('ei_exchange', {})
 
-        if self._eccd_loc is not None:
+        if self._ecrh_loc is not None:
             myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('ecrh', {})
-            myconfig['sources']['ecrh']['P_total'] = self._eccd_heating
-            myconfig['sources']['ecrh']['gaussian_location'] = self._eccd_loc
+            myconfig['sources']['ecrh']['P_total'] = self._ecrh_heating
+            myconfig['sources']['ecrh']['gaussian_location'] = self._ecrh_loc
 
         if self._nbi_heating is not None:
             nbi_times, nbi_pow = zip(*self._nbi_heating.items())    
@@ -1162,10 +1162,11 @@ class TokTox:
             myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
             myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
 
-        if self._use_generic_current:
-            myconfig['sources'].setdefault('generic_current', {})
-            myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
-            myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
+            if self._use_nbi_current:
+                myconfig['sources'].setdefault('generic_current', {})
+                myconfig['sources']['generic_current']['use_absolute_current'] = True
+                myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
+                myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
 
         if self._T_i_ped is not None:
             myconfig.setdefault('pedestal', {})
@@ -1795,23 +1796,7 @@ class TokTox:
                           'y': self._state['pp_prof'][i]['y'].copy(),
                           'type': self._state['pp_prof'][i]['type']}
             
-            # Initialize psi from geometry parameters # TODO this is probably not doing anything, remove (and test)
-            # Using the seed EQDSK geometry should give a good initial guess
-            self._tm.init_psi(self._state['R0_mag'][i],
-                                         self._state['Z'][i],
-                                         self._state['a'][i],
-                                         self._state['kappa'][i],
-                                         self._state['delta'][i])
 
-            # Warm-start: prefer previous loop's converged solution for this
-            # timestep; fall back to the previous timestep's solution within
-            # the current loop (adjacent-time warm-start).
-            if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
-                # self._log(f'\tTM: Warm-starting psi at t={t} from previous loop converged solution.')
-                self._tm.set_psi(self._psi_warm_start[i])
-            elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
-                # self._log(f'\tTM: Warm-starting psi at t={t} from adjacent timestep (i-1) within current loop.')
-                self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
 
 
@@ -1909,6 +1894,15 @@ class TokTox:
                 level_name = level_prof['name']
                 ffp_level = level_prof['ffp']
                 pp_level = level_prof['pp']
+
+                # Initialize psi from geometry parameters. Fallback initial guess, usually overwritten by warm-start.
+                self._tm.init_psi(self._state['R0_mag'][i], self._state['Z'][i], self._state['a'][i], self._state['kappa'][i], self._state['delta'][i])
+
+                # Warm-start: use previous loop's converged solution to initialize psi; fall back to the previous timestep's solution within current loop if previous step unavailable
+                if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
+                    self._tm.set_psi(self._psi_warm_start[i])
+                elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
+                    self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
                 try:
                     self._tm.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,

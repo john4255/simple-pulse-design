@@ -176,9 +176,13 @@ def profile_plot(tt, i, t, save_path=None, display=True):
     ax.set_title('Current densities')
     ax.plot(s['j_tot'][i]['x'], s['j_tot'][i]['y'] / 1e6, 'k--', label=r'$j_{tot}$', linewidth=2)
     ax.plot(s['j_ohmic'][i]['x'], s['j_ohmic'][i]['y'] / 1e6, 'r-', label=r'$j_{ohmic}$', linewidth=1.5)
-    ax.plot(s['j_ni'][i]['x'], s['j_ni'][i]['y'] / 1e6, 'b-', label=r'$j_{NI}$', linewidth=1.5)
-    if i in s['j_bootstrap']:
+    if i in s.get('j_ni', {}):
+        ax.plot(s['j_ni'][i]['x'], s['j_ni'][i]['y'] / 1e6, 'b--', label=r'$j_{NI}$', linewidth=1.5)
+    if i in s.get('j_bootstrap', {}):
         ax.plot(s['j_bootstrap'][i]['x'], s['j_bootstrap'][i]['y'] / 1e6, 'g-', label=r'$j_{bootstrap}$', linewidth=1.5)
+    if i in s.get('j_generic_current', {}):
+        ax.plot(s['j_generic_current'][i]['x'], s['j_generic_current'][i]['y'] / 1e6,
+                color='darkorange', linestyle='-', label=r'$j_{gen}$', linewidth=1.5)
     ax.set_ylabel(r'$j$ [MA/m²]')
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.legend(fontsize=9)
