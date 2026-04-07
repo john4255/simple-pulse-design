@@ -658,16 +658,15 @@ def plot_profile_evolution(tt, save_path=None, display=True):
                 ax.plot(s[key][i_t]['x'], s[key][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
         ax.set_xlim([0, 1])
 
-    # q profile from results
+    # q profile from state
     ax = axes[1, 2]
     ax.set_title('q')
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$q$')
-    r = tt._results
     for i_t, t_val in enumerate(times):
         color = cmap(norm(t_val))
-        if t_val in r.get('q', {}):
-            ax.plot(r['q'][t_val]['x'], r['q'][t_val]['y'], color=color, linewidth=1.5, alpha=0.8)
+        if i_t in s.get('q_prof_tx', {}):
+            ax.plot(s['q_prof_tx'][i_t]['x'], s['q_prof_tx'][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
     ax.set_xlim([0, 1])
 
     axes[1, 3].axis('off')
@@ -689,7 +688,6 @@ def plot_scalars(tt, save_path=None, display=True):
     from scipy.interpolate import interp1d
 
     s = tt._state
-    r = tt._results
     times = tt._times
 
     fig, axes = plt.subplots(4, 3, figsize=(16, 12))
@@ -739,24 +737,20 @@ def plot_scalars(tt, save_path=None, display=True):
     # (1,0): Q_fusion
     ax = axes[1, 0]
     ax.set_title('Q_fusion')
-    if 'Q' in r:
-        ax.plot(r['Q']['x'], r['Q']['y'], '-o', markersize=3, label='Q')
-    if 'E_fusion' in r:
-        ax2 = ax.twinx()
-        ax2.plot(r['E_fusion']['x'], r['E_fusion']['y'], '--', color='crimson', markersize=3, label='E_fusion')
-        ax2.set_ylabel('E_fusion')
-        ax2.legend(fontsize=8, loc='upper right')
+    ax.plot(times, s['Q_fusion'], '-o', markersize=3, label='Q')
+    ax2 = ax.twinx()
+    ax2.plot(times, s['E_fusion'], '--', color='crimson', markersize=3, label='E_fusion')
+    ax2.set_ylabel('E_fusion')
+    ax2.legend(fontsize=8, loc='upper right')
     ax.set_xlabel('Time [s]')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc='upper left')
 
-    # (1,1): n_e_line_avg
+    # (1,1): n_e
     ax = axes[1, 1]
-    ax.set_title(r'$\bar{n}_e$ line avg [m$^{-3}$]')
-    if 'n_e_line_avg' in r:
-        ax.plot(r['n_e_line_avg']['x'], r['n_e_line_avg']['y'], '-o', markersize=3, label='n_e line avg')
-    if 'n_e_core' in r:
-        ax.plot(r['n_e_core']['x'], r['n_e_core']['y'], '--', markersize=3, label='n_e core')
+    ax.set_title(r'$n_e$ [m$^{-3}$]')
+    ax.plot(times, s['n_e_line_avg'], '-o', markersize=3, label='n_e line avg')
+    ax.plot(times, s['n_e_core'], '--', markersize=3, label='n_e core')
     ne_edge_y = [s['n_e'][ii]['y'][-1] if ii in s.get('n_e', {}) else np.nan for ii in range(len(times))]
     ax.plot(times, ne_edge_y, ':', marker='s', markersize=3, label='n_e edge')
     ax.set_xlabel('Time [s]')
@@ -764,18 +758,14 @@ def plot_scalars(tt, save_path=None, display=True):
     ax2.plot(times, s['f_GW'], 'm--', markersize=3, label='f_GW_line')
     ax2.plot(times, s['f_GW_vol'], 'c--', markersize=3, label='f_GW_vol')
     ax2.set_ylabel('f_GW')
-    # ax2.set_ylim(0, 1)
     ax2.legend(fontsize=8)
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    # (1,2): T_e_line_avg
+    # (1,2): T_e
     ax = axes[1, 2]
-    ax.set_title(r'$T_e$ line avg [keV]')
-    if 'T_e_line_avg' in r:
-        ax.plot(r['T_e_line_avg']['x'], r['T_e_line_avg']['y'], '-o', markersize=3, label='T_e line avg')
-    if 'T_e_core' in r:
-        ax.plot(r['T_e_core']['x'], r['T_e_core']['y'], '--', markersize=3, label='T_e core')
+    ax.set_title(r'$T_e$ [keV]')
+    ax.plot(times, s['T_e_core'], '--', markersize=3, label='T_e core')
     te_edge_y = [s['T_e'][ii]['y'][-1] if ii in s.get('T_e', {}) else np.nan for ii in range(len(times))]
     ax.plot(times, te_edge_y, ':', marker='s', markersize=3, label='T_e edge')
     ax.set_xlabel('Time [s]')
@@ -788,8 +778,7 @@ def plot_scalars(tt, save_path=None, display=True):
     for key, label, fmt in [('P_ohmic_e', 'P_ohmic_e', 'r-o'), ('P_radiation_e', 'P_radiation_e', 'm--'),
                              ('P_SOL_total', 'P_SOL_total', 'c--'), ('P_alpha_total', 'P_alpha_total', 'g-.'),
                              ('P_aux_total', 'P_aux_total', 'y-.')]:
-        if key in r:
-            ax.plot(r[key]['x'], r[key]['y'], fmt, markersize=3, label=label)
+        ax.plot(times, s[key], fmt, markersize=3, label=label)
     ax.set_xlabel('Time [s]')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -797,8 +786,7 @@ def plot_scalars(tt, save_path=None, display=True):
     # (2,1): beta_N
     ax = axes[2, 1]
     ax.set_title('beta_N')
-    if 'beta_N' in r:
-        ax.plot(r['beta_N']['x'], r['beta_N']['y'], '-o', markersize=3, label='beta_N TX')
+    ax.plot(times, s['beta_N_tx'], '-o', markersize=3, label='beta_N TX')
     ax.plot(times, s['beta_N_tm'], '--o', markersize=3, label='beta_N TM')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('beta_N')
@@ -808,8 +796,7 @@ def plot_scalars(tt, save_path=None, display=True):
     # (2,2): l_i
     ax = axes[2, 2]
     ax.set_title('l_i (li3)')
-    if 'li3' in r:
-        ax.plot(r['li3']['x'], r['li3']['y'], '-o', markersize=3, label='l_i TX')
+    ax.plot(times, s['li3'], '-o', markersize=3, label='l_i TX')
     ax.plot(times, s['l_i_tm'], '--o', markersize=3, label='l_i TM')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('l_i')
@@ -1092,7 +1079,6 @@ def _draw_equil_from_dir(ax, tt, loop, idx, t_now, equil_dir):
 def _draw_scalars_movie(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
     """Draw the 6 scalar time-series panels for a movie frame."""
     s = tt._state
-    r = tt._results
 
     # 1: Ip and l_i
     ax = axes[0]
@@ -1141,14 +1127,13 @@ def _draw_scalars_movie(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
         ('P_SOL_total', 'SOL', COLORS_MULTI[4]),
     ]
     for key, label, clr in pkeys:
-        if key in r:
-            ax.plot(r[key]['x'], np.array(r[key]['y']) / 1e6, color=clr, ls=LS_PRI, lw=LW, label=label)
+        if key in s:
+            ax.plot(times, np.array(s[key]) / 1e6, color=clr, ls=LS_PRI, lw=LW, label=label)
     ax.set_ylabel('Power [MW]', fontsize=LABEL_FS)
     ax.legend(fontsize=LEGEND_FS, loc='upper left', ncol=2)
     _style(ax)
     ax2 = ax.twinx()
-    if 'Q' in r:
-        ax2.plot(r['Q']['x'], r['Q']['y'], color='indigo', ls=LS_SEC, lw=LW, label='Q')
+    ax2.plot(times, s['Q_fusion'], color='indigo', ls=LS_SEC, lw=LW, label='Q')
     ax2.set_ylabel('Q', fontsize=LABEL_FS)
     ax2.tick_params(labelsize=TICK_FS)
     ax2.legend(fontsize=LEGEND_FS, loc='upper right')
@@ -1508,7 +1493,6 @@ def summary(tt):
 
     Returns a dict with summary quantities.
     """
-    r = tt._results
     s = tt._state
     times = np.array(tt._times)
 
@@ -1519,49 +1503,34 @@ def summary(tt):
     out = {}
 
     # Fusion
-    if 'Q' in r:
-        Q_arr = np.array(r['Q']['y'])
-        Q_times = np.array(r['Q']['x'])
-        out['Q_max'] = float(np.nanmax(Q_arr))
-        out['Q_max_time'] = float(Q_times[np.nanargmax(Q_arr)])
-        # Flattop average Q
-        if np.any(ft_mask):
-            ft_start, ft_end = times[ft_mask][0], times[ft_mask][-1]
-            ft_q_mask = (Q_times >= ft_start) & (Q_times <= ft_end)
-            out['Q_flattop_avg'] = float(np.nanmean(Q_arr[ft_q_mask])) if np.any(ft_q_mask) else None
-        else:
-            out['Q_flattop_avg'] = None
-
-    if 'E_fusion' in r:
-        out['E_fusion_total_MJ'] = float(np.array(r['E_fusion']['y'])[-1] / 1e6)
+    Q_arr = np.array(s['Q_fusion'])
+    out['Q_max'] = float(np.nanmax(Q_arr))
+    out['Q_max_time'] = float(times[np.nanargmax(Q_arr)])
+    if np.any(ft_mask):
+        out['Q_flattop_avg'] = float(np.nanmean(Q_arr[ft_mask]))
+    else:
+        out['Q_flattop_avg'] = None
+    out['E_fusion_total_MJ'] = float(s['E_fusion'][-1] / 1e6)
 
     # Ip
     out['Ip_max_MA'] = float(np.max(np.abs(s['Ip_tm'])) / 1e6)
 
     # Beta
-    if 'beta_N' in r:
-        out['beta_N_max'] = float(np.nanmax(r['beta_N']['y']))
+    out['beta_N_max'] = float(np.nanmax(s['beta_N_tx']))
     out['beta_N_tm_max'] = float(np.nanmax(s['beta_N_tm']))
 
     # H98
-    if 'H98' in r:
-        H98_arr = np.array(r['H98']['y'])
-        H98_times = np.array(r['H98']['x'])
-        out['H98_max'] = float(np.nanmax(H98_arr))
-        if np.any(ft_mask):
-            ft_start, ft_end = times[ft_mask][0], times[ft_mask][-1]
-            ft_h_mask = (H98_times >= ft_start) & (H98_times <= ft_end)
-            out['H98_flattop_avg'] = float(np.nanmean(H98_arr[ft_h_mask])) if np.any(ft_h_mask) else None
+    H98_arr = np.array(s['H98'])
+    out['H98_max'] = float(np.nanmax(H98_arr))
+    if np.any(ft_mask):
+        out['H98_flattop_avg'] = float(np.nanmean(H98_arr[ft_mask]))
 
     # Temperatures
-    if 'T_e_core' in r:
-        out['T_e_core_max_keV'] = float(np.nanmax(r['T_e_core']['y']))
-    if 'T_i_core' in r:
-        out['T_i_core_max_keV'] = float(np.nanmax(r['T_i_core']['y']))
+    out['T_e_core_max_keV'] = float(np.nanmax(s['T_e_core']))
+    out['T_i_core_max_keV'] = float(np.nanmax(s['T_i_core']))
 
     # Density
-    if 'n_e_line_avg' in r:
-        out['n_e_line_avg_max'] = float(np.nanmax(r['n_e_line_avg']['y']))
+    out['n_e_line_avg_max'] = float(np.nanmax(s['n_e_line_avg']))
 
     # Greenwald fraction
     out['f_GW_max'] = float(np.nanmax(s['f_GW']))
@@ -1575,10 +1544,8 @@ def summary(tt):
     out['flux_consumed_Wb'] = float((psi_lcfs_tm[-1] - psi_lcfs_tm[0]) * 2 * np.pi)
 
     # Power
-    if 'P_alpha_total' in r:
-        out['P_fusion_max_MW'] = float(np.nanmax(r['P_alpha_total']['y']) / 1e6 * 5)  # P_fusion = 5 * P_alpha
-    if 'P_ohmic_e' in r:
-        out['P_ohmic_max_MW'] = float(np.nanmax(r['P_ohmic_e']['y']) / 1e6)
+    out['P_fusion_max_MW'] = float(np.nanmax(s['P_alpha_total']) / 1e6 * 5)  # P_fusion = 5 * P_alpha
+    out['P_ohmic_max_MW'] = float(np.nanmax(s['P_ohmic_e']) / 1e6)
 
     # Internal inductance
     out['l_i_flattop_avg'] = float(np.nanmean(s['l_i_tm'][ft_mask])) if np.any(ft_mask) else None

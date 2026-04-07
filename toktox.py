@@ -185,8 +185,6 @@ class TokTox:
         self._state['ffp_prof_eqdsk'] = {}
         self._state['pp_prof_eqdsk'] = {}
         self._state['p_prof_eqdsk'] = {}
-        self._state['ffp_prof_save'] = {}
-        self._state['pp_prof_save'] = {}
         self._state['pres'] = {}
         self._state['fpol'] = {}
         self._state['eta_prof'] = {}
@@ -238,6 +236,23 @@ class TokTox:
         self._state['vol_tm'] = {}
         self._state['vol_tx'] = {}  # volume profile vs psi
         self._state['vol_tx_lcfs'] = np.zeros(len(self._times))  # volume at LCFS (scalar)
+
+        # Scalar timeseries from TORAX (populated per-timepoint in _tx_update)
+        self._state['Q_fusion'] = np.zeros(len(self._times))
+        self._state['E_fusion'] = np.zeros(len(self._times))
+        self._state['n_e_line_avg'] = np.zeros(len(self._times))
+        self._state['H98'] = np.zeros(len(self._times))
+        self._state['li3'] = np.zeros(len(self._times))
+        self._state['P_ohmic_e'] = np.zeros(len(self._times))
+        self._state['P_radiation_e'] = np.zeros(len(self._times))
+        self._state['P_SOL_total'] = np.zeros(len(self._times))
+        self._state['P_alpha_total'] = np.zeros(len(self._times))
+        self._state['P_aux_total'] = np.zeros(len(self._times))
+
+        # Core values (profile at rho=0, one per timepoint)
+        self._state['T_e_core'] = np.zeros(len(self._times))
+        self._state['T_i_core'] = np.zeros(len(self._times))
+        self._state['n_e_core'] = np.zeros(len(self._times))
 
         self._results['lcfs_geo'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -924,35 +939,66 @@ class TokTox:
 
     # ─── TORAX (TX) Methods ───────────────────────────────────────────────────
 
-    def _pull_tx_onto_psi(self, data_tree, var_name, time, load_into_state='state', normalize=False, profile_type='linterp'):
-        r'''! Load TORAX variable onto psi_norm grid.
+    # ── Time-averaging helpers ──────────────────────────────────────────────
 
-        TORAX normalises its psi so that rho=1 maps to psi_N=1 internally,
-        but that boundary corresponds to psi_N = last_surface_factor in the
-        real equilibrium.  This method rescales the TORAX psi axis so that
-        data are placed correctly in [0, last_surface_factor] on self._psi_N.
+    def _get_time_window(self, time, tx_times):
+        r'''! Return the (t_start, t_end) averaging window for a given timepoint.
 
-        Fill-value policy for the region outside the TORAX domain:
-          * Left  (psi_N < first data point): hold first data value (avoids
-            spurious zeros on-axis for cell-centred quantities like P_ohmic).
-          * Right (psi_N > last_surface_factor):
-              - j-profiles (profile_type='jphi-linterp'): fill with 0
-                (current density vanishes at the separatrix).
-              - All other profiles (T, n, p, FF', p'): hold the edge value.
+        Respects self._t_ave_toggle, self._t_ave_window, self._t_ave_causal,
+        and self._t_ave_ignore_start.  If averaging is disabled for this
+        timepoint the returned window collapses to (time, time).
 
-        @param data_tree TORAX output data tree.
-        @param var_name Name of variable (e.g., 'T_i', 'j_ohmic', 'FFprime').
-        @param time Time value to extract.
-        @param load_into_state If 'state' returns dict to load into '_state'; else returns plain array.
-        @param normalize If True, normalize profile by the core value.
-        @param profile_type Type key: 'linterp' or 'jphi-linterp'. Default 'linterp'.
+        @param time     The target timepoint (seconds).
+        @param tx_times Sorted numpy array of all available TORAX times.
+        @return (t_start, t_end) — inclusive bounds for the averaging window.
         '''
+        # Check if averaging is active for this timepoint
+        if self._t_ave_toggle == 'off':
+            return (time, time)
+        if self._t_ave_toggle == 'flattop':
+            # Inline flattop check: only average when inside detected flat-top
+            if not hasattr(self, '_flattop') or not np.any(self._flattop):
+                return (time, time)
+            ft_times = np.array(self._times)[self._flattop]
+            if not (ft_times[0] <= time <= ft_times[-1]):
+                return (time, time)
+        # 'pulse' → always average
 
-        # Extract variable from profiles
+        half = self._t_ave_window / 2.0
+        if self._t_ave_causal:
+            t_start = time - self._t_ave_window
+            t_end   = time
+        else:
+            t_start = time - half
+            t_end   = time + half
+
+        # Clamp to available data range
+        t_start = max(t_start, float(tx_times[0]))
+        t_end   = min(t_end,   float(tx_times[-1]))
+
+        # Enforce ignore-start: averaging window must not dip below this threshold
+        t_earliest = float(tx_times[0]) + self._t_ave_ignore_start
+        t_start = max(t_start, t_earliest)
+
+        # If the window collapsed (e.g. very early in the pulse), just use the
+        # single requested timepoint so we still return something sensible.
+        if t_start > t_end:
+            return (time, time)
+
+        return (t_start, t_end)
+
+    # ── Profile extraction ──────────────────────────────────────────────────
+
+    def _interp_profile_onto_psi(self, data_tree, var_name, time, profile_type='linterp'):
+        r'''! Interpolate a single TORAX profile snapshot onto self._psi_N.
+
+        This is the inner workhorse — no averaging, just one timeslice.
+        Returns a plain numpy array on self._psi_N.
+        '''
         var = getattr(data_tree.profiles, var_name)
         var_data = var.sel(time=time, method='nearest').to_numpy()
 
-        # Automatically detect which rho coordinate this variable uses
+        # Detect rho coordinate
         if 'rho_cell_norm' in var.coords:
             grid = 'rho_cell_norm'
         elif 'rho_face_norm' in var.coords:
@@ -962,15 +1008,12 @@ class TokTox:
         else:
             raise ValueError(f"Variable {var_name} does not have a recognized rho coordinate")
 
-        # Get psi_norm on rho_face_norm grid and psi on rho_norm grid
+        # Psi mapping
         psi_norm_face = data_tree.profiles.psi_norm.sel(time=time, method='nearest').to_numpy()
         psi_rho_norm = data_tree.profiles.psi.sel(time=time, method='nearest').to_numpy()
         psi_norm_rho_norm = (psi_rho_norm - psi_rho_norm[0]) / (psi_rho_norm[-1] - psi_rho_norm[0])
-
-        # Correct second element to avoid degeneracy from zero-gradient BC at core
         psi_norm_rho_norm[1] = (psi_norm_face[0] + psi_norm_face[1]) / 2.0
 
-        # Convert psi to same grid as variable (TORAX internal: 0 → 1)
         if grid == 'rho_cell_norm':
             psi_on_grid = psi_norm_rho_norm[1:-1]
         elif grid == 'rho_face_norm':
@@ -978,39 +1021,181 @@ class TokTox:
         elif grid == 'rho_norm':
             psi_on_grid = psi_norm_rho_norm
 
-        # Rescale to real psi_N: TORAX's domain ceiling is psi_N = last_surface_factor.
         psi_on_grid_real = psi_on_grid * self._last_surface_factor
 
-        # Fill values outside the TORAX domain.
-        #   Left  (axis): hold the first available data value.
-        #   Right (beyond last_surface_factor): 0 for j-profiles, edge value for all others.
         left_fill  = float(var_data[0])
         right_fill = 0.0 if profile_type == 'jphi-linterp' else float(var_data[-1])
 
-        # Interpolate onto the TokTox psi_N grid
-        data_on_psi = interp1d(psi_on_grid_real, var_data, kind='linear',
-                               fill_value=(left_fill, right_fill),
-                               bounds_error=False)(self._psi_N)
+        return interp1d(psi_on_grid_real, var_data, kind='linear',
+                        fill_value=(left_fill, right_fill),
+                        bounds_error=False)(self._psi_N)
+
+    def _extract_tx_profile(self, data_tree, var_name, time, load_into_state='state',
+                            normalize=False, profile_type='linterp'):
+        r'''! Extract a TORAX profile onto self._psi_N with optional time-averaging.
+
+        Replaces the former _pull_tx_onto_psi.  When time-averaging is active
+        the profile is interpolated at every TORAX timestep inside the window
+        and the results are averaged pointwise on the psi_N grid.
+
+        @param data_tree     TORAX output data tree.
+        @param var_name      Name of variable (e.g., 'T_i', 'j_ohmic', 'FFprime').
+        @param time          Target time value.
+        @param load_into_state  'state' → return dict; else return plain array.
+        @param normalize     If True, normalize profile by the core value.
+        @param profile_type  'linterp' or 'jphi-linterp'.
+        '''
+        tx_times = data_tree.profiles.psi.coords['time'].values
+        t_start, t_end = self._get_time_window(time, tx_times)
+
+        if t_start == t_end:
+            # No averaging — single snapshot
+            data_on_psi = self._interp_profile_onto_psi(data_tree, var_name, time, profile_type)
+        else:
+            # Collect all TORAX timesteps inside the window
+            mask = (tx_times >= t_start) & (tx_times <= t_end)
+            win_times = tx_times[mask]
+            if len(win_times) == 0:
+                data_on_psi = self._interp_profile_onto_psi(data_tree, var_name, time, profile_type)
+            else:
+                stack = np.stack([
+                    self._interp_profile_onto_psi(data_tree, var_name, wt, profile_type)
+                    for wt in win_times
+                ])
+                data_on_psi = np.mean(stack, axis=0)
 
         # Normalize if requested
         if normalize:
-            if grid == 'rho_cell_norm':
-                # Cell-centred variables don't have a value at psi=0.
-                # Find the index in data_on_psi closest to the first cell centre.
+            var = getattr(data_tree.profiles, var_name)
+            if 'rho_cell_norm' in var.coords:
+                psi_norm_face = data_tree.profiles.psi_norm.sel(time=time, method='nearest').to_numpy()
+                psi_rho_norm = data_tree.profiles.psi.sel(time=time, method='nearest').to_numpy()
+                psi_norm_rho_norm = (psi_rho_norm - psi_rho_norm[0]) / (psi_rho_norm[-1] - psi_rho_norm[0])
+                psi_norm_rho_norm[1] = (psi_norm_face[0] + psi_norm_face[1]) / 2.0
+                psi_on_grid_real = psi_norm_rho_norm[1:-1] * self._last_surface_factor
                 core_idx = np.argmin(np.abs(self._psi_N - psi_on_grid_real[0]))
                 data_on_psi /= data_on_psi[core_idx]
-                self._log(
-                    f"Normalizing {var_name} using value at psi={self._psi_N[core_idx]:.3f}"
-                    f" (closest to first cell center at psi_real={psi_on_grid_real[0]:.3f})"
-                )
             else:
-                # Face or extended grid has actual core value at psi=0
                 data_on_psi /= data_on_psi[0]
 
         if load_into_state == 'state':
             return {'x': self._psi_N.copy(), 'y': data_on_psi.copy(), 'type': profile_type}
         else:
             return data_on_psi
+
+    # ── Scalar extraction ───────────────────────────────────────────────────
+
+    def _extract_tx_scalar(self, data_tree, var_name, time, source='scalars', scale=1.0):
+        r'''! Extract a scalar value from TORAX with optional time-averaging.
+
+        @param data_tree  TORAX output data tree.
+        @param var_name   Attribute name on data_tree.scalars (or .profiles).
+        @param time       Target time (seconds).
+        @param source     'scalars' or 'profiles' — which subtree to read from.
+        @param scale      Multiplicative factor applied after extraction.
+        @return float — the (optionally averaged) scalar value.
+        '''
+        container = getattr(data_tree, source)
+        var = getattr(container, var_name)
+        tx_times = var.coords['time'].values
+        t_start, t_end = self._get_time_window(time, tx_times)
+
+        if t_start == t_end:
+            val = float(var.sel(time=time, method='nearest'))
+        else:
+            mask = (tx_times >= t_start) & (tx_times <= t_end)
+            win_times = tx_times[mask]
+            if len(win_times) == 0:
+                val = float(var.sel(time=time, method='nearest'))
+            else:
+                val = float(var.sel(time=win_times).mean())
+
+        return val * scale
+
+    def _extract_tx_scalar_at_rho(self, data_tree, var_name, time, rho_val, rho_coord='rho_norm', scale=1.0):
+        r'''! Extract a profile value at a specific rho location as a scalar, with time-averaging.
+
+        @param data_tree   TORAX output data tree.
+        @param var_name    Attribute name on data_tree.profiles.
+        @param time        Target time (seconds).
+        @param rho_val     Radial coordinate value to select.
+        @param rho_coord   Name of the rho coordinate ('rho_norm', 'rho_face_norm', etc.).
+        @param scale       Multiplicative factor applied after extraction.
+        @return float — the (optionally averaged) scalar value.
+        '''
+        var = getattr(data_tree.profiles, var_name)
+        tx_times = var.coords['time'].values
+        t_start, t_end = self._get_time_window(time, tx_times)
+
+        if t_start == t_end:
+            val = float(var.sel(time=time, **{rho_coord: rho_val}, method='nearest'))
+        else:
+            mask = (tx_times >= t_start) & (tx_times <= t_end)
+            win_times = tx_times[mask]
+            if len(win_times) == 0:
+                val = float(var.sel(time=time, **{rho_coord: rho_val}, method='nearest'))
+            else:
+                val = float(var.sel(time=win_times, **{rho_coord: rho_val}, method='nearest').mean())
+
+        return val * scale
+
+    def _extract_tx_scalar_timeseries(self, data_tree, var_name, source='scalars', scale=1.0):
+        r'''! Extract a full time-series scalar from TORAX with time-averaging applied at each point.
+
+        Returns dict {'x': times_list, 'y': values_array} suitable for self._results.
+
+        @param data_tree  TORAX output data tree.
+        @param var_name   Attribute name on data_tree.scalars (or .profiles).
+        @param source     'scalars' or 'profiles'.
+        @param scale      Multiplicative factor applied after extraction.
+        '''
+        container = getattr(data_tree, source)
+        var = getattr(container, var_name)
+        tx_times = var.coords['time'].values
+        raw = var.to_numpy()
+
+        t_start_arr = np.empty_like(tx_times)
+        t_end_arr   = np.empty_like(tx_times)
+        for idx, t in enumerate(tx_times):
+            t_start_arr[idx], t_end_arr[idx] = self._get_time_window(t, tx_times)
+
+        averaged = np.empty(len(tx_times))
+        for idx, t in enumerate(tx_times):
+            if t_start_arr[idx] == t_end_arr[idx]:
+                averaged[idx] = raw[idx]
+            else:
+                mask = (tx_times >= t_start_arr[idx]) & (tx_times <= t_end_arr[idx])
+                averaged[idx] = np.mean(raw[mask])
+
+        return {
+            'x': list(tx_times),
+            'y': averaged * scale,
+        }
+
+    def _extract_tx_scalar_at_rho_timeseries(self, data_tree, var_name, rho_val,
+                                               rho_coord='rho_norm', scale=1.0):
+        r'''! Extract a profile-at-fixed-rho time-series with time-averaging.
+
+        Returns dict {'x': times_list, 'y': values_array}.
+        '''
+        var = getattr(data_tree.profiles, var_name)
+        tx_times = var.coords['time'].values
+        raw = var.sel(**{rho_coord: rho_val}, method='nearest').to_numpy()
+
+        averaged = np.empty(len(tx_times))
+        for idx, t in enumerate(tx_times):
+            ts, te = self._get_time_window(t, tx_times)
+            if ts == te:
+                averaged[idx] = raw[idx]
+            else:
+                mask = (tx_times >= ts) & (tx_times <= te)
+                averaged[idx] = np.mean(raw[mask])
+
+        return {
+            'x': list(tx_times),
+            'y': averaged * scale,
+        }
+
 
     def _get_tx_config(self):
         r'''! Generate config object for Torax simulation.
@@ -1396,104 +1581,111 @@ class TokTox:
         return consumed_flux, consumed_flux_integral
 
     def _tx_update(self, i, data_tree):
-        r'''! Update the simulation state and simulation results based on results of the Torax simulation.
-        @param i Timestep of the solve.
+        r'''! Update the simulation state from TORAX results at timestep i.
+
+        All profile and scalar extractions use time-averaged methods to smooth
+        sawtooth oscillations when averaging is enabled.
+
+        @param i Timestep index.
         @param data_tree Result object from Torax.
         '''
         t = self._times[i]
 
+        # ── Scalars ─────────────────────────────────────────────────────────
+        self._state['Ip'][i]        = self._extract_tx_scalar(data_tree, 'Ip', t)
+        self._state['Ip_tx'][i]     = self._state['Ip'][i]
+        self._state['Ip_ni_tx'][i]  = self._extract_tx_scalar(data_tree, 'I_non_inductive', t)
+        self._state['pax'][i]       = self._extract_tx_scalar_at_rho(data_tree, 'pressure_thermal_total', t, 0.0)
+        self._state['beta_pol'][i]  = self._extract_tx_scalar(data_tree, 'beta_pol', t)
+        self._state['beta_N_tx'][i] = self._extract_tx_scalar(data_tree, 'beta_N', t)
+        self._state['vloop_tx'][i]  = self._extract_tx_scalar(data_tree, 'v_loop_lcfs', t)
+        self._state['f_GW'][i]      = self._extract_tx_scalar(data_tree, 'fgw_n_e_line_avg', t)
+        self._state['f_GW_vol'][i]  = self._extract_tx_scalar(data_tree, 'fgw_n_e_volume_avg', t)
+        self._state['q95'][i]       = self._extract_tx_scalar(data_tree, 'q95', t)
+        self._state['q0'][i]        = self._extract_tx_scalar_at_rho(data_tree, 'q', t, 0.0, rho_coord='rho_face_norm')
 
-        self._state['Ip'][i] =          data_tree.scalars.Ip.sel(time=t, method='nearest')
-        self._state['Ip_tx'][i] =       data_tree.scalars.Ip.sel(time=t, method='nearest')
-        self._state['Ip_ni_tx'][i] =    data_tree.scalars.I_non_inductive.sel(time=t, method='nearest')
-        pax_new = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest').values
-        # pax_old = self._state['pax'][i]
-        self._state['pax'][i] = pax_new
-        
-        self._state['beta_pol'][i] = float(data_tree.scalars.beta_pol.sel(time=t, method='nearest'))
-        self._state['beta_N_tx'][i]  = float(data_tree.scalars.beta_N.sel(time=t,  method='nearest'))
-        self._state['q95'][i] = data_tree.scalars.q95.sel(time=t, method='nearest')
-        self._state['q0'][i] = data_tree.profiles.q.sel(time=t, rho_face_norm=0.0, method='nearest')
+        # ── TORAX physics scalars (for visualization) ──────────────────────
+        self._state['Q_fusion'][i]     = self._extract_tx_scalar(data_tree, 'Q_fusion', t)
+        self._state['E_fusion'][i]     = self._extract_tx_scalar(data_tree, 'E_fusion', t)
+        self._state['n_e_line_avg'][i] = self._extract_tx_scalar(data_tree, 'n_e_line_avg', t)
+        self._state['H98'][i]          = self._extract_tx_scalar(data_tree, 'H98', t)
+        self._state['li3'][i]          = self._extract_tx_scalar(data_tree, 'li3', t)
+        self._state['P_ohmic_e'][i]    = self._extract_tx_scalar(data_tree, 'P_ohmic_e', t)
+        self._state['P_radiation_e'][i] = self._extract_tx_scalar(data_tree, 'P_radiation_e', t, scale=-1.0)
+        self._state['P_SOL_total'][i]  = self._extract_tx_scalar(data_tree, 'P_SOL_total', t)
+        self._state['P_alpha_total'][i] = self._extract_tx_scalar(data_tree, 'P_alpha_total', t)
+        self._state['P_aux_total'][i]  = self._extract_tx_scalar(data_tree, 'P_aux_total', t)
 
+        # ── Core values (profile at rho=0) ──────────────────────────────────
+        self._state['T_e_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'T_e', t, 0.0)
+        self._state['T_i_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'T_i', t, 0.0)
+        self._state['n_e_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'n_e', t, 0.0)
 
-        self._state['ffp_prof'][i] = self._pull_tx_onto_psi(data_tree, 'FFprime', t, load_into_state='state')
-        self._state['pp_prof'][i] =  self._pull_tx_onto_psi(data_tree, 'pprime',  t, load_into_state='state')
-        
-        self._state['ffp_prof_tx'][i] = self._pull_tx_onto_psi(data_tree, 'FFprime', t, load_into_state='state') # temp for calculating j_phi
-        self._state['ffp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
+        # ── Source profiles for GS solve (FF', p', resistivity) ─────────────
+        self._state['ffp_prof'][i]  = self._extract_tx_profile(data_tree, 'FFprime', t)
+        self._state['pp_prof'][i]   = self._extract_tx_profile(data_tree, 'pprime',  t)
+        self._state['p_prof_tx'][i] = self._extract_tx_profile(data_tree, 'pressure_thermal_total', t)
 
-        self._state['pp_prof_tx'][i] =  self._pull_tx_onto_psi(data_tree, 'pprime', t, load_into_state='state')
-        self._state['pp_prof_tx'][i]['y'] *= -2.0*np.pi  # convert from TX units to TM units
+        self._state['ffp_prof_tx'][i] = self._extract_tx_profile(data_tree, 'FFprime', t)
+        self._state['ffp_prof_tx'][i]['y'] *= -2.0 * np.pi  # TX → TM units
 
-        self._state['p_prof_tx'][i] = self._pull_tx_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state')
+        self._state['pp_prof_tx'][i] = self._extract_tx_profile(data_tree, 'pprime', t)
+        self._state['pp_prof_tx'][i]['y'] *= -2.0 * np.pi  # TX → TM units
 
-        self._state['vloop_tx'][i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
-        
-        self._state['q_prof_tx'][i] = self._pull_tx_onto_psi(data_tree, 'q', t, load_into_state='state')
-
-        self._state['j_tot'][i] =            self._pull_tx_onto_psi(data_tree, 'j_total',          t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_ohmic'][i] =          self._pull_tx_onto_psi(data_tree, 'j_ohmic',          t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_ni'][i] =          self._pull_tx_onto_psi(data_tree, 'j_non_inductive',  t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_bootstrap'][i] =      self._pull_tx_onto_psi(data_tree, 'j_bootstrap',      t, load_into_state='state', profile_type='jphi-linterp')
-        
-
-        self._state['j_ecrh'][i] = self._pull_tx_onto_psi(data_tree, 'j_ecrh', t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_external'][i] = self._pull_tx_onto_psi(data_tree, 'j_external', t, load_into_state='state', profile_type='jphi-linterp')
-        self._state['j_generic_current'][i] = self._pull_tx_onto_psi(data_tree, 'j_generic_current', t, load_into_state='state', profile_type='jphi-linterp')
-
-        self._state['R_inv_avg_tx'][i] = self._pull_tx_onto_psi(data_tree, 'gm9', t, load_into_state='state')
-
-        ffp_ni = self._calc_ffp_ni(i, data_tree)
-
-        self._state['ffp_ni_prof'][i] = {'x': self._psi_N.copy(), 'y': ffp_ni.copy(), 'type': 'linterp'}         
-
-        self._state['T_i'][i] = self._pull_tx_onto_psi(data_tree, 'T_i', t, load_into_state='state')
-        self._state['T_e'][i] = self._pull_tx_onto_psi(data_tree, 'T_e', t, load_into_state='state')
-        self._state['n_i'][i] = self._pull_tx_onto_psi(data_tree, 'n_i', t, load_into_state='state')
-        self._state['n_e'][i] = self._pull_tx_onto_psi(data_tree, 'n_e', t, load_into_state='state')
-        self._state['f_GW'][i] = data_tree.scalars.fgw_n_e_line_avg.sel(time=t, method='nearest').item()
-        self._state['f_GW_vol'][i] = data_tree.scalars.fgw_n_e_volume_avg.sel(time=t, method='nearest').item()
-
-        self._state['ptot'][i] = self._pull_tx_onto_psi(data_tree, 'pressure_thermal_total', t, load_into_state='state')
-
-        # Get conductivity and convert to resistivity (eta = 1/sigma)
-        conductivity = self._pull_tx_onto_psi(data_tree, 'sigma_parallel', t, load_into_state=None)
+        conductivity = self._extract_tx_profile(data_tree, 'sigma_parallel', t, load_into_state=None)
         self._state['eta_prof'][i] = {
             'x': self._psi_N.copy(),
             'y': 1.0 / conductivity,
             'type': 'linterp',
         }
 
-        psi_tx = self._pull_tx_onto_psi(data_tree, 'psi', t, load_into_state=None) / (2.0 * np.pi) # TORAX outputs psi in units of Wb, stored as Wb/rad (AKA Wb-rad), so needs 1/2pi
-        psi_tx = 2.0 * psi_tx[-1] - psi_tx  # reflect over psi_lcfs to convert from TX to TM convention
-        self._state['psi_tx'][i] = {'x': self._psi_N.copy(), 'y': psi_tx.copy(), 'type': 'linterp',}
+        # ── Current density profiles ────────────────────────────────────────
+        self._state['j_tot'][i]              = self._extract_tx_profile(data_tree, 'j_total',           t, profile_type='jphi-linterp')
+        self._state['j_ohmic'][i]            = self._extract_tx_profile(data_tree, 'j_ohmic',           t, profile_type='jphi-linterp')
+        self._state['j_ni'][i]               = self._extract_tx_profile(data_tree, 'j_non_inductive',   t, profile_type='jphi-linterp')
+        self._state['j_bootstrap'][i]        = self._extract_tx_profile(data_tree, 'j_bootstrap',       t, profile_type='jphi-linterp')
+        self._state['j_ecrh'][i]             = self._extract_tx_profile(data_tree, 'j_ecrh',            t, profile_type='jphi-linterp')
+        self._state['j_external'][i]         = self._extract_tx_profile(data_tree, 'j_external',        t, profile_type='jphi-linterp')
+        self._state['j_generic_current'][i]  = self._extract_tx_profile(data_tree, 'j_generic_current', t, profile_type='jphi-linterp')
+
+        self._state['R_inv_avg_tx'][i] = self._extract_tx_profile(data_tree, 'gm9', t)
+
+        ffp_ni = self._calc_ffp_ni(i, data_tree)
+        self._state['ffp_ni_prof'][i] = {'x': self._psi_N.copy(), 'y': ffp_ni.copy(), 'type': 'linterp'}
+
+        # ── Kinetic profiles ────────────────────────────────────────────────
+        self._state['T_i'][i]  = self._extract_tx_profile(data_tree, 'T_i', t)
+        self._state['T_e'][i]  = self._extract_tx_profile(data_tree, 'T_e', t)
+        self._state['n_i'][i]  = self._extract_tx_profile(data_tree, 'n_i', t)
+        self._state['n_e'][i]  = self._extract_tx_profile(data_tree, 'n_e', t)
+        self._state['ptot'][i] = self._extract_tx_profile(data_tree, 'pressure_thermal_total', t)
+
+        # ── q profile ──────────────────────────────────────────────────────
+        self._state['q_prof_tx'][i] = self._extract_tx_profile(data_tree, 'q', t)
+
+        # ── Psi profile (flux surfaces) ─────────────────────────────────────
+        psi_tx = self._extract_tx_profile(data_tree, 'psi', t, load_into_state=None) / (2.0 * np.pi)
+        psi_tx = 2.0 * psi_tx[-1] - psi_tx  # reflect to TM convention
+        self._state['psi_tx'][i] = {'x': self._psi_N.copy(), 'y': psi_tx.copy(), 'type': 'linterp'}
         self._state['psi_lcfs_tx'][i] = self._state['psi_tx'][i]['y'][-1]
         self._state['psi_axis_tx'][i] = self._state['psi_tx'][i]['y'][0]
 
-        # Pull volume and volume derivative from TORAX
-        self._state['vol_tx_lcfs'][i] = data_tree.profiles.volume.sel(time=t, rho_norm=1.0, method='nearest').item()
-        self._state['vol_tx'][i] = self._pull_tx_onto_psi(data_tree, 'volume', t, load_into_state='state')
-        # Pull thermal conductivity (chi) profiles with safety checks
-        chi_profiles = [
-            'chi_neo_e', 'chi_neo_i', 'chi_etg_e', 'chi_itg_e', 'chi_itg_i',
-            'chi_tem_e', 'chi_tem_i', 'chi_turb_e', 'chi_turb_i'
-        ]
-        for chi_key in chi_profiles:
+        # ── Volume ──────────────────────────────────────────────────────────
+        self._state['vol_tx_lcfs'][i] = self._extract_tx_scalar_at_rho(data_tree, 'volume', t, 1.0)
+        self._state['vol_tx'][i]      = self._extract_tx_profile(data_tree, 'volume', t)
+
+        # ── Transport coefficient profiles (chi, D) ─────────────────────────
+        for chi_key in ['chi_neo_e', 'chi_neo_i', 'chi_etg_e', 'chi_itg_e', 'chi_itg_i',
+                        'chi_tem_e', 'chi_tem_i', 'chi_turb_e', 'chi_turb_i']:
             try:
-                self._state[chi_key][i] = self._pull_tx_onto_psi(data_tree, chi_key, t, load_into_state='state')
+                self._state[chi_key][i] = self._extract_tx_profile(data_tree, chi_key, t)
             except (KeyError, AttributeError):
-                # Variable not available in this data_tree, skip
                 pass
 
-        # Pull diffusivity (D) profiles with safety checks
-        d_profiles = [
-            'D_itg_e', 'D_neo_e', 'D_tem_e', 'D_turb_e'
-        ]
-        for d_key in d_profiles:
+        for d_key in ['D_itg_e', 'D_neo_e', 'D_tem_e', 'D_turb_e']:
             try:
-                self._state[d_key][i] = self._pull_tx_onto_psi(data_tree, d_key, t, load_into_state='state')
+                self._state[d_key][i] = self._extract_tx_profile(data_tree, d_key, t)
             except (KeyError, AttributeError):
-                # Variable not available in this data_tree, skip
                 pass
 
     def _calc_ffp_ni(self, i, data_tree):
@@ -1519,221 +1711,91 @@ class TokTox:
         return ffp_ni
 
     def _res_update(self, data_tree):
+        r'''! Populate self._results from TORAX data with time-averaging.'''
 
         self._results['t_res'] = self._times
 
+        # ── Per-timepoint profiles (on psi_N grid) ──────────────────────────
         for t in self._times:
-            self._results['T_e'][t] = self._pull_tx_onto_psi(data_tree, 'T_e', t, load_into_state='state', normalize=False)
-            self._results['T_i'][t] = self._pull_tx_onto_psi(data_tree, 'T_i', t, load_into_state='state', normalize=False)
-            self._results['n_e'][t] = self._pull_tx_onto_psi(data_tree, 'n_e', t, load_into_state='state', normalize=False)
-            self._results['q'][t] =   self._pull_tx_onto_psi(data_tree, 'q', t, load_into_state='state', normalize=False)
+            self._results['T_e'][t] = self._extract_tx_profile(data_tree, 'T_e', t)
+            self._results['T_i'][t] = self._extract_tx_profile(data_tree, 'T_i', t)
+            self._results['n_e'][t] = self._extract_tx_profile(data_tree, 'n_e', t)
+            self._results['q'][t]   = self._extract_tx_profile(data_tree, 'q',   t)
 
-        self._results['E_fusion'] = {
-            'x': list(data_tree.scalars.E_fusion.coords['time'].values),
-            'y': data_tree.scalars.E_fusion.to_numpy()
-        }
+        # ── Scalar time-series (with time-averaging) ────────────────────────
+        self._results['E_fusion']     = self._extract_tx_scalar_timeseries(data_tree, 'E_fusion')
+        self._results['Q']            = self._extract_tx_scalar_timeseries(data_tree, 'Q_fusion')
+        self._results['Ip']           = self._extract_tx_scalar_timeseries(data_tree, 'Ip')
+        self._results['B0']           = self._extract_tx_scalar_timeseries(data_tree, 'B_0')
+        self._results['n_e_line_avg'] = self._extract_tx_scalar_timeseries(data_tree, 'n_e_line_avg')
+        self._results['n_i_line_avg'] = self._extract_tx_scalar_timeseries(data_tree, 'n_i_line_avg')
+        self._results['beta_N']       = self._extract_tx_scalar_timeseries(data_tree, 'beta_N')
+        self._results['q95']          = self._extract_tx_scalar_timeseries(data_tree, 'q95')
+        self._results['H98']          = self._extract_tx_scalar_timeseries(data_tree, 'H98')
+        self._results['v_loop_lcfs']  = self._extract_tx_scalar_timeseries(data_tree, 'v_loop_lcfs')
+        self._results['li3']          = self._extract_tx_scalar_timeseries(data_tree, 'li3')
+        self._results['P_alpha_total'] = self._extract_tx_scalar_timeseries(data_tree, 'P_alpha_total')
+        self._results['P_aux_total']  = self._extract_tx_scalar_timeseries(data_tree, 'P_aux_total')
+        self._results['P_ohmic_e']    = self._extract_tx_scalar_timeseries(data_tree, 'P_ohmic_e')
+        self._results['P_radiation_e'] = self._extract_tx_scalar_timeseries(data_tree, 'P_radiation_e', scale=-1.0)
+        self._results['P_SOL_total']  = self._extract_tx_scalar_timeseries(data_tree, 'P_SOL_total')
+        self._results['f_ni']         = self._extract_tx_scalar_timeseries(data_tree, 'f_non_inductive')
+        self._results['I_ni']         = self._extract_tx_scalar_timeseries(data_tree, 'I_non_inductive')
+        self._results['beta_pol']     = self._extract_tx_scalar_timeseries(data_tree, 'beta_pol')
 
-        self._results['Q'] = {
-            'x': list(data_tree.scalars.Q_fusion.coords['time'].values),
-            'y': data_tree.scalars.Q_fusion.to_numpy(),
-        }
+        # ── Core values (profile at rho=0) ──────────────────────────────────
+        self._results['n_e_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'n_e', 0.0)
+        self._results['n_i_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'n_i', 0.0)
+        self._results['T_e_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'T_e', 0.0)
+        self._results['T_i_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'T_i', 0.0)
 
-        self._results['Ip'] = {
-            'x': list(data_tree.scalars.Ip.coords['time'].values),
-            'y': data_tree.scalars.Ip.to_numpy(),
-        }
+        # ── Psi boundary values ─────────────────────────────────────────────
+        self._results['psi_lcfs_tx'] = self._extract_tx_scalar_at_rho_timeseries(
+            data_tree, 'psi', 1.0, scale=1.0 / (2.0 * np.pi))
+        self._results['psi_axis_tx'] = self._extract_tx_scalar_at_rho_timeseries(
+            data_tree, 'psi', 0.0, scale=1.0 / (2.0 * np.pi))
 
-        self._results['B0'] = {
-            'x': list(data_tree.scalars.B_0.coords['time'].values),
-            'y': data_tree.scalars.B_0.to_numpy(),
-        }
-
-        self._results['n_e_line_avg'] = {
-            'x': list(data_tree.scalars.n_e_line_avg.coords['time'].values),
-            'y': data_tree.scalars.n_e_line_avg.to_numpy(),
-        }
-
-        self._results['n_i_line_avg'] = {
-            'x': list(data_tree.scalars.n_i_line_avg.coords['time'].values),
-            'y': data_tree.scalars.n_i_line_avg.to_numpy(),
-        }
-
-        my_times = list(data_tree.profiles.T_e.coords['time'].values)
-        T_e_line_avg = np.array([])
-        for my_t in my_times:
-            T_e_line_avg = np.append(T_e_line_avg, data_tree.profiles.T_e.sel(time=my_t).mean(dim='rho_norm'))
-        self._results['T_e_line_avg'] = {
-            'x': my_times,
-            'y': T_e_line_avg,
-        }
-
-        my_times = list(data_tree.profiles.T_i.coords['time'].values)
-        T_i_line_avg = np.array([])
-        for my_t in my_times:
-            T_i_line_avg = np.append(T_i_line_avg, data_tree.profiles.T_i.sel(time=my_t).mean(dim='rho_norm'))
-        self._results['T_i_line_avg'] = {
-            'x': my_times,
-            'y': T_i_line_avg,
-        }
-        
-        n_e_core = data_tree.profiles.n_e.sel(rho_norm=0.0)
-        self._results['n_e_core'] = {
-            'x': list(n_e_core.coords['time'].values),
-            'y': n_e_core.to_numpy(),
-        }
-
-        n_i_core = data_tree.profiles.n_i.sel(rho_norm=0.0)
-        self._results['n_i_core'] = {
-            'x': list(n_i_core.coords['time'].values),
-            'y': n_i_core.to_numpy(),
-        }
-
-        T_e_core = data_tree.profiles.T_e.sel(rho_norm=0.0)
-        self._results['T_e_core'] = {
-            'x': list(T_e_core.coords['time'].values),
-            'y': T_e_core.to_numpy(),
-        }
-
-        T_i_core = data_tree.profiles.T_i.sel(rho_norm=0.0)
-        self._results['T_i_core'] = {
-            'x': list(T_i_core.coords['time'].values),
-            'y': T_i_core.to_numpy(),
-        }
-
-        self._results['beta_N'] = {
-            'x': list(data_tree.scalars.beta_N.coords['time'].values),
-            'y': data_tree.scalars.beta_N.to_numpy(),
-        }
-
-        self._results['q95'] = {
-            'x': list(data_tree.scalars.q95.coords['time'].values),
-            'y': data_tree.scalars.q95.to_numpy(),
-        }
-
-        self._results['H98'] = {
-            'x': list(data_tree.scalars.H98.coords['time'].values),
-            'y': data_tree.scalars.H98.to_numpy(),
-        }
-
-        self._results['v_loop_lcfs'] = {
-            'x': list(data_tree.scalars.v_loop_lcfs.coords['time'].values),
-            'y': data_tree.scalars.v_loop_lcfs.to_numpy(),
-        }
-
-        psi_lcfs = data_tree.profiles.psi.sel(rho_norm = 1.0)
-        self._results['psi_lcfs_tx'] = {
-            'x': list(psi_lcfs.coords['time'].values),
-            'y': psi_lcfs.to_numpy() / (2.0 * np.pi), # TORAX outputs in Wb, stored in Wb/rad
-        }
-
-        psi_axis = data_tree.profiles.psi.sel(rho_norm = 0.0)
-        self._results['psi_axis_tx'] = {
-            'x': list(psi_axis.coords['time'].values),
-            'y': psi_axis.to_numpy() / (2.0 * np.pi), # TORAX outputs in Wb, stored in Wb/rad
-        }
-
-        self._results['li3'] = {
-            'x': list(data_tree.scalars.li3.coords['time'].values),
-            'y': data_tree.scalars.li3.to_numpy(),
-        }
-
-        self._results['P_alpha_total'] = {
-            'x': list(data_tree.scalars.P_alpha_total.coords['time'].values),
-            'y': data_tree.scalars.P_alpha_total.to_numpy(),
-        }
-
-        self._results['P_aux_total'] = {
-            'x': list(data_tree.scalars.P_aux_total.coords['time'].values),
-            'y': data_tree.scalars.P_aux_total.to_numpy(),
-        }
-
-        self._results['P_ohmic_e'] = {
-            'x': list(data_tree.scalars.P_ohmic_e.coords['time'].values),
-            'y': data_tree.scalars.P_ohmic_e.to_numpy(),
-        }
-
-        self._results['P_radiation_e'] = {
-            'x': list(data_tree.scalars.P_radiation_e.coords['time'].values),
-            'y': -1.0 * data_tree.scalars.P_radiation_e.to_numpy(),
-        }
-
-        self._results['P_SOL_total'] = {
-            'x': list(data_tree.scalars.P_SOL_total.coords['time'].values),
-            'y': data_tree.scalars.P_SOL_total.to_numpy(),
-        }
-
-        # ── Additional comprehensive physics outputs ──
-
-        # Stored energy
+        # ── Optional scalars (may not exist in all TORAX versions) ──────────
         try:
-            self._results['W_thermal'] = {
-                'x': list(data_tree.scalars.W_thermal.coords['time'].values),
-                'y': data_tree.scalars.W_thermal.to_numpy(),
-            }
+            self._results['W_thermal'] = self._extract_tx_scalar_timeseries(data_tree, 'W_thermal')
+        except AttributeError:
+            pass
+        try:
+            self._results['tau_E'] = self._extract_tx_scalar_timeseries(data_tree, 'tau_E')
+        except AttributeError:
+            pass
+        try:
+            self._results['f_bootstrap'] = self._extract_tx_scalar_timeseries(data_tree, 'f_bootstrap')
         except AttributeError:
             pass
 
-        # Energy confinement time
-        try:
-            self._results['tau_E'] = {
-                'x': list(data_tree.scalars.tau_E.coords['time'].values),
-                'y': data_tree.scalars.tau_E.to_numpy(),
-            }
-        except AttributeError:
-            pass
-
-        # Bootstrap fraction
-        try:
-            self._results['f_bootstrap'] = {
-                'x': list(data_tree.scalars.f_bootstrap.coords['time'].values),
-                'y': data_tree.scalars.f_bootstrap.to_numpy(),
-            }
-        except AttributeError:
-            pass
-
-        # Non-inductive current fraction and current
-        self._results['f_ni'] = {
-            'x': list(data_tree.scalars.f_non_inductive.coords['time'].values),
-            'y': data_tree.scalars.f_non_inductive.to_numpy(),
-        }
-        self._results['I_ni'] = {
-            'x': list(data_tree.scalars.I_non_inductive.coords['time'].values),
-            'y': data_tree.scalars.I_non_inductive.to_numpy(),
-        }
-
-        # Beta poloidal
-        self._results['beta_pol'] = {
-            'x': list(data_tree.scalars.beta_pol.coords['time'].values),
-            'y': data_tree.scalars.beta_pol.to_numpy(),
-        }
-
-        # Greenwald fraction
+        # ── Greenwald fraction (already time-averaged in _tx_update) ────────
         self._results['f_GW'] = {
             'x': list(self._times),
             'y': np.array(self._state['f_GW']),
         }
 
-        # Peak values for quick access
+        # ── Peak values for quick access ────────────────────────────────────
         Q_arr = self._results.get('Q', {}).get('y', np.array([0]))
         self._results['Q_max'] = float(np.nanmax(Q_arr)) if len(Q_arr) > 0 else 0.0
         self._results['Q_avg_flattop'] = float(np.nanmean(Q_arr[self._flattop])) if np.any(self._flattop) and len(Q_arr) == len(self._flattop) else 0.0
 
-        # TokaMaker state arrays (for visualization)
-        self._results['Ip_tm'] = {'x': list(self._times), 'y': np.array(self._state['Ip_tm'])}
-        self._results['Ip_tx'] = {'x': list(self._times), 'y': np.array(self._state['Ip_tx'])}
-        self._results['Ip_ni_tx'] = {'x': list(self._times), 'y': np.array(self._state['Ip_ni_tx'])}
+        # ── TokaMaker state arrays (for visualization) ──────────────────────
+        self._results['Ip_tm']       = {'x': list(self._times), 'y': np.array(self._state['Ip_tm'])}
+        self._results['Ip_tx']       = {'x': list(self._times), 'y': np.array(self._state['Ip_tx'])}
+        self._results['Ip_ni_tx']    = {'x': list(self._times), 'y': np.array(self._state['Ip_ni_tx'])}
         self._results['psi_lcfs_tm'] = {'x': list(self._times), 'y': np.array(self._state['psi_lcfs_tm'])}
         self._results['psi_axis_tm'] = {'x': list(self._times), 'y': np.array(self._state['psi_axis_tm'])}
         self._results['psi_lcfs_tx'] = {'x': list(self._times), 'y': np.array(self._state['psi_lcfs_tx'])}
         self._results['psi_axis_tx'] = {'x': list(self._times), 'y': np.array(self._state['psi_axis_tx'])}
-        self._results['vloop_tm'] = {'x': list(self._times), 'y': np.array(self._state['vloop_tm'])}
-        self._results['vloop_tx'] = {'x': list(self._times), 'y': np.array(self._state['vloop_tx'])}
-        self._results['beta_N_tm'] = {'x': list(self._times), 'y': np.array(self._state['beta_N_tm'])}
-        self._results['l_i_tm'] = {'x': list(self._times), 'y': np.array(self._state['l_i_tm'])}
-        self._results['q95_tm'] = {'x': list(self._times), 'y': np.array(self._state['q95_tm'])}
-        self._results['q0_tm'] = {'x': list(self._times), 'y': np.array(self._state['q0_tm'])}
-        self._results['pax'] = {'x': list(self._times), 'y': np.array(self._state['pax'])}
-        self._results['pax_tm'] = {'x': list(self._times), 'y': np.array(self._state['pax_tm'])}
+        self._results['vloop_tm']    = {'x': list(self._times), 'y': np.array(self._state['vloop_tm'])}
+        self._results['vloop_tx']    = {'x': list(self._times), 'y': np.array(self._state['vloop_tx'])}
+        self._results['beta_N_tm']   = {'x': list(self._times), 'y': np.array(self._state['beta_N_tm'])}
+        self._results['l_i_tm']      = {'x': list(self._times), 'y': np.array(self._state['l_i_tm'])}
+        self._results['q95_tm']      = {'x': list(self._times), 'y': np.array(self._state['q95_tm'])}
+        self._results['q0_tm']       = {'x': list(self._times), 'y': np.array(self._state['q0_tm'])}
+        self._results['pax']         = {'x': list(self._times), 'y': np.array(self._state['pax'])}
+        self._results['pax_tm']      = {'x': list(self._times), 'y': np.array(self._state['pax_tm'])}
 
 
     # ─── TokaMaker (TM) Methods ─────────────────────────────────────────────────
@@ -1773,7 +1835,7 @@ class TokTox:
             self._tm.set_psi_dt(psi0=self._psi_warm_start[0], dt=1.0e10)
 
         _pbar = tqdm(enumerate(self._times), total=len(self._times),
-                    desc=f'  TM loop {self._current_loop}', unit='eq',
+                    desc=f'  TM loop {self._current_loop}', unit='solve',
                     bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]{postfix}')
         for i, t in _pbar:
             # Clear isoflux, flux, and saddle targets from previous timepoint
@@ -2101,9 +2163,9 @@ class TokTox:
             # self._log(f'Ip_ni = {self._state["Ip_ni_tx"][i]:.3f} A, vloop = {self._state["vloop_tx"][i]:.3f} V')
             self._state['vloop_tm'][i] = self._state['equil'][i].calc_loopvoltage()
         except ValueError:
-            self._log(f'WARNING: calc_loopvoltage failed at t-idx {i} '
-                      f'(likely Ip_ni > Ip); using TORAX vloop as fallback.')
-            self._state['vloop_tm'][i] = float(self._state['vloop_tx'][i])
+            self._log(f'WARNING: calc_loopvoltage failed at t-idx = {i} '
+                      f'(likely Ip_ni > Ip); setting vloop_tm to 0.')
+            self._state['vloop_tm'][i] = 0.0
 
         # store TokaMaker pressure profile from get_profiles()
         tm_psi, tm_f_prof, tm_fp_prof, tm_p_prof, tm_pp_prof = self._state['equil'][i].get_profiles(npsi=N_PSI)
@@ -2225,7 +2287,9 @@ class TokTox:
     # ─── Main Simulation Loop ───────────────────────────────────────────────────
 
     def fly(self, convergence_threshold=-1.0, max_loop=3, run_name='tmp',
-            save_outputs=False, debug=False, skip_bad_init_eqdsks=False):
+            save_outputs=False, debug=False, skip_bad_init_eqdsks=False,
+            t_ave_toggle='off', t_ave_window=0.5, t_ave_causal=True,
+            t_ave_ignore_start=0.25):
         r'''! Run TokaMaker-TORAX coupled simulation loop.
 
         @param convergence_threshold Max fractional change in consumed flux between loops for convergence.
@@ -2235,6 +2299,13 @@ class TokTox:
         @param debug If True, redirect all outputs (including TM/TX noise) to the log file,
                save intermediate states, and save diagnostic plots into the output directory.
         @param skip_bad_init_eqdsks If True, skip broken initial gEQDSK files instead of raising.
+        @param t_ave_toggle Time-averaging mode: 'off' (no averaging), 'flattop' (average only
+               during flat-top), or 'pulse' (average over the whole pulse).
+        @param t_ave_window Averaging window size in seconds. Default 0.5 s.
+        @param t_ave_causal If True, window is entirely behind the timepoint (backward-looking).
+               If False, window is centred on the timepoint.
+        @param t_ave_ignore_start Ignore the first N seconds of the pulse when building the
+               averaging window (avoids numerical transients). Default 0.25 s.
         '''
         import tempfile  # local import: only needed when fly() is called
 
@@ -2258,6 +2329,12 @@ class TokTox:
         self._diagnostics = debug
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
         self._run_name = run_name
+
+        # Time-averaging settings for sawtooth smoothing
+        self._t_ave_toggle = t_ave_toggle
+        self._t_ave_window = t_ave_window
+        self._t_ave_causal = t_ave_causal
+        self._t_ave_ignore_start = t_ave_ignore_start
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         _sim_start_time = time.time()
