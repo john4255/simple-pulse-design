@@ -92,6 +92,25 @@ def _vline(axes, t_now):
         ax.axvline(t_now, color=VLINE_COLOR, ls=VLINE_LS, lw=VLINE_LW, zorder=10)
 
 
+def _tx_scalar(tt, var_name, scale=1.0):
+    """Return (times, values) arrays from data_tree.scalars at full TORAX resolution."""
+    dt = getattr(tt, '_data_tree', None)
+    if dt is None:
+        return None, None
+    var = getattr(dt.scalars, var_name)
+    return var.coords['time'].values, var.to_numpy() * scale
+
+
+def _tx_profile_at_rho(tt, var_name, rho_val, rho_coord='rho_norm', scale=1.0):
+    """Return (times, values) for a profile variable at a fixed rho, full resolution."""
+    dt = getattr(tt, '_data_tree', None)
+    if dt is None:
+        return None, None
+    var = getattr(dt.profiles, var_name)
+    sliced = var.sel(**{rho_coord: rho_val}, method='nearest')
+    return sliced.coords['time'].values, sliced.to_numpy() * scale
+
+
 def _prof(state_dict, idx):
     """Return (x, y) arrays from a profile state dict, or (None, None)."""
     d = state_dict.get(idx)
@@ -225,27 +244,27 @@ def profile_plot(tt, i, t, save_path=None, display=True):
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    ax = axes[2, 2]
-    ax.set_title('Volume comparison')
-    vol_tm_lcfs = s['vol_tm'][i]['y'][-1] if i in s['vol_tm'] else np.nan
-    vol_tx_lcfs = s['vol_tx_lcfs'][i]
-    if i in s['vol_tm']:
-        ax.plot(s['vol_tm'][i]['x'], s['vol_tm'][i]['y'], 'r-', label='Vol TM', linewidth=2)
-    if i in s['vol_tx']:
-        ax.plot(s['vol_tx'][i]['x'], s['vol_tx'][i]['y'], 'b-', label='Vol TX', linewidth=2)
-        ax.set_xlabel(r'$\hat{\psi}$')
-        ax.set_ylabel('Volume [m³]')
-        ax.grid(True, alpha=0.3)
-        ax.text(0.98, 0.95,
-                f'Vol TM LCFS: {vol_tm_lcfs:.2f} m³\nVol TX LCFS: {vol_tx_lcfs:.2f} m³\n'
-                f'Δ: {abs(vol_tm_lcfs - vol_tx_lcfs) / vol_tm_lcfs * 100:.1f}%',
-                transform=ax.transAxes, fontsize=9, verticalalignment='top', horizontalalignment='right',
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        ax.legend(fontsize=9)
-    else:
-        ax.text(0.5, 0.5, f'Vol TM: {vol_tm_lcfs:.3f} m³\nVol TX: {vol_tx_lcfs:.3f} m³',
-                ha='center', va='center', fontsize=10)
-        ax.axis('off')
+    # ax = axes[2, 2]
+    # ax.set_title('Volume comparison')
+    # vol_tm_lcfs = s['vol_tm'][i]['y'][-1] if i in s['vol_tm'] else np.nan
+    # vol_tx_lcfs = s['vol_tx_lcfs'][i]
+    # if i in s['vol_tm']:
+    #     ax.plot(s['vol_tm'][i]['x'], s['vol_tm'][i]['y'], 'r-', label='Vol TM', linewidth=2)
+    # if i in s['vol_tx']:
+    #     ax.plot(s['vol_tx'][i]['x'], s['vol_tx'][i]['y'], 'b-', label='Vol TX', linewidth=2)
+    #     ax.set_xlabel(r'$\hat{\psi}$')
+    #     ax.set_ylabel('Volume [m³]')
+    #     ax.grid(True, alpha=0.3)
+    #     ax.text(0.98, 0.95,
+    #             f'Vol TM LCFS: {vol_tm_lcfs:.2f} m³\nVol TX LCFS: {vol_tx_lcfs:.2f} m³\n'
+    #             f'Δ: {abs(vol_tm_lcfs - vol_tx_lcfs) / vol_tm_lcfs * 100:.1f}%',
+    #             transform=ax.transAxes, fontsize=9, verticalalignment='top', horizontalalignment='right',
+    #             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    #     ax.legend(fontsize=9)
+    # else:
+    #     ax.text(0.5, 0.5, f'Vol TM: {vol_tm_lcfs:.3f} m³\nVol TX: {vol_tx_lcfs:.3f} m³',
+    #             ha='center', va='center', fontsize=10)
+    #     ax.axis('off')
 
     # Row 3: q, T, n
     ax = axes[3, 0]
@@ -696,8 +715,12 @@ def plot_scalars(tt, save_path=None, display=True):
     ax = axes[0, 0]
     ax.set_title('Ip [A]')
     ax.plot(times, s['Ip_tm'], '-o', markersize=3, label='Ip TM')
-    ax.plot(times, s['Ip_tx'], '-o', markersize=3, label='Ip TX')
-    ax.plot(times, s['Ip_ni_tx'], '--', markersize=3, label='Ip NI TX')
+    t_Ip, y_Ip = _tx_scalar(tt, 'Ip')
+    if t_Ip is not None:
+        ax.plot(t_Ip, y_Ip, '-', linewidth=1, label='Ip TX')
+    t_Ini, y_Ini = _tx_scalar(tt, 'I_non_inductive')
+    if t_Ini is not None:
+        ax.plot(t_Ini, y_Ini, '--', linewidth=1, label='Ip NI TX')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('Ip [A]')
     ax.grid(True, alpha=0.3)
@@ -707,9 +730,16 @@ def plot_scalars(tt, save_path=None, display=True):
     ax = axes[0, 1]
     ax.set_title(r'$\psi_{lcfs}$ & $\psi_{axis}$ (TM & TX)')
     ax.plot(times, s['psi_lcfs_tm'], '-', color='tab:blue', label=r'$\psi_{lcfs}$ TM')
-    ax.plot(times, s['psi_lcfs_tx'], '--', color='tab:blue', label=r'$\psi_{lcfs}$ TX')
     ax.plot(times, s['psi_axis_tm'], '-', color='tab:orange', label=r'$\psi_{axis}$ TM')
-    ax.plot(times, s['psi_axis_tx'], '--', color='tab:orange', label=r'$\psi_{axis}$ TX')
+    t_psi_lcfs, y_psi_lcfs = _tx_profile_at_rho(tt, 'psi', 1.0, scale=1.0/(2.0*np.pi))
+    t_psi_axis, y_psi_axis = _tx_profile_at_rho(tt, 'psi', 0.0, scale=1.0/(2.0*np.pi))
+    if t_psi_lcfs is not None:
+        ax.plot(t_psi_lcfs, y_psi_lcfs, '--', color='tab:blue', linewidth=1, label=r'$\psi_{lcfs}$ TX')
+    if t_psi_axis is not None:
+        # Reflect psi_axis over psi_lcfs to match TM convention (same as _tx_update)
+        y_psi_lcfs_interp = np.interp(t_psi_axis, t_psi_lcfs, y_psi_lcfs)
+        y_psi_axis = 2.0 * y_psi_lcfs_interp - y_psi_axis
+        ax.plot(t_psi_axis, y_psi_axis, '--', color='tab:orange', linewidth=1, label=r'$\psi_{axis}$ TX')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel(r'$\psi$ [Wb/rad]')
     ax.legend(fontsize=8)
@@ -719,7 +749,10 @@ def plot_scalars(tt, save_path=None, display=True):
     ax = axes[0, 2]
     ax.set_title('V_loop (TM vs TX) [V]')
     ax.plot(times, s['vloop_tm'], '-o', markersize=3, label='TokaMaker')
-    ax.plot(times, s['vloop_tx'], '--o', markersize=3, label='TORAX')
+    t_vl, y_vl = _tx_scalar(tt, 'v_loop_lcfs')
+    if t_vl is not None:
+        ax.plot(t_vl, y_vl, '-', linewidth=1, label='TORAX')
+    # Compute ratio only at TM timepoints
     tm_vloop = np.array(s['vloop_tm'])
     tx_vloop = np.array(s['vloop_tx'])
     ratio = tm_vloop / np.where(tx_vloop != 0, tx_vloop, np.nan)
@@ -737,11 +770,15 @@ def plot_scalars(tt, save_path=None, display=True):
     # (1,0): Q_fusion
     ax = axes[1, 0]
     ax.set_title('Q_fusion')
-    ax.plot(times, s['Q_fusion'], '-o', markersize=3, label='Q')
-    ax2 = ax.twinx()
-    ax2.plot(times, s['E_fusion'], '--', color='crimson', markersize=3, label='E_fusion')
-    ax2.set_ylabel('E_fusion')
-    ax2.legend(fontsize=8, loc='upper right')
+    t_Q, y_Q = _tx_scalar(tt, 'Q_fusion')
+    t_E, y_E = _tx_scalar(tt, 'E_fusion')
+    if t_Q is not None:
+        ax.plot(t_Q, y_Q, '-', linewidth=1, label='Q')
+    if t_E is not None:
+        ax2 = ax.twinx()
+        ax2.plot(t_E, y_E, '-', color='crimson', linewidth=1, label='E_fusion')
+        ax2.set_ylabel('E_fusion')
+        ax2.legend(fontsize=8, loc='upper right')
     ax.set_xlabel('Time [s]')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc='upper left')
@@ -749,10 +786,14 @@ def plot_scalars(tt, save_path=None, display=True):
     # (1,1): n_e
     ax = axes[1, 1]
     ax.set_title(r'$n_e$ [m$^{-3}$]')
-    ax.plot(times, s['n_e_line_avg'], '-o', markersize=3, label='n_e line avg')
-    ax.plot(times, s['n_e_core'], '--', markersize=3, label='n_e core')
+    t_ne_avg, y_ne_avg = _tx_scalar(tt, 'n_e_line_avg')
+    t_ne_core, y_ne_core = _tx_profile_at_rho(tt, 'n_e', 0.0)
+    if t_ne_avg is not None:
+        ax.plot(t_ne_avg, y_ne_avg, '-', linewidth=1, label='n_e line avg')
+    if t_ne_core is not None:
+        ax.plot(t_ne_core, y_ne_core, '-', linewidth=1, label='n_e core')
     ne_edge_y = [s['n_e'][ii]['y'][-1] if ii in s.get('n_e', {}) else np.nan for ii in range(len(times))]
-    ax.plot(times, ne_edge_y, ':', marker='s', markersize=3, label='n_e edge')
+    ax.plot(times, ne_edge_y, '-', linewidth=1, label='n_e edge')
     ax.set_xlabel('Time [s]')
     ax2 = ax.twinx()
     ax2.plot(times, s['f_GW'], 'm--', markersize=3, label='f_GW_line')
@@ -765,9 +806,14 @@ def plot_scalars(tt, save_path=None, display=True):
     # (1,2): T_e
     ax = axes[1, 2]
     ax.set_title(r'$T_e$ [keV]')
-    ax.plot(times, s['T_e_core'], '--', markersize=3, label='T_e core')
+    t_Te, y_Te = _tx_profile_at_rho(tt, 'T_e', 0.0)
+    t_Ti, y_Ti = _tx_profile_at_rho(tt, 'T_i', 0.0)
+    if t_Te is not None:
+        ax.plot(t_Te, y_Te, '-', linewidth=1, label='T_e core')
+    if t_Ti is not None:
+        ax.plot(t_Ti, y_Ti, '-', linewidth=1, label='T_i core')
     te_edge_y = [s['T_e'][ii]['y'][-1] if ii in s.get('T_e', {}) else np.nan for ii in range(len(times))]
-    ax.plot(times, te_edge_y, ':', marker='s', markersize=3, label='T_e edge')
+    ax.plot(times, te_edge_y, '-', linewidth=1, label='T_e edge')
     ax.set_xlabel('Time [s]')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -775,10 +821,13 @@ def plot_scalars(tt, save_path=None, display=True):
     # (2,0): Power channels
     ax = axes[2, 0]
     ax.set_title('Power channels [W]')
-    for key, label, fmt in [('P_ohmic_e', 'P_ohmic_e', 'r-o'), ('P_radiation_e', 'P_radiation_e', 'm--'),
-                             ('P_SOL_total', 'P_SOL_total', 'c--'), ('P_alpha_total', 'P_alpha_total', 'g-.'),
-                             ('P_aux_total', 'P_aux_total', 'y-.')]:
-        ax.plot(times, s[key], fmt, markersize=3, label=label)
+    for tx_name, label, fmt in [('P_ohmic_e', 'P_ohmic_e', 'r-'), ('P_radiation_e', 'P_radiation_e', 'm--'),
+                                 ('P_SOL_total', 'P_SOL_total', 'c--'), ('P_alpha_total', 'P_alpha_total', 'g-.'),
+                                 ('P_aux_total', 'P_aux_total', 'y-.')]:
+        scale = -1.0 if tx_name == 'P_radiation_e' else 1.0
+        tx_t, tx_y = _tx_scalar(tt, tx_name, scale=scale)
+        if tx_t is not None:
+            ax.plot(tx_t, tx_y, fmt, linewidth=1, label=label)
     ax.set_xlabel('Time [s]')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -786,7 +835,9 @@ def plot_scalars(tt, save_path=None, display=True):
     # (2,1): beta_N
     ax = axes[2, 1]
     ax.set_title('beta_N')
-    ax.plot(times, s['beta_N_tx'], '-o', markersize=3, label='beta_N TX')
+    t_bN, y_bN = _tx_scalar(tt, 'beta_N')
+    if t_bN is not None:
+        ax.plot(t_bN, y_bN, '-', linewidth=1, label='beta_N TX')
     ax.plot(times, s['beta_N_tm'], '--o', markersize=3, label='beta_N TM')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('beta_N')
@@ -796,7 +847,9 @@ def plot_scalars(tt, save_path=None, display=True):
     # (2,2): l_i
     ax = axes[2, 2]
     ax.set_title('l_i (li3)')
-    ax.plot(times, s['li3'], '-o', markersize=3, label='l_i TX')
+    t_li, y_li = _tx_scalar(tt, 'li3')
+    if t_li is not None:
+        ax.plot(t_li, y_li, '-', linewidth=1, label='l_i TX')
     ax.plot(times, s['l_i_tm'], '--o', markersize=3, label='l_i TM')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('l_i')
@@ -806,8 +859,12 @@ def plot_scalars(tt, save_path=None, display=True):
     # (3,0): q95 and q0
     ax = axes[3, 0]
     ax.set_title('Safety Factor q')
-    ax.plot(times, s['q95'], 'b-', label='q95 TX')
-    ax.plot(times, s['q0'], 'r-', label='q0 TX')
+    t_q95, y_q95 = _tx_scalar(tt, 'q95')
+    if t_q95 is not None:
+        ax.plot(t_q95, y_q95, 'b-', linewidth=1, label='q95 TX')
+    t_q0, y_q0 = _tx_profile_at_rho(tt, 'q', 0.0, rho_coord='rho_face_norm')
+    if t_q0 is not None:
+        ax.plot(t_q0, y_q0, 'r-', linewidth=1, label='q0 TX')
     ax.plot(times, s['q95_tm'], 'b--', label='q95 TM')
     ax.plot(times, s['q0_tm'], 'r--', label='q0 TM')
     ax.set_xlabel('Time [s]')
@@ -818,7 +875,9 @@ def plot_scalars(tt, save_path=None, display=True):
     # (3,1): pax
     ax = axes[3, 1]
     ax.set_title('pax [Pa]')
-    ax.plot(times, s['pax'], '-o', markersize=3, label='pax TX')
+    t_pax, y_pax = _tx_profile_at_rho(tt, 'pressure_thermal_total', 0.0)
+    if t_pax is not None:
+        ax.plot(t_pax, y_pax, '-', linewidth=1, label='pax TX')
     ax.plot(times, s['pax_tm'], '--o', markersize=3, label='pax TM')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('pax [Pa]')
@@ -829,9 +888,10 @@ def plot_scalars(tt, save_path=None, display=True):
     ax = axes[3, 2]
     ax.set_title('Flux Consumption [Wb]')
     psi_lcfs_tm_arr = np.array(s['psi_lcfs_tm'])
-    psi_lcfs_tx_arr = np.array(s['psi_lcfs_tx'])
     ax.plot(times, (psi_lcfs_tm_arr - psi_lcfs_tm_arr[0]) * 2 * np.pi, '-o', markersize=3, label='Flux TM')
-    ax.plot(times, (psi_lcfs_tx_arr - psi_lcfs_tx_arr[0]) * 2 * np.pi, '--o', markersize=3, label='Flux TX')
+    if t_psi_lcfs is not None:
+        flux_tx = (y_psi_lcfs - y_psi_lcfs[0]) * 2 * np.pi
+        ax.plot(t_psi_lcfs, flux_tx, '-', linewidth=1, label='Flux TX')
     ax.set_xlabel('Time [s]')
     ax.set_ylabel('Flux Consumption [Wb]')
     ax.legend(fontsize=8)
@@ -1027,11 +1087,15 @@ def _render_frame(tt, loop, idx, t_now, times, flux_con_tm, flux_con_tx, out_pat
 
 def _draw_info(ax, tt, loop, run_name):
     ax.axis('off')
+    t_ave = getattr(tt, '_t_ave_toggle', 'off')
     lines = [
         f'Run:   {run_name}            loop:  {loop}',
         f'n_rho: {tt._n_rho}          dt:    {tt._dt} s',
         f'time range:     [{tt._t_init}, {tt._t_final}] s          times: {len(tt._times)}',
         f'LSF:   {tt._last_surface_factor}',
+        f't_ave: {t_ave}    window: {getattr(tt, "_t_ave_window", 0):.2f} s',
+        f'causal: {getattr(tt, "_t_ave_causal", True)}    '
+        f'ignore_start: {getattr(tt, "_t_ave_ignore_start", 0):.2f} s',
     ]
     ax.text(0.05, 0.95, '\n'.join(lines), transform=ax.transAxes, fontsize=INFO_FS,
             va='top', fontfamily='monospace')
@@ -1126,14 +1190,18 @@ def _draw_scalars_movie(axes, tt, times, t_now, flux_con_tm, flux_con_tx):
         ('P_radiation_e', 'Radiation', COLORS_MULTI[3]),
         ('P_SOL_total', 'SOL', COLORS_MULTI[4]),
     ]
-    for key, label, clr in pkeys:
-        if key in s:
-            ax.plot(times, np.array(s[key]) / 1e6, color=clr, ls=LS_PRI, lw=LW, label=label)
+    for tx_name, label, clr in pkeys:
+        scale = -1.0 if tx_name == 'P_radiation_e' else 1.0
+        tx_t, tx_y = _tx_scalar(tt, tx_name, scale=scale)
+        if tx_t is not None:
+            ax.plot(tx_t, tx_y / 1e6, color=clr, ls=LS_PRI, lw=LW, label=label)
     ax.set_ylabel('Power [MW]', fontsize=LABEL_FS)
     ax.legend(fontsize=LEGEND_FS, loc='upper left', ncol=2)
     _style(ax)
     ax2 = ax.twinx()
-    ax2.plot(times, s['Q_fusion'], color='indigo', ls=LS_SEC, lw=LW, label='Q')
+    t_Q, y_Q = _tx_scalar(tt, 'Q_fusion')
+    if t_Q is not None:
+        ax2.plot(t_Q, y_Q, color='indigo', ls=LS_SEC, lw=LW, label='Q')
     ax2.set_ylabel('Q', fontsize=LABEL_FS)
     ax2.tick_params(labelsize=TICK_FS)
     ax2.legend(fontsize=LEGEND_FS, loc='upper right')
@@ -1502,35 +1570,52 @@ def summary(tt):
 
     out = {}
 
-    # Fusion
-    Q_arr = np.array(s['Q_fusion'])
-    out['Q_max'] = float(np.nanmax(Q_arr))
-    out['Q_max_time'] = float(times[np.nanargmax(Q_arr)])
-    if np.any(ft_mask):
-        out['Q_flattop_avg'] = float(np.nanmean(Q_arr[ft_mask]))
-    else:
-        out['Q_flattop_avg'] = None
-    out['E_fusion_total_MJ'] = float(s['E_fusion'][-1] / 1e6)
+    # Fusion (from data_tree at full resolution)
+    t_Q, y_Q = _tx_scalar(tt, 'Q_fusion')
+    if t_Q is not None:
+        out['Q_max'] = float(np.nanmax(y_Q))
+        out['Q_max_time'] = float(t_Q[np.nanargmax(y_Q)])
+        if np.any(ft_mask):
+            ft_start, ft_end = times[ft_mask][0], times[ft_mask][-1]
+            ft_q_mask = (t_Q >= ft_start) & (t_Q <= ft_end)
+            out['Q_flattop_avg'] = float(np.nanmean(y_Q[ft_q_mask])) if np.any(ft_q_mask) else None
+        else:
+            out['Q_flattop_avg'] = None
+
+    _, y_E = _tx_scalar(tt, 'E_fusion')
+    if y_E is not None:
+        out['E_fusion_total_MJ'] = float(y_E[-1] / 1e6)
 
     # Ip
     out['Ip_max_MA'] = float(np.max(np.abs(s['Ip_tm'])) / 1e6)
 
     # Beta
-    out['beta_N_max'] = float(np.nanmax(s['beta_N_tx']))
+    _, y_bN = _tx_scalar(tt, 'beta_N')
+    if y_bN is not None:
+        out['beta_N_max'] = float(np.nanmax(y_bN))
     out['beta_N_tm_max'] = float(np.nanmax(s['beta_N_tm']))
 
     # H98
-    H98_arr = np.array(s['H98'])
-    out['H98_max'] = float(np.nanmax(H98_arr))
-    if np.any(ft_mask):
-        out['H98_flattop_avg'] = float(np.nanmean(H98_arr[ft_mask]))
+    t_H98, y_H98 = _tx_scalar(tt, 'H98')
+    if y_H98 is not None:
+        out['H98_max'] = float(np.nanmax(y_H98))
+        if np.any(ft_mask):
+            ft_start, ft_end = times[ft_mask][0], times[ft_mask][-1]
+            ft_h_mask = (t_H98 >= ft_start) & (t_H98 <= ft_end)
+            out['H98_flattop_avg'] = float(np.nanmean(y_H98[ft_h_mask])) if np.any(ft_h_mask) else None
 
     # Temperatures
-    out['T_e_core_max_keV'] = float(np.nanmax(s['T_e_core']))
-    out['T_i_core_max_keV'] = float(np.nanmax(s['T_i_core']))
+    _, y_Te = _tx_profile_at_rho(tt, 'T_e', 0.0)
+    _, y_Ti = _tx_profile_at_rho(tt, 'T_i', 0.0)
+    if y_Te is not None:
+        out['T_e_core_max_keV'] = float(np.nanmax(y_Te))
+    if y_Ti is not None:
+        out['T_i_core_max_keV'] = float(np.nanmax(y_Ti))
 
     # Density
-    out['n_e_line_avg_max'] = float(np.nanmax(s['n_e_line_avg']))
+    _, y_ne = _tx_scalar(tt, 'n_e_line_avg')
+    if y_ne is not None:
+        out['n_e_line_avg_max'] = float(np.nanmax(y_ne))
 
     # Greenwald fraction
     out['f_GW_max'] = float(np.nanmax(s['f_GW']))
@@ -1544,8 +1629,12 @@ def summary(tt):
     out['flux_consumed_Wb'] = float((psi_lcfs_tm[-1] - psi_lcfs_tm[0]) * 2 * np.pi)
 
     # Power
-    out['P_fusion_max_MW'] = float(np.nanmax(s['P_alpha_total']) / 1e6 * 5)  # P_fusion = 5 * P_alpha
-    out['P_ohmic_max_MW'] = float(np.nanmax(s['P_ohmic_e']) / 1e6)
+    _, y_Pa = _tx_scalar(tt, 'P_alpha_total')
+    _, y_Po = _tx_scalar(tt, 'P_ohmic_e')
+    if y_Pa is not None:
+        out['P_fusion_max_MW'] = float(np.nanmax(y_Pa) / 1e6 * 5)
+    if y_Po is not None:
+        out['P_ohmic_max_MW'] = float(np.nanmax(y_Po) / 1e6)
 
     # Internal inductance
     out['l_i_flattop_avg'] = float(np.nanmean(s['l_i_tm'][ft_mask])) if np.any(ft_mask) else None

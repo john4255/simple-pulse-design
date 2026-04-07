@@ -18,7 +18,7 @@ from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 
 from baseconfig import BASE_CONFIG
 
-from read_eqdsk_extended import read_eqdsk_extended
+# from read_eqdsk_extended import read_eqdsk_extended
 
 LCFS_WEIGHT = 100.0
 N_PSI = 1000
@@ -236,23 +236,6 @@ class TokTox:
         self._state['vol_tm'] = {}
         self._state['vol_tx'] = {}  # volume profile vs psi
         self._state['vol_tx_lcfs'] = np.zeros(len(self._times))  # volume at LCFS (scalar)
-
-        # Scalar timeseries from TORAX (populated per-timepoint in _tx_update)
-        self._state['Q_fusion'] = np.zeros(len(self._times))
-        self._state['E_fusion'] = np.zeros(len(self._times))
-        self._state['n_e_line_avg'] = np.zeros(len(self._times))
-        self._state['H98'] = np.zeros(len(self._times))
-        self._state['li3'] = np.zeros(len(self._times))
-        self._state['P_ohmic_e'] = np.zeros(len(self._times))
-        self._state['P_radiation_e'] = np.zeros(len(self._times))
-        self._state['P_SOL_total'] = np.zeros(len(self._times))
-        self._state['P_alpha_total'] = np.zeros(len(self._times))
-        self._state['P_aux_total'] = np.zeros(len(self._times))
-
-        # Core values (profile at rho=0, one per timepoint)
-        self._state['T_e_core'] = np.zeros(len(self._times))
-        self._state['T_i_core'] = np.zeros(len(self._times))
-        self._state['n_e_core'] = np.zeros(len(self._times))
 
         self._results['lcfs_geo'] = {}
         self._results['dpsi_lcfs_dt'] = {}
@@ -1233,16 +1216,18 @@ class TokTox:
         if self._current_loop == 1:
             eq_safe = []
             t_safe = []
+            t_skipped = []
             for i, t in enumerate(self._eqtimes):
                 eq = self._init_files[i]
                 if self._test_eqdsk(eq):
-                    self._log(f'\tTX: Using eqdsk at t={t}')
                     eq_safe.append(eq)
                     t_safe.append(t)
                 else:
                     if not self._skip_bad_init_eqdsks:
                         raise ValueError(f'Bad initial gEQDSK at t={t}: {eq}')
-                    self._log(f'\tTX: Skipping eqdsk at t={t}')
+                    t_skipped.append(t)
+            self._log(f'\tTX: {len(eq_safe)}/{len(self._eqtimes)} initial EQDSKs valid'
+                      + (f', skipped {len(t_skipped)}' if t_skipped else ''))
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eq_safe[i], 'cocos': self._cocos} for i, t in enumerate(t_safe)
             }
@@ -1457,7 +1442,8 @@ class TokTox:
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except Exception as e:
-                self._log(f"TEST EQDSK FAILED: {repr(e)}")
+                self._log(f"TEST EQDSK FAILED: {eqdsk} — {repr(e)}")
+                self._print(f'    EQDSK rejected by TORAX: {os.path.basename(eqdsk)}')
                 return False
 
     def _run_tx_init(self):
@@ -1566,6 +1552,8 @@ class TokTox:
             self._print(f'  TORAX: sim FAILED ({hist.sim_error})')
             raise ValueError(f'TORAX failed to run the simulation: {hist.sim_error}')
         
+        self._data_tree = data_tree  # store for visualization at full TORAX resolution
+
         v_loops = np.zeros(len(self._times))
         for i, t in enumerate(self._times):
             self._tx_update(i, data_tree)
@@ -1603,23 +1591,6 @@ class TokTox:
         self._state['f_GW_vol'][i]  = self._extract_tx_scalar(data_tree, 'fgw_n_e_volume_avg', t)
         self._state['q95'][i]       = self._extract_tx_scalar(data_tree, 'q95', t)
         self._state['q0'][i]        = self._extract_tx_scalar_at_rho(data_tree, 'q', t, 0.0, rho_coord='rho_face_norm')
-
-        # ── TORAX physics scalars (for visualization) ──────────────────────
-        self._state['Q_fusion'][i]     = self._extract_tx_scalar(data_tree, 'Q_fusion', t)
-        self._state['E_fusion'][i]     = self._extract_tx_scalar(data_tree, 'E_fusion', t)
-        self._state['n_e_line_avg'][i] = self._extract_tx_scalar(data_tree, 'n_e_line_avg', t)
-        self._state['H98'][i]          = self._extract_tx_scalar(data_tree, 'H98', t)
-        self._state['li3'][i]          = self._extract_tx_scalar(data_tree, 'li3', t)
-        self._state['P_ohmic_e'][i]    = self._extract_tx_scalar(data_tree, 'P_ohmic_e', t)
-        self._state['P_radiation_e'][i] = self._extract_tx_scalar(data_tree, 'P_radiation_e', t, scale=-1.0)
-        self._state['P_SOL_total'][i]  = self._extract_tx_scalar(data_tree, 'P_SOL_total', t)
-        self._state['P_alpha_total'][i] = self._extract_tx_scalar(data_tree, 'P_alpha_total', t)
-        self._state['P_aux_total'][i]  = self._extract_tx_scalar(data_tree, 'P_aux_total', t)
-
-        # ── Core values (profile at rho=0) ──────────────────────────────────
-        self._state['T_e_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'T_e', t, 0.0)
-        self._state['T_i_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'T_i', t, 0.0)
-        self._state['n_e_core'][i] = self._extract_tx_scalar_at_rho(data_tree, 'n_e', t, 0.0)
 
         # ── Source profiles for GS solve (FF', p', resistivity) ─────────────
         self._state['ffp_prof'][i]  = self._extract_tx_profile(data_tree, 'FFprime', t)
@@ -1968,11 +1939,10 @@ class TokTox:
                     self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1])
 
                 try:
-                    self._tm.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
-                                          ffp_NI_prof=self._state['ffp_ni_prof'][i])
                     with self._quiet_tm():
+                        self._tm.set_profiles(ffp_prof=ffp_level, pp_prof=pp_level,
+                                              ffp_NI_prof=self._state['ffp_ni_prof'][i])
                         self._state['equil'][i] = self._tm.solve()
-                    self._log(f'\tTM: Solve succeeded at t={t} (level {level_idx}: {level_name}).')
 
                     level_attempts.append({'level': level_idx, 'name': level_name,
                                           'ffp': ffp_level, 'pp': pp_level,
@@ -1981,7 +1951,6 @@ class TokTox:
                     solve_succeeded = True
                     break
                 except Exception as e:
-                    self._log(f'\tTM: level {level_idx} solve failed: {e}')
                     level_attempts.append({'level': level_idx, 'name': level_name,
                                           'ffp': ffp_level, 'pp': pp_level,
                                           'succeeded': False, 'error': str(e)})
@@ -1997,8 +1966,8 @@ class TokTox:
                 with self._quiet_tm():
                     self._state['equil'][i].save_eqdsk(eq_name,
                         lcfs_pad=1-self._last_surface_factor, run_info='TokaMaker EQDSK',
-                        cocos=self._cocos, nr=300, nz=300, truncate_eq=self._truncate_eq)
-                self._tm_update(i)
+                        cocos=self._cocos, nr=200, nz=200, truncate_eq=self._truncate_eq)
+                    self._tm_update(i)
                 # #### temp debug plot
                 # import matplotlib.pyplot as plt
                 # fig, ax = plt.subplots()
@@ -2076,6 +2045,14 @@ class TokTox:
         n_ok = sum(1 for e in _loop_level_log if e['succeeded'])
         self._print(f'  TokaMaker: {n_ok}/{len(self._times)} solved (cflux={consumed_flux:.4f} Wb)')
 
+        # Compact level-usage summary for log
+        from collections import Counter
+        _lvl_counts = Counter(e['level_name'] for e in _loop_level_log if e['succeeded'])
+        _lvl_summary = ', '.join(f'{name}: {cnt}' for name, cnt in sorted(_lvl_counts.items()))
+        n_fail = len(self._times) - n_ok
+        self._log(f'\tTM summary: {n_ok}/{len(self._times)} solved. Levels: {_lvl_summary}.'
+                  + (f' Failures: {n_fail}.' if n_fail else ''))
+
         if self._debug_mode:
             from toktox_visualization import tm_loop_summary_plot
             _summary_path = os.path.join(self._out_dir, 'tm_plots',
@@ -2152,9 +2129,11 @@ class TokTox:
         self._state['beta_N_tm'][i] = eq_stats['beta_n']
         self._state['l_i_tm'][i] = eq_stats['l_i']
 
-        eq_read_extended = read_eqdsk_extended(os.path.join(self._eqdsk_dir, f'{self._current_loop:03d}.{i:03d}.eqdsk'))
-        vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vol'])
-        self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
+        # volume as a function of psi, only for debugging. If the two codes don't agree, <1/R> also won't agree.
+        # eq_read_extended = read_eqdsk_extended(os.path.join(self._eqdsk_dir, f'{self._current_loop:03d}.{i:03d}.eqdsk'))
+        # vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vol'])
+        # self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
+
         self._state['psi_lcfs_tm'][i] = self._state['equil'][i].psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
         self._state['psi_axis_tm'][i] = self._state['equil'][i].psi_bounds[1]
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
@@ -2228,18 +2207,12 @@ class TokTox:
         self._log(msg)
 
     def _quiet_tm(self):
-        r'''! Context manager: redirect C/Fortran-level stdout+stderr.
-
-        In debug mode, redirects to the log file so nothing is lost.
-        Otherwise, redirects to /dev/null to suppress noise.
+        r'''! Context manager: redirect C/Fortran-level stdout+stderr to /dev/null.
         '''
         import contextlib, os, sys
         @contextlib.contextmanager
         def _cm():
-            if getattr(self, '_debug_mode', False) and getattr(self, '_log_file', None):
-                target_fd = os.open(self._log_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-            else:
-                target_fd = os.open(os.devnull, os.O_WRONLY)
+            target_fd = os.open(os.devnull, os.O_WRONLY)
             saved_out = os.dup(1)
             saved_err = os.dup(2)
             os.dup2(target_fd, 1)
@@ -2258,7 +2231,7 @@ class TokTox:
 
     def configure_redirect_to_log(self):
         r'''! Step 3/3 of setup to divert noisy outputs to log file.
-        In debug mode, captures DEBUG and above. Otherwise captures INFO and above.
+        Captures INFO-level and above.
         '''
         if self._logging_configured or not self._log_file:
             return
@@ -2266,11 +2239,8 @@ class TokTox:
         root_logger = logging.getLogger()
         file_handler = logging.FileHandler(self._log_file, mode='a')
 
-        if getattr(self, '_debug_mode', False):
-            root_logger.setLevel(logging.DEBUG)
-            file_handler.setLevel(logging.DEBUG)
-        else:
-            file_handler.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO)
+        file_handler.setLevel(logging.INFO)
 
         formatter = logging.Formatter('%(asctime)s [%(name)-12s:%(levelname)-8s] %(message)s')
         file_handler.setFormatter(formatter)
