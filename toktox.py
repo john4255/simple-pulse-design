@@ -1386,7 +1386,8 @@ class TokTox:
             self._tx_update(i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
 
-        self._res_update(data_tree)
+        if self._save_outputs:
+            self._res_update(data_tree)
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0])
         consumed_flux_integral = np.trapezoid(v_loops[0:], self._times[0:])
@@ -1406,7 +1407,7 @@ class TokTox:
         self._state['Ip_tx'][i] =       data_tree.scalars.Ip.sel(time=t, method='nearest')
         self._state['Ip_ni_tx'][i] =    data_tree.scalars.I_non_inductive.sel(time=t, method='nearest')
         pax_new = data_tree.profiles.pressure_thermal_total.sel(time=t, rho_norm=0.0, method='nearest').values
-        pax_old = self._state['pax'][i]
+        # pax_old = self._state['pax'][i]
         self._state['pax'][i] = pax_new
         
         self._state['beta_pol'][i] = float(data_tree.scalars.beta_pol.sel(time=t, method='nearest'))
@@ -2427,7 +2428,7 @@ class TokTox:
         _mins, _secs = divmod(_sim_elapsed, 60)
         self._print(f'  Total sim time: {int(_mins)}m {_secs:.1f}s')
 
-        if save_outputs or debug:
+        if save_outputs:
             self.save_res()
             self._print(f'  Outputs saved to: {self._out_dir}')
         self._print(f'  Log file: {self._log_file}')
