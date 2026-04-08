@@ -102,7 +102,7 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=2, truncate_eq=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=4, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -437,8 +437,8 @@ class TokTox:
 
         self._main_ion = None
         self._impurity = None
-        self._enable_fusion = False
-        self._enable_ei_exchange = False
+        self._enable_fusion = True
+        self._enable_ei_exchange = True
 
         self._targets = None
         self._loaded_config = None   # set by load_config()
@@ -758,7 +758,7 @@ class TokTox:
         if impurity is not None:
             self._impurity = impurity
 
-    def set_sources(self, fusion=False, ei_exchange=False):
+    def set_sources(self, fusion=True, ei_exchange=True):
         r'''! Enable standard TORAX physics sources using TORAX defaults.
 
         Each flag adds the corresponding source with an empty config dict so
@@ -1454,6 +1454,7 @@ class TokTox:
         injected into the config used by the main simulation (loop 1 onwards).
         '''
         INIT_RUNTIME = 0.5
+        INIT_DT = 0.01
         self._log('Transport init: building steady-state init config...')
 
         init_config = copy.deepcopy(BASE_CONFIG)
@@ -1484,7 +1485,7 @@ class TokTox:
         init_config.setdefault('numerics', {})
         init_config['numerics']['t_initial'] = self._t_init
         init_config['numerics']['t_final'] = self._t_init + INIT_RUNTIME
-        init_config['numerics']['fixed_dt'] = 0.01
+        init_config['numerics']['fixed_dt'] = INIT_DT
         
         init_config['numerics']['evolve_current'] = True # Let current evolve to relax to psi profile
         init_config['numerics']['evolve_density'] = False # Fix ne and Te/Ti profiles
@@ -1966,7 +1967,7 @@ class TokTox:
                 with self._quiet_tm():
                     self._state['equil'][i].save_eqdsk(eq_name,
                         lcfs_pad=1-self._last_surface_factor, run_info='TokaMaker EQDSK',
-                        cocos=self._cocos, nr=200, nz=200, truncate_eq=self._truncate_eq)
+                        cocos=self._cocos, nr=300, nz=300, truncate_eq=self._truncate_eq)
                     self._tm_update(i)
                 # #### temp debug plot
                 # import matplotlib.pyplot as plt
@@ -2122,7 +2123,7 @@ class TokTox:
         r'''! Update internal state and coil current results based on results of GS solver.
         @param i Timestep of the solve.
         '''
-        eq_stats = self._state['equil'][i].get_stats()
+        eq_stats = self._state['equil'][i].get_stats(li_normalization='iter')
         self._state['Ip'][i] = eq_stats['Ip']
         self._state['Ip_tm'][i] = eq_stats['Ip']
         self._state['pax_tm'][i] = eq_stats['P_ax']
