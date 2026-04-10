@@ -6,17 +6,13 @@ Functions accept a TokTox object and produce plots that can be displayed inline 
 
 from __future__ import annotations
 import os
-import sys
 import subprocess
 import tempfile
 import shutil
 import platform
-import inspect
-from functools import wraps
 from typing import TYPE_CHECKING
 
 import numpy as np
-import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from matplotlib.gridspec import GridSpec
@@ -76,35 +72,9 @@ def _save_or_display(fig, save_path=None, display=True):
         os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
     if display:
-        if _in_jupyter():
-            plt.show()
-        else:
-            plt.show()
+        plt.show()
     else:
         plt.close(fig)
-
-
-def _suppress_interactive_when_hidden(func):
-    """Run plotting functions with interactive mode disabled when display=False."""
-    sig = inspect.signature(func)
-
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        bound = sig.bind_partial(*args, **kwargs)
-        display = bound.arguments.get('display', sig.parameters['display'].default)
-        if display:
-            return func(*args, **kwargs)
-
-        was_interactive = plt.isinteractive()
-        if was_interactive:
-            plt.ioff()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            if was_interactive:
-                plt.ion()
-
-    return wrapper
 
 
 def _style(ax):
@@ -184,7 +154,6 @@ def _x_points_active(tt, i, t=None):
 #  Profile plot (per-timestep diagnostic plot)
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def profile_plot(tt, i, t, save_path=None, display=True):
     """Detailed profile comparison at a single timestep."""
     from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
@@ -269,28 +238,6 @@ def profile_plot(tt, i, t, save_path=None, display=True):
     ax.set_ylabel('<1/R> [1/m]')
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
-
-    # ax = axes[2, 2]
-    # ax.set_title('Volume comparison')
-    # vol_tm_lcfs = s['vol_tm'][i]['y'][-1] if i in s['vol_tm'] else np.nan
-    # vol_tx_lcfs = s['vol_tx_lcfs'][i]
-    # if i in s['vol_tm']:
-    #     ax.plot(s['vol_tm'][i]['x'], s['vol_tm'][i]['y'], 'r-', label='Vol TM', linewidth=2)
-    # if i in s['vol_tx']:
-    #     ax.plot(s['vol_tx'][i]['x'], s['vol_tx'][i]['y'], 'b-', label='Vol TX', linewidth=2)
-    #     ax.set_xlabel(r'$\hat{\psi}$')
-    #     ax.set_ylabel('Volume [m³]')
-    #     ax.grid(True, alpha=0.3)
-    #     ax.text(0.98, 0.95,
-    #             f'Vol TM LCFS: {vol_tm_lcfs:.2f} m³\nVol TX LCFS: {vol_tx_lcfs:.2f} m³\n'
-    #             f'Δ: {abs(vol_tm_lcfs - vol_tx_lcfs) / vol_tm_lcfs * 100:.1f}%',
-    #             transform=ax.transAxes, fontsize=9, verticalalignment='top', horizontalalignment='right',
-    #             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    #     ax.legend(fontsize=9)
-    # else:
-    #     ax.text(0.5, 0.5, f'Vol TM: {vol_tm_lcfs:.3f} m³\nVol TX: {vol_tx_lcfs:.3f} m³',
-    #             ha='center', va='center', fontsize=10)
-    #     ax.axis('off')
 
     # Row 3: q, T, n
     ax = axes[3, 0]
@@ -412,7 +359,6 @@ def profile_plot(tt, i, t, save_path=None, display=True):
 #  TokaMaker diagnostic plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None, display=True):
     """TokaMaker input/output diagnostic plot for a single timestep."""
     from read_eqdsk_extended import read_eqdsk_extended
@@ -615,7 +561,6 @@ def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None
 #  TM loop summary plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def tm_loop_summary_plot(tt, loop_level_log, save_path=None, display=True):
     """Summary figure showing per-timestep GS solve outcomes."""
     n = len(loop_level_log)
@@ -674,7 +619,6 @@ def tm_loop_summary_plot(tt, loop_level_log, save_path=None, display=True):
 #  Profile evolution plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def plot_profile_evolution(tt, save_path=None, display=True, one_plot=False):
     """Plot profile evolution by pulse phase by default, or as one figure when one_plot=True."""
     s = tt._state
@@ -768,7 +712,6 @@ def plot_profile_evolution(tt, save_path=None, display=True, one_plot=False):
 #  Scalar time-series plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def plot_scalars(tt, save_path=None, display=True):
     """Plot 4x3 grid of time-series scalars."""
     from scipy.interpolate import interp1d
@@ -974,7 +917,6 @@ def plot_scalars(tt, save_path=None, display=True):
 #  Coil current plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def plot_coils(tt, save_path=None, display=True):
     """Plot coil current traces with limit bands."""
     coil_data = tt._results.get('COIL', {})
@@ -1012,7 +954,6 @@ def plot_coils(tt, save_path=None, display=True):
 #  LCFS evolution plot
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
     """Plot time evolution of the last closed flux surface for each phase.
 
@@ -1120,7 +1061,6 @@ def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
 #  Movie generation
 # =========================================================================
 
-@_suppress_interactive_when_hidden
 def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None, notebook_mode=None):
     """Create pulse movie from simulation data.
 
@@ -1817,7 +1757,7 @@ def summary(tt):
     # Internal inductance
     out['l_i_flattop_avg'] = float(np.nanmean(s['l_i_tm'][ft_mask])) if np.any(ft_mask) else None
 
-    # Loop voltage
+    # Loop tage
     if np.any(ft_mask):
         out['vloop_tm_flattop_avg_V'] = float(np.nanmean(np.array(s['vloop_tm'])[ft_mask]))
         out['vloop_tx_flattop_avg_V'] = float(np.nanmean(np.array(s['vloop_tx'])[ft_mask]))

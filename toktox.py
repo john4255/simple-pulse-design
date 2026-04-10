@@ -1,7 +1,6 @@
 import numpy as np
 import pprint
-import scipy.io as sio
-from scipy.interpolate import make_smoothing_spline, interp1d, CubicSpline
+from scipy.interpolate import interp1d, CubicSpline
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 import copy
@@ -17,8 +16,6 @@ from OpenFUSIONToolkit.TokaMaker.meshing import load_gs_mesh
 from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk, create_power_flux_fun
 
 from baseconfig import BASE_CONFIG
-
-# from read_eqdsk_extended import read_eqdsk_extended
 
 LCFS_WEIGHT = 100.0
 N_PSI = 1000
@@ -92,7 +89,6 @@ class MyEncoder(json.JSONEncoder):
             return obj.tolist()
         # Handle xarray DataArray
         if hasattr(obj, 'to_numpy'):
-            print(f'using numpy fix in json coverter for {obj}')
             return obj.to_numpy().tolist()
         return json.JSONEncoder.default(self, obj)
 
@@ -144,105 +140,118 @@ class TokTox:
             self._tm_times = sorted(eqtimes)
         else:
             self._tm_times = sorted(tm_times)
-        # TODO organize initialization of _state
-        self._state['R0_mag'] = np.zeros(len(self._tm_times))
-        self._state['Z'] = np.zeros(len(self._tm_times))
-        self._state['a'] = np.zeros(len(self._tm_times))
-        self._state['kappa'] = np.zeros(len(self._tm_times))
-        self._state['delta'] = np.zeros(len(self._tm_times))
-        self._state['B0'] = np.zeros(len(self._tm_times))
-        self._state['Ip'] = np.zeros(len(self._tm_times))
-        self._state['Ip_tm'] = np.zeros(len(self._tm_times))
-        self._state['Ip_tx'] = np.zeros(len(self._tm_times))
-        self._state['Ip_ni_tx'] = np.zeros(len(self._tm_times))
-        self._state['pax'] = np.zeros(len(self._tm_times))
-        self._state['pax_tm'] = np.zeros(len(self._tm_times))
-        self._state['beta_N_tm'] = np.zeros(len(self._tm_times))
-        self._state['beta_N_tx'] = np.zeros(len(self._tm_times))
-        self._state['l_i_tm'] = np.zeros(len(self._tm_times))
-        self._state['beta_pol'] = np.zeros(len(self._tm_times))
-        self._state['vloop_tm'] = np.zeros(len(self._tm_times))
-        self._state['vloop_tx'] = np.zeros(len(self._tm_times))
-        self._state['q95'] = np.zeros(len(self._tm_times))
-        self._state['q0'] = np.zeros(len(self._tm_times))
-        self._state['q95_tm'] = np.zeros(len(self._tm_times))
-        self._state['q0_tm'] = np.zeros(len(self._tm_times))
-        self._state['q_prof_tm'] = {}
-        self._state['q_prof_tx'] = {}
+
+        N = len(self._tm_times)
+
+        # ── Geometry scalars (seed values from EQDSK, updated by TM each loop) ──
+        self._state['R0_mag']   = np.zeros(N)
+        self._state['Z']        = np.zeros(N)
+        self._state['a']        = np.zeros(N)
+        self._state['kappa']    = np.zeros(N)
+        self._state['delta']    = np.zeros(N)
+        self._state['B0']       = np.zeros(N)
+
+        # ── Global plasma scalars ────────────────────────────────────────────────
+        self._state['Ip']       = np.zeros(N)   # EQDSK seed; updated by TX/TM each loop
+        self._state['Ip_tm']    = np.zeros(N)   # TM-solved Ip
+        self._state['Ip_tx']    = np.zeros(N)   # TX-solved Ip
+        self._state['Ip_ni_tx'] = np.zeros(N)   # TX non-inductive Ip
+        self._state['pax']      = np.zeros(N)   # EQDSK seed axis pressure
+        self._state['pax_tm']   = np.zeros(N)   # TM-solved axis pressure
+        self._state['beta_N_tm']= np.zeros(N)
+        self._state['beta_N_tx']= np.zeros(N)
+        self._state['beta_pol'] = np.zeros(N)
+        self._state['l_i_tm']   = np.zeros(N)
+        self._state['vloop_tm'] = np.zeros(N)
+        self._state['vloop_tx'] = np.zeros(N)
+        self._state['f_GW']     = np.zeros(N)
+        self._state['f_GW_vol'] = np.zeros(N)
+
+        # ── Safety factor scalars ────────────────────────────────────────────────
+        self._state['q0']    = np.zeros(N)
+        self._state['q95']   = np.zeros(N)
+        self._state['q0_tm'] = np.zeros(N)
+        self._state['q95_tm']= np.zeros(N)
+
+        # ── Poloidal flux scalars ────────────────────────────────────────────────
+        self._state['psi_axis_tm']     = np.zeros(N)
+        self._state['psi_lcfs_tm']     = np.zeros(N)
+        self._state['psi_axis_tx']     = np.zeros(N)
+        self._state['psi_lcfs_tx']     = np.zeros(N)
+        self._state['psi_grid_prev_tm']= np.zeros(N)  # psi on nodes from previous TM solve, for warm-starting
+
+        # ── Safety factor profiles {i: {'x':..., 'y':..., 'type':...}} ─────────
         self._state['q_prof_eqdsk'] = {}
-        self._state['psi_lcfs_tm'] = np.zeros(len(self._tm_times))
-        self._state['psi_axis_tm'] = np.zeros(len(self._tm_times))
-        self._state['psi_lcfs_tx'] = np.zeros(len(self._tm_times))
-        self._state['psi_axis_tx'] = np.zeros(len(self._tm_times))
-        self._state['psi_tx'] = {}  
+        self._state['q_prof_tm']    = {}
+        self._state['q_prof_tx']    = {}
+
+        # ── Poloidal flux profiles {i: {'x':..., 'y':..., 'type':...}} ─────────
         self._state['psi_tm'] = {}
-        self._state['psi_grid_prev_tm'] = np.zeros(len(self._tm_times))
-        self._psi_warm_start = {}  # {timestep_idx: psi_array} — persists across loops for warm-starting
+        self._state['psi_tx'] = {}
 
-        self._state['lcfs_geo'] = {}
-        self._state['ffp_prof'] = {}
-        self._state['pp_prof'] = {}
-        self._state['ffp_prof_eqdsk'] = {}
-        self._state['pp_prof_eqdsk'] = {}
-        self._state['p_prof_eqdsk'] = {}
-        self._state['pres'] = {}
-        self._state['fpol'] = {}
-        self._state['eta_prof'] = {}
-        self._state['T_e'] = {}
-        self._state['T_i'] = {}
-        self._state['n_e'] = {}
-        self._state['n_i'] = {}
-        self._state['f_GW'] = np.zeros(len(self._tm_times))
-        self._state['f_GW_vol'] = np.zeros(len(self._tm_times))
+        # ── LCFS geometry and GS source profiles {i: ...} ───────────────────────
+        self._state['lcfs_geo']       = {}  # (N,2) LCFS contour at each timepoint
+        self._state['ffp_prof']       = {}  # FF' profile sent to GS solve (updated each loop)
+        self._state['pp_prof']        = {}  # p' profile sent to GS solve (updated each loop)
+        self._state['ffp_ni_prof']    = {}  # FF' from non-inductive current only
+        self._state['eta_prof']       = {}  # resistivity profile
+        self._state['ffp_prof_eqdsk'] = {}  # seed FF' from EQDSK (normalized)
+        self._state['pp_prof_eqdsk']  = {}  # seed p' from EQDSK (normalized)
+        self._state['p_prof_eqdsk']   = {}  # seed pressure from EQDSK (normalized)
+        self._state['ffp_prof_tx']    = {}  # FF' from TORAX
+        self._state['pp_prof_tx']     = {}  # p' from TORAX
+        self._state['ffp_prof_tm']    = {}  # FF' from TM solve (FF, not FF')
+        self._state['pp_prof_tm']     = {}  # p' from TM solve
+        self._state['p_prof_tm']      = {}  # pressure from TM solve
+        self._state['p_prof_tx']      = {}  # pressure from TORAX
+        self._state['f_prof_tm']      = {}  # F=RBphi from TM solve
+
+        # ── Kinetic profiles from TORAX {i: {'x':..., 'y':..., 'type':...}} ────
+        self._state['T_e']  = {}
+        self._state['T_i']  = {}
+        self._state['n_e']  = {}
+        self._state['n_i']  = {}
         self._state['ptot'] = {}
-        self._state['ffp_ni_prof'] = {}
-        self._state['ffp_prof_tx'] = {}
-        self._state['pp_prof_tx'] = {}
-        self._state['ffp_prof_tm'] = {}
-        self._state['pp_prof_tm'] = {}
-        self._state['p_prof_tm'] = {} 
-        self._state['p_prof_tx'] = {}
-        self._state['f_prof_tm'] = {}
 
-        # Thermal conductivity profiles
-        self._state['chi_neo_e'] = {}
-        self._state['chi_neo_i'] = {}
-        self._state['chi_etg_e'] = {}
-        self._state['chi_itg_e'] = {}
-        self._state['chi_itg_i'] = {}
-        self._state['chi_tem_e'] = {}
-        self._state['chi_tem_i'] = {}
+        # ── Current density profiles from TORAX {i: ...} ────────────────────────
+        self._state['j_tot']             = {}
+        self._state['j_ohmic']           = {}
+        self._state['j_ni']              = {}
+        self._state['j_bootstrap']       = {}
+        self._state['j_ecrh']            = {}
+        self._state['j_external']        = {}
+        self._state['j_generic_current'] = {}
+
+        # ── Thermal conductivity profiles from TORAX {i: ...} ───────────────────
+        self._state['chi_neo_e']  = {}
+        self._state['chi_neo_i']  = {}
+        self._state['chi_etg_e']  = {}
+        self._state['chi_itg_e']  = {}
+        self._state['chi_itg_i']  = {}
+        self._state['chi_tem_e']  = {}
+        self._state['chi_tem_i']  = {}
         self._state['chi_turb_e'] = {}
         self._state['chi_turb_i'] = {}
 
-        # Diffusivity profiles
-        self._state['D_itg_e'] = {}
-        self._state['D_neo_e'] = {}
-        self._state['D_tem_e'] = {}
+        # ── Particle diffusivity profiles from TORAX {i: ...} ───────────────────
+        self._state['D_itg_e']  = {}
+        self._state['D_neo_e']  = {}
+        self._state['D_tem_e']  = {}
         self._state['D_turb_e'] = {}
 
-        self._state['R_inv_avg_tx'] = {}
-        self._state['R_avg_tm'] = {}
+        # ── Flux-surface geometry profiles {i: ...} ──────────────────────────────
+        self._state['R_avg_tm']     = {}
         self._state['R_inv_avg_tm'] = {}
-        
-        # Current density profiles from TORAX
-        self._state['j_tot'] = {}
-        self._state['j_ohmic'] = {}
-        self._state['j_ni'] = {}
-        self._state['j_bootstrap'] = {}
-        self._state['j_ecrh'] = {}
-        self._state['j_external'] = {}
-        self._state['j_generic_current'] = {}
-        self._state['vol_tm'] = {}
-        self._state['vol_tx'] = {}  # volume profile vs psi
-        self._state['vol_tx_lcfs'] = np.zeros(len(self._tm_times))  # volume at LCFS (scalar)
+        self._state['R_inv_avg_tx'] = {}
 
-        self._results['lcfs_geo'] = {}
-        self._results['dpsi_lcfs_dt'] = {}
-        self._results['vloop_tm'] = np.zeros([20, len(self._tm_times)])
-        # self._results['vloop_tx'] = np.zeros([20, len(self._tm_times)])
+        # ── TokaMaker equilibrium objects and strike points {i: ...} ────────────
+        self._state['equil']      = {}  # {i: TokaMaker equilibrium object}
+        self._state['strike_pts'] = {}  # {i: (N,2) [R,Z] strike points, or empty}
+
+        # ── Warm-start psi: persists across loops ────────────────────────────────
+        self._psi_warm_start = {}  # {i: psi_array}
+
         self._results['q'] = {}
-        self._results['jtot'] = {}
         self._results['n_e'] = {}
         self._results['T_e'] = {}
         self._results['T_i'] = {}
@@ -263,7 +272,6 @@ class TokTox:
         psi_axis = []
         psi_lcfs = []
         pres_prof = []
-        fpol_prof = []
 
         def interp_lcfs(lcfs, n=1000):
             x = lcfs[:, 0]
@@ -277,7 +285,7 @@ class TokTox:
             u_new = np.linspace(u.min(), u.max(), n)
             x_new_cs = cs_x(u_new)
             y_new_cs = cs_y(u_new)
-            return np.array([[x_new_cs[i], y_new_cs[i]] for i in range(n)])
+            return np.column_stack([x_new_cs, y_new_cs])
 
         for i, t in enumerate(self._eqtimes):
             g = read_eqdsk(g_eqdsk_arr[i])
@@ -319,9 +327,7 @@ class TokTox:
             q_prof.append(q)
 
             pres = np.interp(self._psi_N, psi_eqdsk, g['pres'])
-            fpol = np.interp(self._psi_N, psi_eqdsk, g['fpol'])
             pres_prof.append(pres)
-            fpol_prof.append(fpol)
 
         self.lcfs = lcfs
 
@@ -354,7 +360,6 @@ class TokTox:
             self._state['lcfs_geo'][i] = interp_prof(lcfs, t)
             self._state['ffp_prof'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(ffp_prof, t), 'type': 'linterp'}
             self._state['pp_prof'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(pp_prof, t), 'type': 'linterp'}
-            # self._state['psi'][i] = np.linspace(g['psimag'], g['psibry'], N_PSI)
             self._state['ffp_ni_prof'][i] = {'x': [], 'y': [], 'type': 'linterp'}
 
             self._state['ffp_prof_eqdsk'][i] = self._state['ffp_prof'][i].copy()
@@ -365,19 +370,12 @@ class TokTox:
             self._state['ffp_prof_eqdsk'][i]['y'] /= self._state['ffp_prof_eqdsk'][i]['y'][0]
             self._state['q_prof_eqdsk'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(q_prof, t), 'type': 'linterp'}
 
-            # Normalize profiles (disabled – use raw profiles)
-            # self._state['ffp_prof'][i]['y'] /= self._state['ffp_prof'][i]['y'][0]
-            # self._state['pp_prof'][i]['y'] /= self._state['pp_prof'][i]['y'][0]
-
             self._state['eta_prof'][i]= {
                 'x': self._psi_N.copy(),
                 'y': np.zeros(N_PSI),
                 'type': 'linterp',
             }
             
-            self._state['pres'][i] = self._state['p_prof_eqdsk'][i].copy()
-            self._state['fpol'][i] = {'x': self._psi_N.copy(), 'y': interp_prof(fpol_prof, t), 'type': 'linterp'}
-
         # Save seed values from initial equilibria
         self._psi_axis_seed = self._state['psi_axis_tm'].copy()
         self._psi_lcfs_seed = self._state['psi_lcfs_tm'].copy()
@@ -395,8 +393,6 @@ class TokTox:
         self._ecrh_loc = None
         self._nbi_loc = None
         self._ohmic_power = None
-        self._use_generic_current = False
-
         self._nbar = None
         self._n_e = None
         self._T_i = None
@@ -454,9 +450,6 @@ class TokTox:
 
         # Psi snapshots for movie generation (populated during _run_tm)
         self._tm_psi_on_nodes = {}  # {loop: {i: psi_array}}
-        # Equilibrium object snapshots for visualization (populated during _tm_update)
-        self._state['equil'] = {}  # {i: TokaMaker_equilibrium}
-        self._state['strike_pts'] = {}  # {i: (N,2) array of [R,Z] strike points, or empty}
 
         # Temp/output directory state (set in fly())
         self._out_dir = None
@@ -882,15 +875,6 @@ class TokTox:
             self._Ve_min = Ve_min
         if Ve_max is not None:
             self._Ve_max = Ve_max
-    def set_validation_ne(self, ne):
-        self._validation_ne = ne
-
-    def set_validation_Te(self, Te):
-        self._validation_Te = Te
-
-    def set_validation_Ti(self, Ti):
-        self._validation_Ti = Ti
-        
     def set_x_points(self, diverted_times=None, x_point_targets=None, x_point_weight=100.0):
         r'''! Configure diverted window and X-point targets for TM saddle constraints.
 
@@ -1439,8 +1423,6 @@ class TokTox:
                 'cocos': self._cocos,
             }
             try:
-                # with redirect_output_to_log(self._log_file):
-                    # print('FREDDIE TEST SHOULD BE IN LOG FILE')
                 _ = torax.ToraxConfig.from_dict(myconfig)
                 return True
             except Exception as e:
@@ -1643,10 +1625,6 @@ class TokTox:
         self._state['psi_lcfs_tx'][i] = self._state['psi_tx'][i]['y'][-1]
         self._state['psi_axis_tx'][i] = self._state['psi_tx'][i]['y'][0]
 
-        # ── Volume ──────────────────────────────────────────────────────────
-        self._state['vol_tx_lcfs'][i] = self._extract_tx_scalar_at_rho(data_tree, 'volume', t, 1.0)
-        self._state['vol_tx'][i]      = self._extract_tx_profile(data_tree, 'volume', t)
-
         # ── Transport coefficient profiles (chi, D) ─────────────────────────
         for chi_key in ['chi_neo_e', 'chi_neo_i', 'chi_etg_e', 'chi_itg_e', 'chi_itg_i',
                         'chi_tem_e', 'chi_tem_i', 'chi_turb_e', 'chi_turb_i']:
@@ -1686,12 +1664,12 @@ class TokTox:
 
         self._results['t_res'] = self._tm_times
 
-        # ── Per-timepoint profiles (on psi_N grid) ──────────────────────────
-        for t in self._tm_times:
-            self._results['T_e'][t] = self._extract_tx_profile(data_tree, 'T_e', t)
-            self._results['T_i'][t] = self._extract_tx_profile(data_tree, 'T_i', t)
-            self._results['n_e'][t] = self._extract_tx_profile(data_tree, 'n_e', t)
-            self._results['q'][t]   = self._extract_tx_profile(data_tree, 'q',   t)
+        # ── Per-timepoint profiles (copy from _state to avoid redundant extraction) ──
+        for i, t in enumerate(self._tm_times):
+            self._results['T_e'][t] = self._state['T_e'][i]
+            self._results['T_i'][t] = self._state['T_i'][i]
+            self._results['n_e'][t] = self._state['n_e'][i]
+            self._results['q'][t]   = self._state['q_prof_tx'][i]
 
         # ── Scalar time-series (with time-averaging) ────────────────────────
         self._results['E_fusion']      = self._extract_tx_scalar_timeseries(data_tree, 'E_fusion')
@@ -1719,12 +1697,6 @@ class TokTox:
         self._results['n_i_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'n_i', 0.0)
         self._results['T_e_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'T_e', 0.0)
         self._results['T_i_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'T_i', 0.0)
-
-        # ── Psi boundary values ─────────────────────────────────────────────
-        self._results['psi_lcfs_tx'] = self._extract_tx_scalar_at_rho_timeseries(
-            data_tree, 'psi', 1.0, scale=1.0 / (2.0 * np.pi))
-        self._results['psi_axis_tx'] = self._extract_tx_scalar_at_rho_timeseries(
-            data_tree, 'psi', 0.0, scale=1.0 / (2.0 * np.pi))
 
         # ── Optional scalars (may not exist in all TORAX versions) ──────────
         try:
@@ -1890,11 +1862,6 @@ class TokTox:
             # Pre-calculate all level profiles
             level_profiles = []
 
-            # Level 0: jphi
-            # jphi = copy.deepcopy(self._state['j_tot'][i])
-            # jphi['type'] = 'jphi-linterp'
-            # level_profiles.append({'ffp': jphi, 'pp': copy.deepcopy(pp_prof_raw), 'name': 'lv0: jphi'})
-            
             # Level 1: raw
             ffp_1, pp_1 = self._level1_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
             level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: raw'})
@@ -2090,13 +2057,9 @@ class TokTox:
         return ffp_prof, {**pp_prof, 'y': pp_new_smooth}
 
     def _level4_power_flux(self, ffp_prof, pp_prof):
-        r'''! Generic power-flux shape, sign matched to raw profile means.'''
-        # ffp_sign = float(np.sign(np.nanmean(ffp_prof['y']))) or 1.0
-        # pp_sign  = float(np.sign(np.nanmean(pp_prof['y'])))  or 1.0
+        r'''! Generic power-flux shape.'''
         ffp_out = create_power_flux_fun(N_PSI, 1.5, 2.0)
         pp_out  = create_power_flux_fun(N_PSI, 4.0, 1.0)
-        ffp_out = {**ffp_out, 'y': ffp_out['y']}
-        pp_out  = {**pp_out,  'y': pp_out['y']}
         return ffp_out, pp_out
 
     def _tm_update(self, i):
@@ -2110,17 +2073,11 @@ class TokTox:
         self._state['beta_N_tm'][i] = eq_stats['beta_n']
         self._state['l_i_tm'][i] = eq_stats['l_i']
 
-        # volume as a function of psi, only for debugging. If the two codes don't agree, <1/R> also won't agree.
-        # eq_read_extended = read_eqdsk_extended(os.path.join(self._eqdsk_dir, f'{self._current_loop:03d}.{i:03d}.eqdsk'))
-        # vol_tm = np.interp(self._psi_N, eq_read_extended['psi_n'], eq_read_extended['vol'])
-        # self._state['vol_tm'][i] = {'x': self._psi_N.copy(), 'y': vol_tm, 'type': 'linterp'}
-
         self._state['psi_lcfs_tm'][i] = self._state['equil'][i].psi_bounds[0] # TM outputs in Wb/rad (AKA Wb-rad) which is how psi_lcfs is stored
         self._state['psi_axis_tm'][i] = self._state['equil'][i].psi_bounds[1]
         self._state['psi_tm'][i] = {'x': self._psi_N.copy(), 'y': self._state['psi_axis_tm'][i] + (self._state['psi_lcfs_tm'][i] - self._state['psi_axis_tm'][i]) * self._psi_N, 'type': 'linterp'}
 
         try:
-            # self._log(f'Ip_ni = {self._state["Ip_ni_tx"][i]:.3f} A, vloop = {self._state["vloop_tx"][i]:.3f} V')
             self._state['vloop_tm'][i] = self._state['equil'][i].calc_loopvoltage()
         except ValueError:
             self._log(f'WARNING: calc_loopvoltage failed at t-idx = {i} '
@@ -2152,7 +2109,7 @@ class TokTox:
         for coil, current in coils.items():
             if coil not in self._results['COIL']:
                 self._results['COIL'][coil] = {}
-            self._results['COIL'][coil][self._tm_times[i]] = current * 1.0 # TODO: handle nturns > 1
+            self._results['COIL'][coil][self._tm_times[i]] = current
 
         # get psi to use in next timestep
         self._state['psi_grid_prev_tm'][i] = self._state['equil'][i].get_psi(normalized=False)
@@ -2526,15 +2483,6 @@ class TokTox:
         from toktox_visualization import plot_profile_evolution
         return plot_profile_evolution(self, save_path=save_path, display=display, one_plot=one_plot, **kwargs)
 
-
-    # TODO: not working in notebook mode yet: makes many plots below widget. All these are in movie already.
-    # def plot_equil(self, notebook_mode=None, save_path=None, **kwargs):
-    #     r'''! Equilibrium viewer.
-    #     @param notebook_mode True=widget, False=save PNGs, None=auto (widget if in Jupyter).
-    #     @param save_path Directory for saved PNGs when notebook_mode=False.
-    #     '''
-    #     from toktox_visualization import plot_equil_interactive
-    #     return plot_equil_interactive(self, notebook_mode=notebook_mode, save_path=save_path, **kwargs)
 
     def plot_coils(self, save_path=None, display=True, **kwargs):
         r'''! Plot coil current traces over the pulse.

@@ -250,7 +250,7 @@ def read_eqdsk(filename):
 # Flux-surface geometry using OMFIT's flux surface calculation
 # ---------------------------------------------------------------------------
 
-def add_flux_surface_geometry(eqdsk, filename=None):
+def add_flux_surface_geometry(eqdsk):
     """
     Compute flux-surface geometry and add it to the eqdsk dictionary in-place.
 
@@ -267,7 +267,6 @@ def add_flux_surface_geometry(eqdsk, filename=None):
     Parameters
     ----------
     eqdsk : dict returned by read_eqdsk
-    filename : str, optional (unused, kept for API compatibility)
     """
     nr     = eqdsk['nr']
     nz     = eqdsk['nz']
@@ -298,15 +297,14 @@ def add_flux_surface_geometry(eqdsk, filename=None):
     [dpsi_dZ, dpsi_dR] = np.gradient(psi_grid, dZ, dR)
    
     # Create 2D R grid for division
-    R_2d, Z_2d = np.meshgrid(R, Z)
-    
+    R_2d = np.meshgrid(R, Z)[0]
+
     # OMFIT's formula for COCOS=1
-    Br = dpsi_dZ / R_2d  
+    Br = dpsi_dZ / R_2d
     Bz = -dpsi_dR / R_2d
-    
+
     # Create interpolators for Br and Bz separately (OMFIT's approach)
     # Then compute |Bp| at contour points, not on the grid
-    psi_interp = RectBivariateSpline(Z, R, psi_grid)
     Br_interp = RectBivariateSpline(Z, R, Br)
     Bz_interp = RectBivariateSpline(Z, R, Bz)
     
@@ -397,23 +395,16 @@ def add_flux_surface_geometry(eqdsk, filename=None):
         dZ_contour = np.diff(contour_Z, append=contour_Z[0])
         dl = np.sqrt(dR_contour**2 + dZ_contour**2)
         
-        # Integrand: dl / |Bp| 
-        integrand = dl / Bp_contour
-        int_flux_expansion = np.sum(integrand)
-        
-        # Sign convention for vpr following OMFIT's approach
-        # For COCOS=1: vp = sign(Bp) * 2π * ∑(dl / |Bp|)
-        vpr[i] = 2.0 * np.pi * int_flux_expansion
-        
-        # Flux-surface averages
-        # OMFIT uses fluxexpansion_dl = dl/|Bp| as the weight
-        # <R> = ∫ R * (dl/|Bp|) / ∫ (dl/|Bp|)
-        # <1/R> = ∫ (1/R) * (dl/|Bp|) / ∫ (dl/|Bp|)
-        integrand_weight = dl / Bp_contour
-        norm = np.sum(integrand_weight)
+        # Integrand: dl / |Bp| (used for both vpr and flux-surface averages)
+        dl_over_Bp = dl / Bp_contour
+        norm = np.sum(dl_over_Bp)
+
+        # vpr = 2π * ∮ dl/|Bp|
+        vpr[i] = 2.0 * np.pi * norm
+        # Flux-surface averages: <R> and <1/R> weighted by dl/|Bp|
         if norm > 0:
-            R_avg[i] = np.sum(contour_R * integrand_weight) / norm
-            R_inv_avg[i] = np.sum(integrand_weight / contour_R) / norm
+            R_avg[i] = np.sum(contour_R * dl_over_Bp) / norm
+            R_inv_avg[i] = np.sum(dl_over_Bp / contour_R) / norm
         else:
             R_avg[i] = np.mean(contour_R)
             R_inv_avg[i] = 1.0 / R_avg[i]
@@ -441,8 +432,6 @@ def add_flux_surface_geometry(eqdsk, filename=None):
     if len(eqdsk['rzout']) > 0:
         R_lcfs = eqdsk['rzout'][:, 0]
         Z_lcfs = eqdsk['rzout'][:, 1]
-        # Find points closest to midplane
-        idx_midplane = np.argmin(np.abs(Z_lcfs - eqdsk['zmid']))
         # Get a window of points near midplane to find R extent
         z_tol = 0.01  # tolerance in m
         near_midplane = np.abs(Z_lcfs - eqdsk['zmid']) < z_tol
@@ -503,7 +492,7 @@ def read_eqdsk_extended(filename):
     filename : str     Path to gEQDSK file
     """
     eqdsk = read_eqdsk(filename)
-    add_flux_surface_geometry(eqdsk, filename=filename)
+    add_flux_surface_geometry(eqdsk)
     return eqdsk
 
 

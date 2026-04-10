@@ -4,7 +4,6 @@ import torax
 import numpy as np
 import matplotlib.pyplot as plt
 import xarray as xr
-import os
 
 def run_torax_sim(input_config, plot_time=0):
 
@@ -53,18 +52,6 @@ def detailed_plot_single_sim(dt: xr.DataTree, time: float | None = None):
   fsize = 13
   fontreduction = 1
   plt.rcParams.update({'font.size': fsize})
-
-  # Helper function to safely get profile or scalar
-  def safe_get(obj, attr_path, default=None):
-    """Safely access nested attributes, return default if missing."""
-    try:
-      attrs = attr_path.split('.')
-      val = obj
-      for attr in attrs:
-        val = getattr(val, attr)
-      return val
-    except (AttributeError, KeyError):
-      return default
 
   # First Row: Currents and Q
   axes[0, 0].plot(dt.time, dt.profiles.Ip_profile[:, -1]/1e6, 'b-', label=r'$I_p$')
@@ -219,23 +206,16 @@ def detailed_plot_single_sim(dt: xr.DataTree, time: float | None = None):
     axes[3, 3].set_title(r"Radiation heat sink", fontsize=fsize-fontreduction)
 
   # Heat sources (safely plot available variables)
-  heat_sources = []
-  if hasattr(dt.profiles, 'p_ecrh_e'):
-    axes[3, 4].plot(dt.rho_cell_norm, dt.profiles.p_ecrh_e[time_index, :]/1e6, 'b-', label=r'$Q_{ecrh}$')
-    heat_sources.append(True)
-  if hasattr(dt.profiles, 'p_generic_heat_i'):
-    axes[3, 4].plot(dt.rho_cell_norm, dt.profiles.p_generic_heat_i[time_index, :]/1e6, 'r-', label=r'$Q_{nbi_i}$')
-    heat_sources.append(True)
-  if hasattr(dt.profiles, 'p_generic_heat_e'):
-    axes[3, 4].plot(dt.rho_cell_norm, dt.profiles.p_generic_heat_e[time_index, :]/1e6, 'm-', label=r'$Q_{nbi_e}$')
-    heat_sources.append(True)
-  if hasattr(dt.profiles, 'p_alpha_i'):
-    axes[3, 4].plot(dt.rho_cell_norm, dt.profiles.p_alpha_i[time_index, :]/1e6, 'g-', label=r'$Q_{fus_i}$')
-    heat_sources.append(True)
-  if hasattr(dt.profiles, 'p_alpha_e'):
-    axes[3, 4].plot(dt.rho_cell_norm, dt.profiles.p_alpha_e[time_index, :]/1e6, 'k-', label=r'$Q_{fus_e}$')
-    heat_sources.append(True)
-  if heat_sources:
+  has_heat_source = False
+  for attr, style, label in [('p_ecrh_e', 'b-', r'$Q_{ecrh}$'),
+                              ('p_generic_heat_i', 'r-', r'$Q_{nbi_i}$'),
+                              ('p_generic_heat_e', 'm-', r'$Q_{nbi_e}$'),
+                              ('p_alpha_i', 'g-', r'$Q_{fus_i}$'),
+                              ('p_alpha_e', 'k-', r'$Q_{fus_e}$')]:
+    if hasattr(dt.profiles, attr):
+      axes[3, 4].plot(dt.rho_cell_norm, getattr(dt.profiles, attr)[time_index, :]/1e6, style, label=label)
+      has_heat_source = True
+  if has_heat_source:
     axes[3, 4].set_xlabel(r"Normalized Radius ($\hat{\rho}$)")
     axes[3, 4].set_ylabel(r"Heat source densities $[MW/m^3]$")
     axes[3, 4].legend(fontsize=fsize-fontreduction)
