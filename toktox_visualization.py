@@ -82,6 +82,13 @@ def _style(ax):
     ax.tick_params(labelsize=TICK_FS)
 
 
+def _legend_if_labeled(ax, *args, **kwargs):
+    """Add a legend only when labeled artists are present."""
+    handles, labels = ax.get_legend_handles_labels()
+    if handles and labels:
+        ax.legend(*args, **kwargs)
+
+
 def _vline(axes, t_now):
     for ax in (axes if hasattr(axes, '__iter__') else [axes]):
         ax.axvline(t_now, color=VLINE_COLOR, ls=VLINE_LS, lw=VLINE_LW, zorder=10)
@@ -281,7 +288,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
             pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$\chi$ [m²/s]')
-    ax.legend(fontsize=9)
+    _legend_if_labeled(ax, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     ax = axes[4, 1]
@@ -296,7 +303,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
             pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$\chi$ [m²/s]')
-    ax.legend(fontsize=8, ncol=2)
+    _legend_if_labeled(ax, fontsize=8, ncol=2)
     ax.grid(True, alpha=0.3)
 
     ax = axes[4, 2]
@@ -309,7 +316,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
             pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$\chi$ [m²/s]')
-    ax.legend(fontsize=9)
+    _legend_if_labeled(ax, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     # Row 5: Diffusivity profiles
@@ -322,7 +329,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
         pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$D$ [m²/s]')
-    ax.legend(fontsize=9)
+    _legend_if_labeled(ax, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     ax = axes[5, 1]
@@ -335,7 +342,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
             pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$D$ [m²/s]')
-    ax.legend(fontsize=9)
+    _legend_if_labeled(ax, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     ax = axes[5, 2]
@@ -347,7 +354,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
         pass
     ax.set_xlabel(r'$\hat{\psi}$')
     ax.set_ylabel(r'$D$ [m²/s]')
-    ax.legend(fontsize=9)
+    _legend_if_labeled(ax, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
@@ -961,12 +968,14 @@ def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
     or one combined figure when one_plot=True.
     Line color encodes time, with a colorbar on the right.
     Phases not present in the simulation are skipped.
-    LCFS is traced at psi_N=0.99 directly from each stored equilibrium object.
+    Uses stored lcfs_geo_tm contours (extracted in _tm_update); falls back to
+    trace_surf on the stored equilibrium object if the stored contour is absent.
     """
     s = tt._state
     times = np.array(tt._tm_times)
+    lcfs_tm_data = s.get('lcfs_geo_tm', {})
     equil_data = s.get('equil', {})
-    if not equil_data:
+    if not lcfs_tm_data and not equil_data:
         return
 
     ft = getattr(tt, '_flattop', np.zeros(len(times), dtype=bool)).astype(bool)
@@ -1000,7 +1009,7 @@ def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
 
     for phase_name, mask in phases:
         indices = np.where(mask)[0]
-        indices = [i for i in indices if equil_data.get(i) is not None]
+        indices = [i for i in indices if lcfs_tm_data.get(i) is not None or equil_data.get(i) is not None]
         if not indices:
             continue
 
@@ -1023,11 +1032,16 @@ def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
                 ax.plot(lc[:, 0], lc[:, 1], color='k', linewidth=1.5, zorder=5)
 
         for i in indices:
-            equil = equil_data[i]
-            try:
-                lcfs = equil.trace_surf(0.99)
-            except Exception:
-                continue
+            # Prefer pre-extracted contour; fall back to trace_surf if missing
+            lcfs = lcfs_tm_data.get(i)
+            if lcfs is None:
+                equil = equil_data.get(i)
+                if equil is None:
+                    continue
+                try:
+                    lcfs = equil.trace_surf(1.0)
+                except Exception:
+                    continue
             if lcfs is None or len(lcfs) == 0:
                 continue
             lcfs = np.asarray(lcfs)

@@ -247,6 +247,8 @@ class TokTox:
         # ── TokaMaker equilibrium objects and strike points {i: ...} ────────────
         self._state['equil']      = {}  # {i: TokaMaker equilibrium object}
         self._state['strike_pts'] = {}  # {i: (N,2) [R,Z] strike points, or empty}
+        self._state['lcfs_geo_tm']= {}  # {i: (N,2) LCFS contour traced from TM solve}
+        self._state['x_pts_tm']   = {}  # {i: (n_xpts,2) X-point locations from TM solve, or None}
 
         # ── Warm-start psi: persists across loops ────────────────────────────────
         self._psi_warm_start = {}  # {i: psi_array}
@@ -2115,7 +2117,22 @@ class TokTox:
         self._state['psi_grid_prev_tm'][i] = self._state['equil'][i].get_psi(normalized=False)
         self._psi_warm_start[i] = self._state['equil'][i].get_psi(normalized=False)  # persist across steps
 
-        # TODO: pull LCFS geometry from tm solve (trace_surf often silently fails)
+        # Extract LCFS contour and X-points from the solved equilibrium
+        try:
+            lcfs_tm = self._state['equil'][i].trace_surf(1.0)    
+        except Exception:
+            try:
+                lcfs_tm = self._state['equil'][i].trace_lcfs(0.99)  
+            except Exception:
+                self._state['lcfs_geo_tm'][i] = None
+
+        self._state['lcfs_geo_tm'][i] = np.asarray(lcfs_tm) if lcfs_tm is not None else None    
+        
+        try:
+            x_pts, _ = self._state['equil'][i].get_xpoints()
+            self._state['x_pts_tm'][i] = np.asarray(x_pts) if x_pts is not None else None
+        except Exception:
+            self._state['x_pts_tm'][i] = None
 
 
     # ─── I/O & Logging ──────────────────────────────────────────────────────────
