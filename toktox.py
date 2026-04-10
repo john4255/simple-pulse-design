@@ -102,7 +102,7 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.95, n_rho=50, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=4, truncate_eq=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.99, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=4, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
@@ -131,10 +131,10 @@ class TokTox:
         self._init_files = g_eqdsk_arr
         self._t_init = t_init
         self._t_final = t_final
-        self._dt = tx_dt # TORAX timestep
+        self._tx_dt = tx_dt # TORAX timestep
         self._prescribed_currents = prescribed_currents
         self._last_surface_factor = last_surface_factor
-        self._n_rho = n_rho # resolution of TORAX grid
+        self._n_rho = 50 # resolution of TORAX grid, default 50, changed with set_tx_grid()
         self._psi_N = np.linspace(0.0, 1.0, N_PSI) # standardized psi_N grid all values should be mapped onto
         self._truncate_eq = truncate_eq
 
@@ -1274,7 +1274,7 @@ class TokTox:
         myconfig.setdefault('numerics', {})
         myconfig['numerics']['t_initial'] = self._t_init
         myconfig['numerics']['t_final'] = self._t_final
-        myconfig['numerics']['fixed_dt'] = self._dt
+        myconfig['numerics']['fixed_dt'] = self._tx_dt
 
         # ── 5. Psi profile from loop 0  ──────────
         myconfig.setdefault('profile_conditions', {})
@@ -2264,8 +2264,8 @@ class TokTox:
         r'''! Run TokaMaker-TORAX coupled simulation loop.
 
         @param convergence_threshold Max fractional change in consumed flux between loops for convergence.
-        @param max_loop Maximum number of coupling iterations.
-        @param run_name Name tag for this run (used in output directory and log file).
+        @param max_loop Maximum number of loops.
+        @param run_name Name for this run (used in output directory and log file).
         @param save_outputs If True, create persistent output directory with eqdsks, configs, and results JSON.
         @param debug If True, redirect all outputs (including TM/TX noise) to the log file,
                save intermediate states, and save diagnostic plots into the output directory.
@@ -2379,7 +2379,7 @@ class TokTox:
 
         # ── Header ──
         self._print(f'\n{"="*60}\n TokaMaker + TORAX (TokTox) \n run_name = {run_name} | t=[{self._t_init:.1f}, {self._t_final:.1f}] s '
-                      f'| {len(self._times)} timepoints | dt={self._dt} s | max_loop={max_loop}')
+                      f'| {len(self._times)} timepoints | dt={self._tx_dt} s | max_loop={max_loop}')
 
         err = convergence_threshold + 1.0
         cflux_tx_prev = 0.0
@@ -2498,29 +2498,19 @@ class TokTox:
     #  Visualization wrapper methods (lazy-import from toktox_visualization)
     # =========================================================================
 
-    def make_movie(self, save_bool=False, save_path=None, **kwargs):
+    def make_movie(self, save_path=None, **kwargs):
         r'''! Generate pulse movie from stored psi snapshots.
-        @param save_path Path to save MP4 file. If None, uses default naming.
+        @param save_path Path to save MP4 file. If None, does not save.
         '''
         from toktox_visualization import make_movie
-        if save_bool:
-            if save_path is None:
-                save_path = os.path.join(self._out_dir, f'toktox_pulse_loop{self._current_loop:03d}.mp4')
-        else: # if save_bool == True, but save_path has contents, for some reason, set save_path to None so nothing is saved.
-            save_path = None
-        return make_movie(self,save_path=save_path, **kwargs)
+        return make_movie(self, save_path=save_path, **kwargs)
 
-    def plot_scalars(self, save_bool=False, save_path=None, display=True, **kwargs):
+    def plot_scalars(self, save_path=None, display=True, **kwargs):
         r'''! Plot scalar time traces (Ip, Q, Te, ne, power channels, etc.).
-        @param save_path Path to save figure. If None, displays inline.
-        @param display Whether to show the plot (for Jupyter).
+        @param save_path Path to save figure. If None, does not save.
+        @param display Whether to show the plot.
         '''
         from toktox_visualization import plot_scalars
-        if save_bool:
-            if save_path is None:
-                save_path = os.path.join(self._out_dir, 'plots', f'toktox_pulse_loop{self._current_loop:03d}.mp4')
-        else:
-            save_path = None
         return plot_scalars(self, save_path=save_path, display=display, **kwargs)
 
     def plot_profiles(self, **kwargs):
@@ -2536,18 +2526,21 @@ class TokTox:
         from toktox_visualization import plot_equil_interactive
         return plot_equil_interactive(self, notebook_mode=notebook_mode, save_path=save_path, **kwargs)
 
-    def plot_coils(self, save_bool=False, save_path=None, display=True, **kwargs):
+    def plot_coils(self, save_path=None, display=True, **kwargs):
         r'''! Plot coil current traces over the pulse.
-        @param save_path Path to save figure. If None, displays inline.
+        @param save_path Path to save figure. If None, does not save.
         @param display Whether to show the plot.
         '''
         from toktox_visualization import plot_coils
-        if save_bool:
-            if save_path is None:
-                save_path = os.path.join(self._out_dir, 'plots', f'toktox_pulse_loop{self._current_loop:03d}.mp4')
-        else:
-            save_path = None
         return plot_coils(self, save_path=save_path, display=display, **kwargs)
+
+    def plot_lcfs_evolution(self, save_path=None, display=True, **kwargs):
+        r'''! Plot time evolution of the LCFS for each pulse phase (rampup, flattop, rampdown).
+        @param save_path Path prefix to save figures. If None, does not save.
+        @param display Whether to show the plots.
+        '''
+        from toktox_visualization import plot_lcfs_evolution
+        return plot_lcfs_evolution(self, save_path=save_path, display=display, **kwargs)
 
     def summary(self, **kwargs):
         r'''! Print/display a physics summary of the simulation.'''

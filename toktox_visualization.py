@@ -897,7 +897,7 @@ def plot_scalars(tt, save_path=None, display=True):
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 
-    plt.suptitle(f'Scalars Over Pulse (loop {tt._current_loop})', fontsize=14)
+    plt.suptitle(f'Scalars', fontsize=14)
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
     _save_or_display(fig, save_path, display)
@@ -938,6 +938,110 @@ def plot_coils(tt, save_path=None, display=True):
     plt.tight_layout()
     plt.subplots_adjust(top=0.92)
     _save_or_display(fig, save_path, display)
+
+
+# =========================================================================
+#  LCFS evolution plot
+# =========================================================================
+
+def plot_lcfs_evolution(tt, save_path=None, display=True):
+    """Plot time evolution of the last closed flux surface for each phase.
+
+    Produces up to three separate figures (rampup, flattop, rampdown).
+    Line color encodes time, with a colorbar on the right.
+    Phases not present in the simulation are skipped.
+    LCFS is traced at psi_N=0.99 directly from each stored equilibrium object.
+    """
+    s = tt._state
+    times = np.array(tt._times)
+    equil_data = s.get('equil', {})
+    if not equil_data:
+        return
+
+    ft = getattr(tt, '_flattop', np.zeros(len(times), dtype=bool)).astype(bool)
+
+    # Use same phase detection as the rest of toktox
+    if np.any(ft):
+        ft_indices = np.where(ft)[0]
+        ft_start_i = ft_indices[0]
+        ft_end_i   = ft_indices[-1]
+        rampup_mask   = np.arange(len(times)) < ft_start_i
+        flattop_mask  = ft
+        rampdown_mask = np.arange(len(times)) > ft_end_i
+    else:
+        rampup_mask   = np.ones(len(times), dtype=bool)
+        flattop_mask  = np.zeros(len(times), dtype=bool)
+        rampdown_mask = np.zeros(len(times), dtype=bool)
+
+    phases = [
+        ('Ramp-up',   rampup_mask),
+        ('Flattop',   flattop_mask),
+        ('Ramp-down', rampdown_mask),
+    ]
+
+    # Limiter contours from TokaMaker (col 0 = R, col 1 = Z; swap if mirror_mode)
+    lim_contours = getattr(tt._tm, 'lim_contours', None) or []
+    mirror_mode  = getattr(getattr(tt._tm, 'settings', None), 'mirror_mode', False)
+
+    cmap = cm.plasma
+
+    for phase_name, mask in phases:
+        indices = np.where(mask)[0]
+        indices = [i for i in indices if equil_data.get(i) is not None]
+        if not indices:
+            continue
+
+        phase_times = times[indices]
+        t_min, t_max = phase_times[0], phase_times[-1]
+        norm = Normalize(vmin=t_min, vmax=t_max if t_max > t_min else t_min + 1e-9)
+
+        fig, ax = plt.subplots(figsize=(6, 8))
+        fig.suptitle(
+            f'LCFS Evolution — {phase_name} (loop {tt._current_loop})',
+            fontsize=TITLE_FS,
+        )
+
+        # Draw limiter
+        for lc in lim_contours:
+            lc = np.asarray(lc)
+            if mirror_mode:
+                ax.plot(lc[:, 1], lc[:, 0], color='k', linewidth=1.5, zorder=5)
+            else:
+                ax.plot(lc[:, 0], lc[:, 1], color='k', linewidth=1.5, zorder=5)
+
+        for i in indices:
+            equil = equil_data[i]
+            try:
+                lcfs = equil.trace_surf(0.99)
+            except Exception:
+                continue
+            if lcfs is None or len(lcfs) == 0:
+                continue
+            lcfs = np.asarray(lcfs)
+            color = cmap(norm(times[i]))
+            ax.plot(lcfs[:, 0], lcfs[:, 1], color=color, linewidth=1.0, alpha=0.85)
+
+        ax.set_xlabel('R [m]', fontsize=LABEL_FS)
+        ax.set_ylabel('Z [m]', fontsize=LABEL_FS)
+        ax.set_aspect('equal')
+        _style(ax)
+
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, pad=0.02)
+        cbar.set_label('Time [s]', fontsize=LABEL_FS)
+        cbar.ax.tick_params(labelsize=TICK_FS)
+
+        plt.tight_layout()
+
+        if save_path is not None:
+            base, ext = os.path.splitext(save_path)
+            phase_tag = phase_name.lower().replace('-', '').replace(' ', '_')
+            phase_save = f'{base}_{phase_tag}{ext}'
+        else:
+            phase_save = None
+
+        _save_or_display(fig, phase_save, display)
 
 
 # =========================================================================
