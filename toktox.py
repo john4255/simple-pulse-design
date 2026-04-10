@@ -102,14 +102,14 @@ class TokTox:
 
     # ─── Initialization ─────────────────────────────────────────────────────────
 
-    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, times=None, last_surface_factor=0.99, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=4, truncate_eq=False):
+    def __init__(self, t_init, t_final, eqtimes, g_eqdsk_arr, tx_dt=0.1, tm_times=None, last_surface_factor=0.99, prescribed_currents=False, cocos=2, oft_env=None, oft_threads=4, truncate_eq=False):
         r'''! Initialize the Coupled TokaMaker + TORAX object.
         @param t_init Start time (s).
         @param t_final End time (s).
         @param eqtimes Time points of each gEQDSK file.
         @param g_eqdsk_arr Filenames of each gEQDSK file.
         @param tx_dt Time step (s) of TORAX simulation.
-        @param times Time points to sample output at.
+        @param tm_times Time points where TokaMaker solves equilibrium.
         @param last_surface_factor Last surface factor for Torax.
         @param n_rho Number of grid cells for torax.
         @param prescribed_currents Use prescribed coil currents or solve inverse problem to calculate currents.
@@ -140,43 +140,43 @@ class TokTox:
 
         self._current_loop = 0
 
-        if times is None:
-            self._times = eqtimes
+        if tm_times is None:
+            self._tm_times = sorted(eqtimes)
         else:
-            self._times = sorted(times)
+            self._tm_times = sorted(tm_times)
         # TODO organize initialization of _state
-        self._state['R0_mag'] = np.zeros(len(self._times))
-        self._state['Z'] = np.zeros(len(self._times))
-        self._state['a'] = np.zeros(len(self._times))
-        self._state['kappa'] = np.zeros(len(self._times))
-        self._state['delta'] = np.zeros(len(self._times))
-        self._state['B0'] = np.zeros(len(self._times))
-        self._state['Ip'] = np.zeros(len(self._times))
-        self._state['Ip_tm'] = np.zeros(len(self._times))
-        self._state['Ip_tx'] = np.zeros(len(self._times))
-        self._state['Ip_ni_tx'] = np.zeros(len(self._times))
-        self._state['pax'] = np.zeros(len(self._times))
-        self._state['pax_tm'] = np.zeros(len(self._times))
-        self._state['beta_N_tm'] = np.zeros(len(self._times))
-        self._state['beta_N_tx'] = np.zeros(len(self._times))
-        self._state['l_i_tm'] = np.zeros(len(self._times))
-        self._state['beta_pol'] = np.zeros(len(self._times))
-        self._state['vloop_tm'] = np.zeros(len(self._times))
-        self._state['vloop_tx'] = np.zeros(len(self._times))
-        self._state['q95'] = np.zeros(len(self._times))
-        self._state['q0'] = np.zeros(len(self._times))
-        self._state['q95_tm'] = np.zeros(len(self._times))
-        self._state['q0_tm'] = np.zeros(len(self._times))
+        self._state['R0_mag'] = np.zeros(len(self._tm_times))
+        self._state['Z'] = np.zeros(len(self._tm_times))
+        self._state['a'] = np.zeros(len(self._tm_times))
+        self._state['kappa'] = np.zeros(len(self._tm_times))
+        self._state['delta'] = np.zeros(len(self._tm_times))
+        self._state['B0'] = np.zeros(len(self._tm_times))
+        self._state['Ip'] = np.zeros(len(self._tm_times))
+        self._state['Ip_tm'] = np.zeros(len(self._tm_times))
+        self._state['Ip_tx'] = np.zeros(len(self._tm_times))
+        self._state['Ip_ni_tx'] = np.zeros(len(self._tm_times))
+        self._state['pax'] = np.zeros(len(self._tm_times))
+        self._state['pax_tm'] = np.zeros(len(self._tm_times))
+        self._state['beta_N_tm'] = np.zeros(len(self._tm_times))
+        self._state['beta_N_tx'] = np.zeros(len(self._tm_times))
+        self._state['l_i_tm'] = np.zeros(len(self._tm_times))
+        self._state['beta_pol'] = np.zeros(len(self._tm_times))
+        self._state['vloop_tm'] = np.zeros(len(self._tm_times))
+        self._state['vloop_tx'] = np.zeros(len(self._tm_times))
+        self._state['q95'] = np.zeros(len(self._tm_times))
+        self._state['q0'] = np.zeros(len(self._tm_times))
+        self._state['q95_tm'] = np.zeros(len(self._tm_times))
+        self._state['q0_tm'] = np.zeros(len(self._tm_times))
         self._state['q_prof_tm'] = {}
         self._state['q_prof_tx'] = {}
         self._state['q_prof_eqdsk'] = {}
-        self._state['psi_lcfs_tm'] = np.zeros(len(self._times))
-        self._state['psi_axis_tm'] = np.zeros(len(self._times))
-        self._state['psi_lcfs_tx'] = np.zeros(len(self._times))
-        self._state['psi_axis_tx'] = np.zeros(len(self._times))
+        self._state['psi_lcfs_tm'] = np.zeros(len(self._tm_times))
+        self._state['psi_axis_tm'] = np.zeros(len(self._tm_times))
+        self._state['psi_lcfs_tx'] = np.zeros(len(self._tm_times))
+        self._state['psi_axis_tx'] = np.zeros(len(self._tm_times))
         self._state['psi_tx'] = {}  
         self._state['psi_tm'] = {}
-        self._state['psi_grid_prev_tm'] = np.zeros(len(self._times))
+        self._state['psi_grid_prev_tm'] = np.zeros(len(self._tm_times))
         self._psi_warm_start = {}  # {timestep_idx: psi_array} — persists across loops for warm-starting
 
         self._state['lcfs_geo'] = {}
@@ -192,8 +192,8 @@ class TokTox:
         self._state['T_i'] = {}
         self._state['n_e'] = {}
         self._state['n_i'] = {}
-        self._state['f_GW'] = np.zeros(len(self._times))
-        self._state['f_GW_vol'] = np.zeros(len(self._times))
+        self._state['f_GW'] = np.zeros(len(self._tm_times))
+        self._state['f_GW_vol'] = np.zeros(len(self._tm_times))
         self._state['ptot'] = {}
         self._state['ffp_ni_prof'] = {}
         self._state['ffp_prof_tx'] = {}
@@ -235,12 +235,12 @@ class TokTox:
         self._state['j_generic_current'] = {}
         self._state['vol_tm'] = {}
         self._state['vol_tx'] = {}  # volume profile vs psi
-        self._state['vol_tx_lcfs'] = np.zeros(len(self._times))  # volume at LCFS (scalar)
+        self._state['vol_tx_lcfs'] = np.zeros(len(self._tm_times))  # volume at LCFS (scalar)
 
         self._results['lcfs_geo'] = {}
         self._results['dpsi_lcfs_dt'] = {}
-        self._results['vloop_tm'] = np.zeros([20, len(self._times)])
-        # self._results['vloop_tx'] = np.zeros([20, len(self._times)])
+        self._results['vloop_tm'] = np.zeros([20, len(self._tm_times)])
+        # self._results['vloop_tx'] = np.zeros([20, len(self._tm_times)])
         self._results['q'] = {}
         self._results['jtot'] = {}
         self._results['n_e'] = {}
@@ -337,7 +337,7 @@ class TokTox:
                     return (1.0 - alpha) * np.array(profs[i-1]) + alpha * np.array(profs[i])
             return profs[-1]
 
-        for i, t in enumerate(self._times):
+        for i, t in enumerate(self._tm_times):
             # Default Scalars
             self._state['R0_mag'][i] = np.interp(t, self._eqtimes, R)
             self._state['Z'][i] = np.interp(t, self._eqtimes, Z)
@@ -459,12 +459,21 @@ class TokTox:
         self._state['strike_pts'] = {}  # {i: (N,2) array of [R,Z] strike points, or empty}
 
         # Temp/output directory state (set in fly())
+        self._out_dir = None
         self._eqdsk_dir = None
+        self._eqdsk_dir_is_temp = False
         self._save_outputs = False
         self._debug_mode = False
+        self._output_mode = False
+        self._output_file_tag = None
+        self._run_timestamp = None
         self._diagnostics = False
         self._logging_configured = False
         self._log_file = None
+
+    def output_dir(self):
+        r'''! Return output directory for the latest run, or None when output_mode=False.'''
+        return self._out_dir
 
     # ─── Static Utilities ───────────────────────────────────────────────────────
 
@@ -646,7 +655,7 @@ class TokTox:
 
             # Determine target current for this coil
             if self._prescribed_currents and targets:
-                t_current = np.interp(self._times[i], self._targets['time'], self._targets.get(name, [0.0]*len(self._targets.get('time', [0]))))
+                t_current = np.interp(self._tm_times[i], self._targets['time'], self._targets.get(name, [0.0]*len(self._targets.get('time', [0]))))
                 coil_targets[cid] = t_current
             elif targets and name in targets:
                 coil_targets[cid] = targets[name]
@@ -838,16 +847,6 @@ class TokTox:
         self._evolve_Ti = Ti
         self._evolve_Te = Te
 
-    # def set_Bp(self, Bp):
-    #     Bp_t = sorted(Bp.keys())
-    #     Bp_list = [Bp[t] for t in Bp_t]
-    #     for i, t in enumerate(self._times):
-    #         self._state['beta_pol'][i] = np.interp(t, Bp_t, Bp_list)
-    
-    # def set_Vloop(self, vloop):
-    #     for i in range(len(self._times)):
-    #         self._state['vloop_tm'][i] = vloop[i]
-
     def set_gas_puff(self, S_total=None, decay_length=None):
         r'''! Set gas puff particle source.
         @param S_total Particle source (particles/s).
@@ -942,7 +941,7 @@ class TokTox:
             # Inline flattop check: only average when inside detected flat-top
             if not hasattr(self, '_flattop') or not np.any(self._flattop):
                 return (time, time)
-            ft_times = np.array(self._times)[self._flattop]
+            ft_times = np.array(self._tm_times)[self._flattop]
             if not (ft_times[0] <= time <= ft_times[-1]):
                 return (time, time)
         # 'pulse' → always average
@@ -1238,7 +1237,7 @@ class TokTox:
             eqtimes_arr = np.array(self._eqtimes)
             full_eqdsk_map = {}
             n_tm = 0
-            for i, t in enumerate(self._times):
+            for i, t in enumerate(self._tm_times):
                 eqdsk = os.path.join(self._eqdsk_dir, f'{self._current_loop - 1:03d}.{i:03d}.eqdsk')
                 tm_ok = (eqdsk not in self._eqdsk_skip) and self._test_eqdsk(eqdsk)
                 if tm_ok:
@@ -1247,7 +1246,7 @@ class TokTox:
             # If i=0 TM failed, always fall back to the seed EQDSK so TORAX
             # has a valid initial geometry. Other failed timesteps are left out of the
             # map and TORAX interpolates from neighboring solved entries.
-            t0 = self._times[0]
+            t0 = self._tm_times[0]
             if t0 not in full_eqdsk_map:
                 seed_eqdsk = self._init_files[0]
                 if self._test_eqdsk(seed_eqdsk):
@@ -1259,7 +1258,7 @@ class TokTox:
             if n_tm == 0:
                 self._log(f'Warning: Loop {self._current_loop}: no valid TM EQDSKs from loop {self._current_loop-1}, using all seed EQDSKs.')
             else:
-                self._log(f'Loop {self._current_loop}: using {n_tm}/{len(self._times)} TM-solved EQDSKs, {len(self._times)-n_tm} seed fallbacks.')
+                self._log(f'Loop {self._current_loop}: using {n_tm}/{len(self._tm_times)} TM-solved EQDSKs, {len(self._tm_times)-n_tm} seed fallbacks.')
             
             myconfig['geometry']['geometry_configs'] = {
                 t: {'geometry_file': eqdsk_f, 'cocos': self._cocos} for t, eqdsk_f in full_eqdsk_map.items()
@@ -1413,8 +1412,11 @@ class TokTox:
         if self._Ve_max is not None:
             myconfig['transport']['V_e_max'] = self._Ve_max
 
-        if self._save_outputs or self._debug_mode:
-            config_filename = os.path.join(self._out_dir, 'results', f'tx_config{self._current_loop}.py')
+        if self._output_mode in ('normal', 'debug') and self._out_dir is not None:
+            cfg_name = f'tx_config_loop{self._current_loop:03d}.py'
+            if self._output_file_tag is not None:
+                cfg_name = f'{self._output_file_tag}_{cfg_name}'
+            config_filename = os.path.join(self._out_dir, cfg_name)
             with open(config_filename, 'w') as f:
                 f.write('# Torax configuration\n')
                 f.write(f'# Loop {self._current_loop}\n\n')
@@ -1509,8 +1511,11 @@ class TokTox:
         # Flatten all time-dependent values to their initial value (steady-state inputs)
         self._flatten_time_dependent(init_config)
 
-        if self._save_outputs or self._debug_mode:
-            config_filename = os.path.join(self._out_dir, 'results', 'tx_config0.py')
+        if self._output_mode in ('normal', 'debug') and self._out_dir is not None:
+            cfg_name = 'tx_config_loop000.py'
+            if self._output_file_tag is not None:
+                cfg_name = f'{self._output_file_tag}_{cfg_name}'
+            config_filename = os.path.join(self._out_dir, cfg_name)
             with open(config_filename, 'w') as f:
                 f.write('# Torax configuration\n# Loop 0 (transport init)\n\n')
                 f.write('tx_config = ')
@@ -1555,8 +1560,8 @@ class TokTox:
         
         self._data_tree = data_tree  # store for visualization at full TORAX resolution
 
-        v_loops = np.zeros(len(self._times))
-        for i, t in enumerate(self._times):
+        v_loops = np.zeros(len(self._tm_times))
+        for i, t in enumerate(self._tm_times):
             self._tx_update(i, data_tree)
             v_loops[i] = data_tree.scalars.v_loop_lcfs.sel(time=t, method='nearest')
 
@@ -1564,7 +1569,7 @@ class TokTox:
             self._res_update(data_tree)
 
         consumed_flux = 2.0 * np.pi * (self._state['psi_lcfs_tx'][-1] - self._state['psi_lcfs_tx'][0])
-        consumed_flux_integral = np.trapezoid(v_loops[0:], self._times[0:])
+        consumed_flux_integral = np.trapezoid(v_loops[0:], self._tm_times[0:])
         self._log(f"Loop {self._current_loop} TORAX: cflux={consumed_flux:.4f} Wb")
         self._print(f'  TORAX: done (cflux={consumed_flux:.4f} Wb)')
         return consumed_flux, consumed_flux_integral
@@ -1578,7 +1583,7 @@ class TokTox:
         @param i Timestep index.
         @param data_tree Result object from Torax.
         '''
-        t = self._times[i]
+        t = self._tm_times[i]
 
         # ── Scalars ─────────────────────────────────────────────────────────
         self._state['Ip'][i]        = self._extract_tx_scalar(data_tree, 'Ip', t)
@@ -1605,11 +1610,7 @@ class TokTox:
         self._state['pp_prof_tx'][i]['y'] *= -2.0 * np.pi  # TX → TM units
 
         conductivity = self._extract_tx_profile(data_tree, 'sigma_parallel', t, load_into_state=None)
-        self._state['eta_prof'][i] = {
-            'x': self._psi_N.copy(),
-            'y': 1.0 / conductivity,
-            'type': 'linterp',
-        }
+        self._state['eta_prof'][i] = {'x': self._psi_N.copy(), 'y': 1.0 / conductivity, 'type': 'linterp'}
 
         # ── Current density profiles ────────────────────────────────────────
         self._state['j_tot'][i]              = self._extract_tx_profile(data_tree, 'j_total',           t, profile_type='jphi-linterp')
@@ -1622,7 +1623,7 @@ class TokTox:
 
         self._state['R_inv_avg_tx'][i] = self._extract_tx_profile(data_tree, 'gm9', t)
 
-        ffp_ni = self._calc_ffp_ni(i, data_tree)
+        ffp_ni = self._calc_ffp_ni(i)
         self._state['ffp_ni_prof'][i] = {'x': self._psi_N.copy(), 'y': ffp_ni.copy(), 'type': 'linterp'}
 
         # ── Kinetic profiles ────────────────────────────────────────────────
@@ -1660,7 +1661,7 @@ class TokTox:
             except (KeyError, AttributeError):
                 pass
 
-    def _calc_ffp_ni(self, i, data_tree):
+    def _calc_ffp_ni(self, i):
         r'''! Calculate non-inductive FF' profile from TORAX current densities.
         
         The full GS relation is:
@@ -1671,10 +1672,8 @@ class TokTox:
             FF'_I  = 2 * mu_0 * (j_I + p' * <R>) / <1/R>
         
         @param i Time index
-        @param data_tree TORAX output data tree
         @return FF'_NI profile array
         '''
-        t = self._times[i]
         R_inv_avg = self._state['R_inv_avg_tx'][i]['y']
 
         j_ni = self._state['j_ni'][i]['y']
@@ -1685,35 +1684,35 @@ class TokTox:
     def _res_update(self, data_tree):
         r'''! Populate self._results from TORAX data with time-averaging.'''
 
-        self._results['t_res'] = self._times
+        self._results['t_res'] = self._tm_times
 
         # ── Per-timepoint profiles (on psi_N grid) ──────────────────────────
-        for t in self._times:
+        for t in self._tm_times:
             self._results['T_e'][t] = self._extract_tx_profile(data_tree, 'T_e', t)
             self._results['T_i'][t] = self._extract_tx_profile(data_tree, 'T_i', t)
             self._results['n_e'][t] = self._extract_tx_profile(data_tree, 'n_e', t)
             self._results['q'][t]   = self._extract_tx_profile(data_tree, 'q',   t)
 
         # ── Scalar time-series (with time-averaging) ────────────────────────
-        self._results['E_fusion']     = self._extract_tx_scalar_timeseries(data_tree, 'E_fusion')
-        self._results['Q']            = self._extract_tx_scalar_timeseries(data_tree, 'Q_fusion')
-        self._results['Ip']           = self._extract_tx_scalar_timeseries(data_tree, 'Ip')
-        self._results['B0']           = self._extract_tx_scalar_timeseries(data_tree, 'B_0')
-        self._results['n_e_line_avg'] = self._extract_tx_scalar_timeseries(data_tree, 'n_e_line_avg')
-        self._results['n_i_line_avg'] = self._extract_tx_scalar_timeseries(data_tree, 'n_i_line_avg')
-        self._results['beta_N']       = self._extract_tx_scalar_timeseries(data_tree, 'beta_N')
-        self._results['q95']          = self._extract_tx_scalar_timeseries(data_tree, 'q95')
-        self._results['H98']          = self._extract_tx_scalar_timeseries(data_tree, 'H98')
-        self._results['v_loop_lcfs']  = self._extract_tx_scalar_timeseries(data_tree, 'v_loop_lcfs')
-        self._results['li3']          = self._extract_tx_scalar_timeseries(data_tree, 'li3')
+        self._results['E_fusion']      = self._extract_tx_scalar_timeseries(data_tree, 'E_fusion')
+        self._results['Q']             = self._extract_tx_scalar_timeseries(data_tree, 'Q_fusion')
+        self._results['Ip']            = self._extract_tx_scalar_timeseries(data_tree, 'Ip')
+        self._results['B0']            = self._extract_tx_scalar_timeseries(data_tree, 'B_0')
+        self._results['n_e_line_avg']  = self._extract_tx_scalar_timeseries(data_tree, 'n_e_line_avg')
+        self._results['n_i_line_avg']  = self._extract_tx_scalar_timeseries(data_tree, 'n_i_line_avg')
+        self._results['beta_N']        = self._extract_tx_scalar_timeseries(data_tree, 'beta_N')
+        self._results['q95']           = self._extract_tx_scalar_timeseries(data_tree, 'q95')
+        self._results['H98']           = self._extract_tx_scalar_timeseries(data_tree, 'H98')
+        self._results['v_loop_lcfs']   = self._extract_tx_scalar_timeseries(data_tree, 'v_loop_lcfs')
+        self._results['li3']           = self._extract_tx_scalar_timeseries(data_tree, 'li3')
         self._results['P_alpha_total'] = self._extract_tx_scalar_timeseries(data_tree, 'P_alpha_total')
-        self._results['P_aux_total']  = self._extract_tx_scalar_timeseries(data_tree, 'P_aux_total')
-        self._results['P_ohmic_e']    = self._extract_tx_scalar_timeseries(data_tree, 'P_ohmic_e')
+        self._results['P_aux_total']   = self._extract_tx_scalar_timeseries(data_tree, 'P_aux_total')
+        self._results['P_ohmic_e']     = self._extract_tx_scalar_timeseries(data_tree, 'P_ohmic_e')
         self._results['P_radiation_e'] = self._extract_tx_scalar_timeseries(data_tree, 'P_radiation_e', scale=-1.0)
-        self._results['P_SOL_total']  = self._extract_tx_scalar_timeseries(data_tree, 'P_SOL_total')
-        self._results['f_ni']         = self._extract_tx_scalar_timeseries(data_tree, 'f_non_inductive')
-        self._results['I_ni']         = self._extract_tx_scalar_timeseries(data_tree, 'I_non_inductive')
-        self._results['beta_pol']     = self._extract_tx_scalar_timeseries(data_tree, 'beta_pol')
+        self._results['P_SOL_total']   = self._extract_tx_scalar_timeseries(data_tree, 'P_SOL_total')
+        self._results['f_ni']          = self._extract_tx_scalar_timeseries(data_tree, 'f_non_inductive')
+        self._results['I_ni']          = self._extract_tx_scalar_timeseries(data_tree, 'I_non_inductive')
+        self._results['beta_pol']      = self._extract_tx_scalar_timeseries(data_tree, 'beta_pol')
 
         # ── Core values (profile at rho=0) ──────────────────────────────────
         self._results['n_e_core'] = self._extract_tx_scalar_at_rho_timeseries(data_tree, 'n_e', 0.0)
@@ -1743,7 +1742,7 @@ class TokTox:
 
         # ── Greenwald fraction (already time-averaged in _tx_update) ────────
         self._results['f_GW'] = {
-            'x': list(self._times),
+            'x': list(self._tm_times),
             'y': np.array(self._state['f_GW']),
         }
 
@@ -1753,21 +1752,21 @@ class TokTox:
         self._results['Q_avg_flattop'] = float(np.nanmean(Q_arr[self._flattop])) if np.any(self._flattop) and len(Q_arr) == len(self._flattop) else 0.0
 
         # ── TokaMaker state arrays (for visualization) ──────────────────────
-        self._results['Ip_tm']       = {'x': list(self._times), 'y': np.array(self._state['Ip_tm'])}
-        self._results['Ip_tx']       = {'x': list(self._times), 'y': np.array(self._state['Ip_tx'])}
-        self._results['Ip_ni_tx']    = {'x': list(self._times), 'y': np.array(self._state['Ip_ni_tx'])}
-        self._results['psi_lcfs_tm'] = {'x': list(self._times), 'y': np.array(self._state['psi_lcfs_tm'])}
-        self._results['psi_axis_tm'] = {'x': list(self._times), 'y': np.array(self._state['psi_axis_tm'])}
-        self._results['psi_lcfs_tx'] = {'x': list(self._times), 'y': np.array(self._state['psi_lcfs_tx'])}
-        self._results['psi_axis_tx'] = {'x': list(self._times), 'y': np.array(self._state['psi_axis_tx'])}
-        self._results['vloop_tm']    = {'x': list(self._times), 'y': np.array(self._state['vloop_tm'])}
-        self._results['vloop_tx']    = {'x': list(self._times), 'y': np.array(self._state['vloop_tx'])}
-        self._results['beta_N_tm']   = {'x': list(self._times), 'y': np.array(self._state['beta_N_tm'])}
-        self._results['l_i_tm']      = {'x': list(self._times), 'y': np.array(self._state['l_i_tm'])}
-        self._results['q95_tm']      = {'x': list(self._times), 'y': np.array(self._state['q95_tm'])}
-        self._results['q0_tm']       = {'x': list(self._times), 'y': np.array(self._state['q0_tm'])}
-        self._results['pax']         = {'x': list(self._times), 'y': np.array(self._state['pax'])}
-        self._results['pax_tm']      = {'x': list(self._times), 'y': np.array(self._state['pax_tm'])}
+        self._results['Ip_tm']       = {'x': list(self._tm_times), 'y': np.array(self._state['Ip_tm'])}
+        self._results['Ip_tx']       = {'x': list(self._tm_times), 'y': np.array(self._state['Ip_tx'])}
+        self._results['Ip_ni_tx']    = {'x': list(self._tm_times), 'y': np.array(self._state['Ip_ni_tx'])}
+        self._results['psi_lcfs_tm'] = {'x': list(self._tm_times), 'y': np.array(self._state['psi_lcfs_tm'])}
+        self._results['psi_axis_tm'] = {'x': list(self._tm_times), 'y': np.array(self._state['psi_axis_tm'])}
+        self._results['psi_lcfs_tx'] = {'x': list(self._tm_times), 'y': np.array(self._state['psi_lcfs_tx'])}
+        self._results['psi_axis_tx'] = {'x': list(self._tm_times), 'y': np.array(self._state['psi_axis_tx'])}
+        self._results['vloop_tm']    = {'x': list(self._tm_times), 'y': np.array(self._state['vloop_tm'])}
+        self._results['vloop_tx']    = {'x': list(self._tm_times), 'y': np.array(self._state['vloop_tx'])}
+        self._results['beta_N_tm']   = {'x': list(self._tm_times), 'y': np.array(self._state['beta_N_tm'])}
+        self._results['l_i_tm']      = {'x': list(self._tm_times), 'y': np.array(self._state['l_i_tm'])}
+        self._results['q95_tm']      = {'x': list(self._tm_times), 'y': np.array(self._state['q95_tm'])}
+        self._results['q0_tm']       = {'x': list(self._tm_times), 'y': np.array(self._state['q0_tm'])}
+        self._results['pax']         = {'x': list(self._tm_times), 'y': np.array(self._state['pax'])}
+        self._results['pax_tm']      = {'x': list(self._tm_times), 'y': np.array(self._state['pax_tm'])}
 
 
     # ─── TokaMaker (TM) Methods ─────────────────────────────────────────────────
@@ -1777,7 +1776,7 @@ class TokTox:
         @return Tuple (consumed_flux, consumed_flux_integral).
         '''
         from tqdm import tqdm
-        self._print(f'  TokaMaker: solving {len(self._times)} equilibria...')
+        self._print(f'  TokaMaker: solving {len(self._tm_times)} equilibria...')
         self._log(f"Loop {self._current_loop} TokaMaker:")
 
         self._eqdsk_skip = []
@@ -1806,7 +1805,7 @@ class TokTox:
         if 0 in self._psi_warm_start and self._psi_warm_start[0] is not None:
             self._tm.set_psi_dt(psi0=self._psi_warm_start[0], dt=1.0e10)
 
-        _pbar = tqdm(enumerate(self._times), total=len(self._times),
+        _pbar = tqdm(enumerate(self._tm_times), total=len(self._tm_times),
                     desc=f'  TM loop {self._current_loop}', unit='solve',
                     bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]{postfix}')
         for i, t in _pbar:
@@ -1815,15 +1814,12 @@ class TokTox:
             self._tm.set_psi_constraints(None, None)
             self._tm.set_saddle_constraints(None)
 
-
-
             Ip_target = abs(self._state['Ip'][i])
             P0_target = abs(self._state['pax'][i])
             
             self._tm.set_targets(Ip=Ip_target, pax=P0_target) # using pax target with j_phi inputs 
             self._tm.set_resistivity(eta_prof=self._state['eta_prof'][i])
             
-
             ffp_prof = {'x': self._state['ffp_prof'][i]['x'].copy(),
                            'y': self._state['ffp_prof'][i]['y'].copy(),
                            'type': self._state['ffp_prof'][i]['type']}
@@ -1831,10 +1827,6 @@ class TokTox:
                           'y': self._state['pp_prof'][i]['y'].copy(),
                           'type': self._state['pp_prof'][i]['type']}
             
-
-
-
-
             lcfs = self._state['lcfs_geo'][i]
 
             # Set saddle-point (X-point) constraints during diverted phase
@@ -1880,12 +1872,11 @@ class TokTox:
                                          weights=np.array([LCFS_WEIGHT * 10.])) # psi value target
             
             
-            self._tm.update_settings() # TODO what does this do?
+            self._tm.update_settings()
 
-            
             if i>0:
                 if self._state['psi_grid_prev_tm'][i-1] is not None:
-                    self._tm.set_psi_dt(psi0=self._state['psi_grid_prev_tm'][i-1], dt=self._times[i]-self._times[i-1])
+                    self._tm.set_psi_dt(psi0=self._state['psi_grid_prev_tm'][i-1], dt=self._tm_times[i]-self._tm_times[i-1])
             
             skip_coil_update = False
             eq_name = os.path.join(self._eqdsk_dir, f'{self._current_loop:03d}.{i:03d}.eqdsk')
@@ -1969,24 +1960,6 @@ class TokTox:
                         lcfs_pad=1-self._last_surface_factor, run_info='TokaMaker EQDSK',
                         cocos=self._cocos, nr=300, nz=300, truncate_eq=self._truncate_eq)
                     self._tm_update(i)
-                # #### temp debug plot
-                # import matplotlib.pyplot as plt
-                # fig, ax = plt.subplots()
-                # self._tm.plot_machine(fig, ax, coil_colormap='seismic', coil_symmap=False,
-                #                         coil_scale=1.E-6, coil_clabel=r'$I_C$ [MA]')
-                # self._tm.plot_constraints(fig, ax, equilibrium=self._state['equil'][i])
-                # self._tm.plot_psi(fig, ax, equilibrium=self._state['equil'][i])
-                # if (self._x_point_targets is not None and self._diverted_times is not None
-                #         and self._diverted_times[0] <= t <= self._diverted_times[1]):
-                #     ax.plot(self._x_point_targets[:, 0], self._x_point_targets[:, 1], 'rx', label='X-point targets')
-                # ax.set_title(f'TM psi at t={t:.2f}s (level {level_idx}: {level_name})')
-                # ax.legend()
-                # plt_path = os.path.join(self._out_dir, 'tm_plots', f'TEMP_{self._current_loop:03d}.{i:03d}_tm_psi.png')
-                # plt.savefig(plt_path)
-                # plt.close(fig)
-                # #### temp debug plot
-
-
 
                 # Store diverted/limited flag for this timestep
                 if not hasattr(self, '_diverted_flags'):
@@ -2006,18 +1979,23 @@ class TokTox:
                 'error': _last_attempt.get('error') if not solve_succeeded else None,
             })
 
-            if self._debug_mode:
+            if self._output_mode in ('debug', 'normal') and self._out_dir is not None:
                 from toktox_visualization import tm_diagnostic_plot, profile_plot
-                _diag_path = os.path.join(self._out_dir, 'tm_plots',
-                                          f'{self._current_loop:03d}.{i:03d}_tm_diag.png')
-                try:
-                    tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded,
-                                       save_path=_diag_path, display=False)
-                except Exception as _e:
-                    self._log(f'tm_diagnostic_plot failed at i={i}: {_e}')
+                if self._output_mode == 'debug':
+                    diag_name = f'tm_diag_loop{self._current_loop:03d}_tidx{i:03d}.png'
+                    if self._output_file_tag is not None:
+                        diag_name = f'{self._output_file_tag}_{diag_name}'
+                    _diag_path = os.path.join(self._out_dir, diag_name)
+                    try:
+                        tm_diagnostic_plot(self, i, t, level_attempts, solve_succeeded,
+                                           save_path=_diag_path, display=False)
+                    except Exception as _e:
+                        self._log(f'tm_diagnostic_plot failed at i={i}: {_e}')
                 if solve_succeeded:
-                    _prof_path = os.path.join(self._out_dir, 'plots',
-                                              f'{self._current_loop:03d}.{i:03d}_profile.png')
+                    prof_name = f'profile_loop{self._current_loop:03d}_tidx{i:03d}.png'
+                    if self._output_file_tag is not None:
+                        prof_name = f'{self._output_file_tag}_{prof_name}'
+                    _prof_path = os.path.join(self._out_dir, prof_name)
                     try:
                         profile_plot(self, i, t, save_path=_prof_path, display=False)
                     except Exception as _e:
@@ -2034,30 +2012,32 @@ class TokTox:
                 _pbar.set_postfix_str(f't={t:.2f}s FAIL', refresh=False)
 
             if self._prescribed_currents:
-                if i + 1 < len(self._times):
+                if i + 1 < len(self._tm_times):
                     self.set_coil_reg(i=i+1, **reg_kwargs)
             elif not skip_coil_update:
                 prev_coil_targets, _ = self._state['equil'][i].get_coil_currents()
                 self.set_coil_reg(targets=prev_coil_targets, **reg_kwargs)
 
         consumed_flux = (self._state['psi_lcfs_tm'][-1] - self._state['psi_lcfs_tm'][0]) * 2.0 * np.pi
-        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._times[0:])
+        consumed_flux_integral = np.trapezoid(self._state['vloop_tm'][0:], self._tm_times[0:])
 
         n_ok = sum(1 for e in _loop_level_log if e['succeeded'])
-        self._print(f'  TokaMaker: {n_ok}/{len(self._times)} solved (cflux={consumed_flux:.4f} Wb)')
+        self._print(f'  TokaMaker: {n_ok}/{len(self._tm_times)} solved (cflux={consumed_flux:.4f} Wb)')
 
         # Compact level-usage summary for log
         from collections import Counter
         _lvl_counts = Counter(e['level_name'] for e in _loop_level_log if e['succeeded'])
         _lvl_summary = ', '.join(f'{name}: {cnt}' for name, cnt in sorted(_lvl_counts.items()))
-        n_fail = len(self._times) - n_ok
-        self._log(f'\tTM summary: {n_ok}/{len(self._times)} solved. Levels: {_lvl_summary}.'
+        n_fail = len(self._tm_times) - n_ok
+        self._log(f'\tTM summary: {n_ok}/{len(self._tm_times)} solved. Levels: {_lvl_summary}.'
                   + (f' Failures: {n_fail}.' if n_fail else ''))
 
         if self._debug_mode:
             from toktox_visualization import tm_loop_summary_plot
-            _summary_path = os.path.join(self._out_dir, 'tm_plots',
-                                         f'{self._current_loop:03d}_tm_summary.png')
+            summary_name = f'tm_summary_loop{self._current_loop:03d}.png'
+            if self._output_file_tag is not None:
+                summary_name = f'{self._output_file_tag}_{summary_name}'
+            _summary_path = os.path.join(self._out_dir, summary_name)
             try:
                 tm_loop_summary_plot(self, _loop_level_log, save_path=_summary_path, display=False)
             except Exception as _e:
@@ -2172,7 +2152,7 @@ class TokTox:
         for coil, current in coils.items():
             if coil not in self._results['COIL']:
                 self._results['COIL'][coil] = {}
-            self._results['COIL'][coil][self._times[i]] = current * 1.0 # TODO: handle nturns > 1
+            self._results['COIL'][coil][self._tm_times[i]] = current * 1.0 # TODO: handle nturns > 1
 
         # get psi to use in next timestep
         self._state['psi_grid_prev_tm'][i] = self._state['equil'][i].get_psi(normalized=False)
@@ -2257,18 +2237,15 @@ class TokTox:
 
     # ─── Main Simulation Loop ───────────────────────────────────────────────────
 
-    def fly(self, convergence_threshold=-1.0, max_loop=3, run_name='tmp',
-            save_outputs=False, debug=False, skip_bad_init_eqdsks=False,
-            t_ave_toggle='off', t_ave_window=0.5, t_ave_causal=True,
-            t_ave_ignore_start=0.25):
+    def fly(self, run_name='tmp', convergence_threshold=-1.0, max_loop=3,
+            output_mode=False, skip_bad_init_eqdsks=False,
+            t_ave_toggle='off', t_ave_window=0.5, t_ave_causal=True, t_ave_ignore_start=0.25):
         r'''! Run TokaMaker-TORAX coupled simulation loop.
 
         @param convergence_threshold Max fractional change in consumed flux between loops for convergence.
         @param max_loop Maximum number of loops.
         @param run_name Name for this run (used in output directory and log file).
-        @param save_outputs If True, create persistent output directory with eqdsks, configs, and results JSON.
-        @param debug If True, redirect all outputs (including TM/TX noise) to the log file,
-               save intermediate states, and save diagnostic plots into the output directory.
+        @param output_mode Output level selector: False, 'minimal', 'normal', or 'debug'.
         @param skip_bad_init_eqdsks If True, skip broken initial gEQDSK files instead of raising.
         @param t_ave_toggle Time-averaging mode: 'off' (no averaging), 'flattop' (average only
                during flat-top), or 'pulse' (average over the whole pulse).
@@ -2278,7 +2255,7 @@ class TokTox:
         @param t_ave_ignore_start Ignore the first N seconds of the pulse when building the
                averaging window (avoids numerical transients). Default 0.25 s.
         '''
-        import tempfile  # local import: only needed when fly() is called
+        import tempfile
 
         # Disable JAX's persistent XLA compilation cache before any TORAX/JAX JIT
         # compilation occurs.  Since JAX 0.4.x the cache stores serialized XLA
@@ -2295,9 +2272,19 @@ class TokTox:
         except Exception:
             pass  # non-fatal: older JAX versions may not have this config key
 
-        self._save_outputs = save_outputs
-        self._debug_mode = debug
-        self._diagnostics = debug
+        if output_mode is True:
+            output_mode = 'normal'
+        if isinstance(output_mode, str):
+            output_mode = output_mode.strip().lower()
+            if output_mode in ('false', 'none', 'off', 'no'):
+                output_mode = False
+        if output_mode not in (False, 'minimal', 'normal', 'debug'):
+            raise ValueError("Invalid output_mode. Use False, 'minimal', 'normal', or 'debug'.")
+
+        self._output_mode = output_mode
+        self._save_outputs = (self._output_mode is not False)
+        self._debug_mode = (self._output_mode == 'debug')
+        self._diagnostics = self._debug_mode
         self._skip_bad_init_eqdsks = skip_bad_init_eqdsks
         self._run_name = run_name
 
@@ -2309,6 +2296,9 @@ class TokTox:
 
         dt_str = datetime.now().strftime('%Y-%m-%d_%H%M%S')
         _sim_start_time = time.time()
+
+        self._run_timestamp = None if run_name == 'tmp' else dt_str
+        self._output_file_tag = None if run_name == 'tmp' else f'{run_name}_{dt_str}'
 
         # ── Log file: same directory as toktox_outputs (i.e. cwd / './') ──
         if run_name == 'tmp':
@@ -2322,37 +2312,32 @@ class TokTox:
 
         # In debug mode, attach file handler to Python logging so library
         # messages (TORAX, JAX, etc.) are captured in the log file.
-        if debug:
+        if self._debug_mode:
             self._logging_configured = False
             self.configure_redirect_to_log()
 
         # ── Output directory ──
-        # debug=True forces output directory creation even if save_outputs=False
-        _needs_out_dir = save_outputs or debug
-        if _needs_out_dir:
+        if self._output_mode is not False:
             if run_name == 'tmp':
                 self._out_dir = os.path.join('./toktox_outputs', 'tmp')
                 if os.path.exists(self._out_dir):
                     shutil.rmtree(self._out_dir)
             else:
-                dir_name = f'{run_name}_{dt_str}'
-                self._out_dir = os.path.join('./toktox_outputs', dir_name)
-            os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
-            if debug:
-                os.makedirs(os.path.join(self._out_dir, 'plots'), exist_ok=True)
-                os.makedirs(os.path.join(self._out_dir, 'tm_plots'), exist_ok=True)
-                os.makedirs(os.path.join(self._out_dir, 'equil'), exist_ok=True)
-            self._fname_out = os.path.join(self._out_dir, 'results', 'results.json')
+                self._out_dir = os.path.join('./toktox_outputs', self._output_file_tag)
+            os.makedirs(self._out_dir, exist_ok=True)
+            results_name = 'results.json'
+            if self._output_file_tag is not None:
+                results_name = f'{self._output_file_tag}_{results_name}'
+            self._fname_out = os.path.join(self._out_dir, results_name)
         else:
-            # Lightweight mode: temp directory for transient eqdsks, no persistent output
-            self._out_dir = tempfile.mkdtemp(prefix='toktox_')
-            os.makedirs(os.path.join(self._out_dir, 'results'), exist_ok=True)
+            self._out_dir = None
             self._fname_out = None
+            self._output_file_tag = None
+            self._run_timestamp = None
 
-        # ── EQDSK directory: persistent only when save_outputs, temp otherwise ──
-        if save_outputs:
-            self._eqdsk_dir = os.path.join(self._out_dir, 'equil')
-            os.makedirs(self._eqdsk_dir, exist_ok=True)
+        # ── EQDSK directory: persisted only for debug mode ──
+        if self._output_mode == 'debug':
+            self._eqdsk_dir = self._out_dir
             self._eqdsk_dir_is_temp = False
         else:
             self._eqdsk_dir = tempfile.mkdtemp(prefix='toktox_equil_')
@@ -2361,9 +2346,9 @@ class TokTox:
         # ── Diverted / saddle-point configuration (set via set_x_points) ──
         if self._diverted_times is not None and self._x_point_targets is not None:
             t_div_start, t_div_end = self._diverted_times
-            n_diverted = int(np.sum([(t_div_start <= t <= t_div_end) for t in self._times]))
+            n_diverted = int(np.sum([(t_div_start <= t <= t_div_end) for t in self._tm_times]))
             self._log(f'Diverted window: t=[{t_div_start}, {t_div_end}] s '
-                      f'({n_diverted}/{len(self._times)} timesteps)')
+                      f'({n_diverted}/{len(self._tm_times)} timesteps)')
 
         # ── Flattop detection ──
         Ip_arr = np.array(self._state['Ip'])
@@ -2371,15 +2356,15 @@ class TokTox:
         flattop_threshold = 0.95 * Ip_max
         above = Ip_arr >= flattop_threshold
         if np.any(above):
-            ft_start = self._times[np.argmax(above)]
-            ft_end   = self._times[len(above) - 1 - np.argmax(above[::-1])]
-            self._flattop = np.array([(t >= ft_start and t <= ft_end) for t in self._times])
+            ft_start = self._tm_times[np.argmax(above)]
+            ft_end   = self._tm_times[len(above) - 1 - np.argmax(above[::-1])]
+            self._flattop = np.array([(t >= ft_start and t <= ft_end) for t in self._tm_times])
         else:
-            self._flattop = np.zeros(len(self._times), dtype=bool)
+            self._flattop = np.zeros(len(self._tm_times), dtype=bool)
 
         # ── Header ──
         self._print(f'\n{"="*60}\n TokaMaker + TORAX (TokTox) \n run_name = {run_name} | t=[{self._t_init:.1f}, {self._t_final:.1f}] s '
-                      f'| {len(self._times)} timepoints | dt={self._tx_dt} s | max_loop={max_loop}')
+                      f'| {len(self._tm_times)} timepoints | dt={self._tx_dt} s | max_loop={max_loop}')
 
         err = convergence_threshold + 1.0
         cflux_tx_prev = 0.0
@@ -2400,20 +2385,8 @@ class TokTox:
                 self._print(f'\n{"="*60}\n  Loop {self._current_loop}\n{"="*60}')
 
                 cflux_tx, cflux_tx_vloop = self._run_tx()
-                # if debug:
-                #     self.save_state(os.path.join(self._out_dir, 'results', f'ts_state{self._current_loop}.json'))
 
                 cflux_tm, cflux_tm_vloop = self._run_tm()
-                # if debug:
-                    # self.save_state(os.path.join(self._out_dir, 'results', f'tm_state{self._current_loop}.json'))
-                    # self.save_res()
-
-                if debug:
-                    from toktox_visualization import _render_equil_frames
-                    try:
-                        _render_equil_frames(self, self._current_loop, os.path.join(self._out_dir, 'equil'))
-                    except Exception as _e:
-                        self._log(f'_render_equil_frames failed at loop {self._current_loop}: {_e}')
 
                 tm_cflux_psi.append(cflux_tm)
                 tm_cflux_vloop.append(cflux_tm_vloop)
@@ -2429,10 +2402,12 @@ class TokTox:
                 self._log(f'TX Convergence error = {err*100.0:.3f} %')
                 self._log(f'Difference Convergence error = {cflux_diff:.4f} %')
 
-                if debug:
+                if self._output_mode in ('normal', 'minimal', 'debug') and self._out_dir is not None:
                     from toktox_visualization import plot_scalars
-                    _scalars_path = os.path.join(self._out_dir, 'plots',
-                                                  f'scalars_loop{self._current_loop:03d}.png')
+                    scalars_name = f'scalars_loop{self._current_loop:03d}.png'
+                    if self._output_file_tag is not None:
+                        scalars_name = f'{self._output_file_tag}_{scalars_name}'
+                    _scalars_path = os.path.join(self._out_dir, scalars_name)
                     try:
                         plot_scalars(self, save_path=_scalars_path, display=False)
                     except Exception as _e:
@@ -2442,17 +2417,42 @@ class TokTox:
                 self._current_loop += 1
 
         finally:
-            # ── Cleanup temp directories ──
-            if not _needs_out_dir and hasattr(self, '_out_dir') and os.path.exists(self._out_dir):
-                try:
-                    shutil.rmtree(self._out_dir)
-                except OSError:
-                    pass
+            # ── Cleanup temp EQDSK directory ──
             if getattr(self, '_eqdsk_dir_is_temp', False) and hasattr(self, '_eqdsk_dir') and os.path.exists(self._eqdsk_dir):
                 try:
                     shutil.rmtree(self._eqdsk_dir)
                 except OSError:
                     pass
+
+        # ── End-of-run mode-specific outputs ──
+        if self._output_mode is not False:
+            if self._output_mode in ('minimal', 'debug') and self._out_dir is not None:
+                from toktox_visualization import plot_profile_evolution, plot_lcfs_evolution
+                profile_evo_name = 'profile_evolution.png'
+                lcfs_evo_name = 'lcfs_evolution.png'
+                if self._output_file_tag is not None:
+                    profile_evo_name = f'{self._output_file_tag}_{profile_evo_name}'
+                    lcfs_evo_name = f'{self._output_file_tag}_{lcfs_evo_name}'
+                _profile_evo_path = os.path.join(self._out_dir, profile_evo_name)
+                _lcfs_evo_path = os.path.join(self._out_dir, lcfs_evo_name)
+                try:
+                    plot_profile_evolution(self, save_path=_profile_evo_path, display=False)
+                except Exception as _e:
+                    self._log(f'plot_profile_evolution failed: {_e}')
+                try:
+                    plot_lcfs_evolution(self, save_path=_lcfs_evo_path, display=False)
+                except Exception as _e:
+                    self._log(f'plot_lcfs_evolution failed: {_e}')
+
+            if self._output_mode in ('normal', 'minimal', 'debug') and self._out_dir is not None:
+                movie_name = f'movie_loop{self._current_loop - 1:03d}.mp4'
+                if self._output_file_tag is not None:
+                    movie_name = f'{self._output_file_tag}_{movie_name}'
+                _movie_path = os.path.join(self._out_dir, movie_name)
+                try:
+                    self.make_movie(save_path=_movie_path, display=False)
+                except Exception as _e:
+                    self._log(f'make_movie failed: {_e}')
 
         # ── Summary table ──
         _sim_elapsed = time.time() - _sim_start_time
@@ -2476,8 +2476,7 @@ class TokTox:
         _mins, _secs = divmod(_sim_elapsed, 60)
         self._print(f'  Total sim time: {int(_mins)}m {_secs:.1f}s')
 
-        if save_outputs:
-            self.save_res()
+        if self._output_mode is not False:
             self._print(f'  Outputs saved to: {self._out_dir}')
         self._print(f'  Log file: {self._log_file}')
 
@@ -2518,13 +2517,24 @@ class TokTox:
         from toktox_visualization import plot_profiles_interactive
         return plot_profiles_interactive(self, **kwargs)
 
-    def plot_equil(self, notebook_mode=None, save_path=None, **kwargs):
-        r'''! Equilibrium viewer.
-        @param notebook_mode True=widget, False=save PNGs, None=auto (widget if in Jupyter).
-        @param save_path Directory for saved PNGs when notebook_mode=False.
+    def plot_profile_evolution(self, save_path=None, display=True, one_plot=False, **kwargs):
+        r'''! Plot profile evolution over time.
+        @param save_path Path to save figure. If None, does not save.
+        @param display Whether to show the plot.
+        @param one_plot If True, combine all pulse phases into one figure.
         '''
-        from toktox_visualization import plot_equil_interactive
-        return plot_equil_interactive(self, notebook_mode=notebook_mode, save_path=save_path, **kwargs)
+        from toktox_visualization import plot_profile_evolution
+        return plot_profile_evolution(self, save_path=save_path, display=display, one_plot=one_plot, **kwargs)
+
+
+    # TODO: not working in notebook mode yet: makes many plots below widget. All these are in movie already.
+    # def plot_equil(self, notebook_mode=None, save_path=None, **kwargs):
+    #     r'''! Equilibrium viewer.
+    #     @param notebook_mode True=widget, False=save PNGs, None=auto (widget if in Jupyter).
+    #     @param save_path Directory for saved PNGs when notebook_mode=False.
+    #     '''
+    #     from toktox_visualization import plot_equil_interactive
+    #     return plot_equil_interactive(self, notebook_mode=notebook_mode, save_path=save_path, **kwargs)
 
     def plot_coils(self, save_path=None, display=True, **kwargs):
         r'''! Plot coil current traces over the pulse.
@@ -2534,13 +2544,14 @@ class TokTox:
         from toktox_visualization import plot_coils
         return plot_coils(self, save_path=save_path, display=display, **kwargs)
 
-    def plot_lcfs_evolution(self, save_path=None, display=True, **kwargs):
+    def plot_lcfs_evolution(self, save_path=None, display=True, one_plot=False, **kwargs):
         r'''! Plot time evolution of the LCFS for each pulse phase (rampup, flattop, rampdown).
         @param save_path Path prefix to save figures. If None, does not save.
         @param display Whether to show the plots.
+        @param one_plot If True, combine all pulse phases into one figure.
         '''
         from toktox_visualization import plot_lcfs_evolution
-        return plot_lcfs_evolution(self, save_path=save_path, display=display, **kwargs)
+        return plot_lcfs_evolution(self, save_path=save_path, display=display, one_plot=one_plot, **kwargs)
 
     def summary(self, **kwargs):
         r'''! Print/display a physics summary of the simulation.'''

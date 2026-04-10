@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import shutil
 import platform
+import inspect
+from functools import wraps
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -82,6 +84,29 @@ def _save_or_display(fig, save_path=None, display=True):
         plt.close(fig)
 
 
+def _suppress_interactive_when_hidden(func):
+    """Run plotting functions with interactive mode disabled when display=False."""
+    sig = inspect.signature(func)
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind_partial(*args, **kwargs)
+        display = bound.arguments.get('display', sig.parameters['display'].default)
+        if display:
+            return func(*args, **kwargs)
+
+        was_interactive = plt.isinteractive()
+        if was_interactive:
+            plt.ioff()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if was_interactive:
+                plt.ion()
+
+    return wrapper
+
+
 def _style(ax):
     ax.grid(True, alpha=GRID_ALPHA)
     ax.tick_params(labelsize=TICK_FS)
@@ -142,7 +167,7 @@ def _x_points_active(tt, i, t=None):
         and not np.issubdtype(div_arr.dtype, np.bool_)
     ):
         if t is None:
-            times = getattr(tt, '_times', None)
+            times = getattr(tt, '_tm_times', None)
             if times is None or i >= len(times):
                 return False
             t = times[i]
@@ -159,6 +184,7 @@ def _x_points_active(tt, i, t=None):
 #  Profile plot (per-timestep diagnostic plot)
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def profile_plot(tt, i, t, save_path=None, display=True):
     """Detailed profile comparison at a single timestep."""
     from OpenFUSIONToolkit.TokaMaker.util import read_eqdsk
@@ -170,7 +196,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
     tm_ffp_prof = tm_f_prof * tm_fp_prof
 
     fig, axes = plt.subplots(6, 3, figsize=(20, 24))
-    plt.suptitle(f'loop {tt._current_loop} - t-idx {i}/{len(tt._times)-1} - t = {t:.1f} s', fontsize=14)
+    plt.suptitle(f'loop {tt._current_loop} - t-idx {i}/{len(tt._tm_times)-1} - t = {t:.1f} s', fontsize=14)
 
     # Row 0: p' and p comparison
     ax = axes[0, 0]
@@ -386,6 +412,7 @@ def profile_plot(tt, i, t, save_path=None, display=True):
 #  TokaMaker diagnostic plot
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None, display=True):
     """TokaMaker input/output diagnostic plot for a single timestep."""
     from read_eqdsk_extended import read_eqdsk_extended
@@ -545,7 +572,7 @@ def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None
         render_table(ax_tbl2, diag_rows, 'TORAX Diagnostics vs TokaMaker')
 
         plt.suptitle(
-            f'TM Diagnostic \u2014 loop {tt._current_loop}, t-idx {i}/{len(tt._times) - 1}, t = {t:.2f} s'
+            f'TM Diagnostic \u2014 loop {tt._current_loop}, t-idx {i}/{len(tt._tm_times) - 1}, t = {t:.2f} s'
             f'  |  TokaMaker: SUCCESS',
             fontsize=13, color='darkgreen',
         )
@@ -576,7 +603,7 @@ def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None
         render_table(ax_tbl2, diag_rows, 'TORAX Diagnostics & Failure Info')
 
         plt.suptitle(
-            f'TM Diagnostic \u2014 loop {tt._current_loop}, t-idx {i}/{len(tt._times) - 1}, t = {t:.2f} s'
+            f'TM Diagnostic \u2014 loop {tt._current_loop}, t-idx {i}/{len(tt._tm_times) - 1}, t = {t:.2f} s'
             f'  |  TokaMaker: FAILED',
             fontsize=13, color='darkred', fontweight='bold',
         )
@@ -588,6 +615,7 @@ def tm_diagnostic_plot(tt, i, t, level_attempts, solve_succeeded, save_path=None
 #  TM loop summary plot
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def tm_loop_summary_plot(tt, loop_level_log, save_path=None, display=True):
     """Summary figure showing per-timestep GS solve outcomes."""
     n = len(loop_level_log)
@@ -646,68 +674,107 @@ def tm_loop_summary_plot(tt, loop_level_log, save_path=None, display=True):
 #  Profile evolution plot
 # =========================================================================
 
-def plot_profile_evolution(tt, save_path=None, display=True):
-    """Plot profiles over time with color representing time."""
-    from mpl_toolkits.axes_grid1 import make_axes_locatable
-
+@_suppress_interactive_when_hidden
+def plot_profile_evolution(tt, save_path=None, display=True, one_plot=False):
+    """Plot profile evolution by pulse phase by default, or as one figure when one_plot=True."""
     s = tt._state
-    times = tt._times
-    cmap = cm.plasma
-    norm = Normalize(vmin=times[0], vmax=times[-1])
+    times = np.array(tt._tm_times)
+    if len(times) == 0:
+        return
 
-    fig, axes = plt.subplots(2, 4, figsize=(18, 10))
-    fig.suptitle(f'Profile Evolution Over Time (loop {tt._current_loop})', fontsize=14)
+    ft = getattr(tt, '_flattop', np.zeros(len(times), dtype=bool)).astype(bool)
 
-    plot_specs = [
-        (axes[0, 0], 'n_e', r'$n_e$ [m$^{-3}$]', 'n_e'),
-        (axes[0, 1], 'T_e', r'$T_e$ [keV]', 'T_e'),
-        (axes[0, 2], 'n_i', r'$n_i$ [m$^{-3}$]', 'n_i'),
-        (axes[0, 3], 'T_i', r'$T_i$ [keV]', 'T_i'),
-        (axes[1, 0], 'ptot', r'$p$ (TORAX) [Pa]', 'p (TORAX)'),
-        (axes[1, 1], 'p_prof_tm', r'$p$ (TokaMaker) [Pa]', 'p (TokaMaker)'),
+    if np.any(ft):
+        ft_indices = np.where(ft)[0]
+        ft_start_i = ft_indices[0]
+        ft_end_i = ft_indices[-1]
+        rampup_mask = np.arange(len(times)) < ft_start_i
+        flattop_mask = ft
+        rampdown_mask = np.arange(len(times)) > ft_end_i
+    else:
+        rampup_mask = np.ones(len(times), dtype=bool)
+        flattop_mask = np.zeros(len(times), dtype=bool)
+        rampdown_mask = np.zeros(len(times), dtype=bool)
+
+    phases = [
+        ('Ramp-up', rampup_mask),
+        ('Flattop', flattop_mask),
+        ('Ramp-down', rampdown_mask),
     ]
+    if one_plot:
+        phases = [('Pulse', np.ones(len(times), dtype=bool))]
 
-    for ax, key, ylabel, title in plot_specs:
-        ax.set_title(title)
+    cmap = cm.plasma
+
+    for phase_name, mask in phases:
+        indices = np.where(mask)[0]
+        if len(indices) == 0:
+            continue
+
+        phase_times = times[indices]
+        t_min, t_max = phase_times[0], phase_times[-1]
+        norm = Normalize(vmin=t_min, vmax=t_max if t_max > t_min else t_min + 1e-9)
+
+        fig, axes = plt.subplots(2, 3, figsize=(14, 10))
+        if one_plot:
+            fig.suptitle(f'Profile Evolution Over Time (loop {tt._current_loop})', fontsize=14)
+        else:
+            fig.suptitle(f'Profile Evolution - {phase_name} (loop {tt._current_loop})', fontsize=14)
+
+        plot_specs = [
+            (axes[0, 0], 'n_e', r'$n_e$ [m$^{-3}$]', 'n_e'),
+            (axes[1, 0], 'n_i', r'$n_i$ [m$^{-3}$]', 'n_i'),
+            (axes[0, 1], 'T_e', r'$T_e$ [keV]', 'T_e'),
+            (axes[1, 1], 'T_i', r'$T_i$ [keV]', 'T_i'),
+            (axes[0, 2], 'ptot', r'$p$ [Pa]', 'p'),
+        ]
+
+        for ax, key, ylabel, title in plot_specs:
+            ax.set_title(title)
+            ax.set_xlabel(r'$\hat{\psi}$')
+            ax.set_ylabel(ylabel)
+            for i_t in indices:
+                if i_t in s.get(key, {}):
+                    color = cmap(norm(times[i_t]))
+                    ax.plot(s[key][i_t]['x'], s[key][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
+            ax.set_xlim([0, 1])
+
+        ax = axes[1, 2]
+        ax.set_title('q')
         ax.set_xlabel(r'$\hat{\psi}$')
-        ax.set_ylabel(ylabel)
-        for i_t, t_val in enumerate(times):
-            color = cmap(norm(t_val))
-            if i_t in s.get(key, {}):
-                ax.plot(s[key][i_t]['x'], s[key][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
+        ax.set_ylabel(r'$q$')
+        for i_t in indices:
+            if i_t in s.get('q_prof_tx', {}):
+                color = cmap(norm(times[i_t]))
+                ax.plot(s['q_prof_tx'][i_t]['x'], s['q_prof_tx'][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
         ax.set_xlim([0, 1])
 
-    # q profile from state
-    ax = axes[1, 2]
-    ax.set_title('q')
-    ax.set_xlabel(r'$\hat{\psi}$')
-    ax.set_ylabel(r'$q$')
-    for i_t, t_val in enumerate(times):
-        color = cmap(norm(t_val))
-        if i_t in s.get('q_prof_tx', {}):
-            ax.plot(s['q_prof_tx'][i_t]['x'], s['q_prof_tx'][i_t]['y'], color=color, linewidth=1.5, alpha=0.8)
-    ax.set_xlim([0, 1])
+        sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), shrink=0.8, aspect=30, pad=0.02)
+        cbar.set_label('Time [s]', fontsize=12)
 
-    axes[1, 3].axis('off')
+        if save_path is not None and not one_plot:
+            base, ext = os.path.splitext(save_path)
+            phase_tag = phase_name.lower().replace('-', '').replace(' ', '_')
+            phase_save = f'{base}_{phase_tag}{ext}'
+        else:
+            phase_save = save_path
 
-    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), shrink=0.8, aspect=30, pad=0.02)
-    cbar.set_label('Time [s]', fontsize=12)
-
-    _save_or_display(fig, save_path, display)
+        _save_or_display(fig, phase_save, display)
 
 
 # =========================================================================
 #  Scalar time-series plot
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def plot_scalars(tt, save_path=None, display=True):
     """Plot 4x3 grid of time-series scalars."""
     from scipy.interpolate import interp1d
 
     s = tt._state
-    times = tt._times
+    times = tt._tm_times
 
     fig, axes = plt.subplots(4, 3, figsize=(16, 12))
 
@@ -907,6 +974,7 @@ def plot_scalars(tt, save_path=None, display=True):
 #  Coil current plot
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def plot_coils(tt, save_path=None, display=True):
     """Plot coil current traces with limit bands."""
     coil_data = tt._results.get('COIL', {})
@@ -944,16 +1012,18 @@ def plot_coils(tt, save_path=None, display=True):
 #  LCFS evolution plot
 # =========================================================================
 
-def plot_lcfs_evolution(tt, save_path=None, display=True):
+@_suppress_interactive_when_hidden
+def plot_lcfs_evolution(tt, save_path=None, display=True, one_plot=False):
     """Plot time evolution of the last closed flux surface for each phase.
 
-    Produces up to three separate figures (rampup, flattop, rampdown).
+    Produces phase-split figures by default (rampup, flattop, rampdown),
+    or one combined figure when one_plot=True.
     Line color encodes time, with a colorbar on the right.
     Phases not present in the simulation are skipped.
     LCFS is traced at psi_N=0.99 directly from each stored equilibrium object.
     """
     s = tt._state
-    times = np.array(tt._times)
+    times = np.array(tt._tm_times)
     equil_data = s.get('equil', {})
     if not equil_data:
         return
@@ -978,6 +1048,8 @@ def plot_lcfs_evolution(tt, save_path=None, display=True):
         ('Flattop',   flattop_mask),
         ('Ramp-down', rampdown_mask),
     ]
+    if one_plot:
+        phases = [('Pulse', np.ones(len(times), dtype=bool))]
 
     # Limiter contours from TokaMaker (col 0 = R, col 1 = Z; swap if mirror_mode)
     lim_contours = getattr(tt._tm, 'lim_contours', None) or []
@@ -996,10 +1068,10 @@ def plot_lcfs_evolution(tt, save_path=None, display=True):
         norm = Normalize(vmin=t_min, vmax=t_max if t_max > t_min else t_min + 1e-9)
 
         fig, ax = plt.subplots(figsize=(6, 8))
-        fig.suptitle(
-            f'LCFS Evolution — {phase_name} (loop {tt._current_loop})',
-            fontsize=TITLE_FS,
-        )
+        if one_plot:
+            fig.suptitle(f'LCFS Evolution (loop {tt._current_loop})', fontsize=TITLE_FS)
+        else:
+            fig.suptitle(f'LCFS Evolution — {phase_name} (loop {tt._current_loop})', fontsize=TITLE_FS)
 
         # Draw limiter
         for lc in lim_contours:
@@ -1034,12 +1106,12 @@ def plot_lcfs_evolution(tt, save_path=None, display=True):
 
         plt.tight_layout()
 
-        if save_path is not None:
+        if save_path is not None and not one_plot:
             base, ext = os.path.splitext(save_path)
             phase_tag = phase_name.lower().replace('-', '').replace(' ', '_')
             phase_save = f'{base}_{phase_tag}{ext}'
         else:
-            phase_save = None
+            phase_save = save_path
 
         _save_or_display(fig, phase_save, display)
 
@@ -1048,6 +1120,7 @@ def plot_lcfs_evolution(tt, save_path=None, display=True):
 #  Movie generation
 # =========================================================================
 
+@_suppress_interactive_when_hidden
 def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None, notebook_mode=None):
     """Create pulse movie from simulation data.
 
@@ -1076,7 +1149,7 @@ def make_movie(tt, save_path=None, display=True, speed_factor=1.0, loop=None, no
 
     tmp_dir = _make_temp_dir()
     try:
-        times = tt._times
+        times = tt._tm_times
         n = len(times)
 
         psi_lcfs_tm = np.array(tt._state['psi_lcfs_tm'])
@@ -1118,7 +1191,7 @@ def _render_equil_frames(tt, loop, equil_dir):
     equil_data = tt._state.get('equil', {})
     coil_bounds = getattr(tt, '_coil_bounds', {})
 
-    for i in range(len(tt._times)):
+    for i in range(len(tt._tm_times)):
         out_path = os.path.join(equil_dir, f'equil_{loop:03d}.{i:03d}.png')
         equil = equil_data.get(i)
         if equil is None:
@@ -1142,7 +1215,7 @@ def _render_equil_frames(tt, loop, equil_dir):
             cb.mappable.set_clim(min_bound, max_bound)
         tt._tm.plot_psi(fig, ax, equilibrium=equil, xpoint_color='r', vacuum_nlevels=4)
         x_pt = getattr(tt, '_x_point_targets', None)
-        if x_pt is not None and _x_points_active(tt, i, t=tt._times[i]):
+        if x_pt is not None and _x_points_active(tt, i, t=tt._tm_times[i]):
             ax.plot(x_pt[:, 0], x_pt[:, 1], 'rx', markersize=10, markeredgewidth=2, label='Saddle point targets')
         sp = tt._state.get('strike_pts', {}).get(i)
         if sp is not None and len(sp) > 0:
@@ -1192,10 +1265,11 @@ def _render_frame(tt, loop, idx, t_now, times, flux_con_tm, flux_con_tx, out_pat
 def _draw_info(ax, tt, loop, run_name):
     ax.axis('off')
     t_ave = getattr(tt, '_t_ave_toggle', 'off')
+    dt_val = getattr(tt, '_tx_dt', getattr(tt, '_dt', None))
     lines = [
         f'Run:   {run_name}            loop:  {loop}',
-        f'n_rho: {tt._n_rho}          dt:    {tt._dt} s',
-        f'time range:     [{tt._t_init}, {tt._t_final}] s          times: {len(tt._times)}',
+        f'n_rho: {tt._n_rho}          dt:    {dt_val} s',
+        f'time range:     [{tt._t_init}, {tt._t_final}] s          times: {len(tt._tm_times)}',
         f'LSF:   {tt._last_surface_factor}',
         f't_ave: {t_ave}    window: {getattr(tt, "_t_ave_window", 0):.2f} s',
         f'causal: {getattr(tt, "_t_ave_causal", True)}    '
@@ -1494,7 +1568,7 @@ def plot_profiles_interactive(tt):
         return
 
     s = tt._state
-    times = tt._times
+    times = tt._tm_times
     out = widgets.Output()
 
     def _update(i):
@@ -1589,7 +1663,7 @@ def plot_equil_interactive(tt, loop=None, notebook_mode=None, save_path=None):
         loop = tt._current_loop - 1
 
     equil_data = tt._state.get('equil', {})
-    times = tt._times
+    times = tt._tm_times
     coil_bounds = getattr(tt, '_coil_bounds', {})
 
     def _draw_equil_ax(fig, ax, i):
@@ -1666,7 +1740,7 @@ def summary(tt):
     Returns a dict with summary quantities.
     """
     s = tt._state
-    times = np.array(tt._times)
+    times = np.array(tt._tm_times)
 
     # Flattop mask
     ft = getattr(tt, '_flattop', np.zeros(len(times), dtype=bool))
