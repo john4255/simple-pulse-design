@@ -795,18 +795,19 @@ class TokTox:
         if Ti_right_bc:
             self._Ti_right_bc = Ti_right_bc
 
-    def set_heating(self, nbi=None, nbi_loc=None, ecrh=None, ecrh_loc=None, ohmic=None, nbi_current=False):
+    def set_heating(self, generic_heat=None, generic_heat_loc=None, nbi_current=False, ecrh=None, ecrh_loc=None, ohmic=None):
         r'''! Set heating sources for Torax.
 
         Ohmic heating is always enabled (it is on by default in BASE_CONFIG).
-        @param nbi NBI heating (dictionary of {time: power_in_watts}).
-        @param nbi_loc NBI deposition location (normalized rho).
+        @param generic_heat Generic heating (dictionary of {time: power_in_watts}).
+        @param generic_heat_loc Generic heating deposition location (normalized rho).
         @param ecrh ECRH heating (dictionary of {time: power_in_watts}).
         @param ecrh_loc ECRH deposition location (normalized rho).
+        @param nbi_current Whether to include NBI current drive, uses _NBI_W_TO_MA = 1/16e6 to convert heating to current driven.
         '''
-        if nbi is not None and nbi_loc is not None:
-            self._nbi_heating = nbi
-            self._nbi_loc = nbi_loc
+        if generic_heat is not None and generic_heat_loc is not None:
+            self._generic_heat = generic_heat
+            self._generic_heat_loc = generic_heat_loc
         if ecrh is not None and ecrh_loc is not None:
             self._ecrh_heating = ecrh
             self._ecrh_loc = ecrh_loc
@@ -815,7 +816,7 @@ class TokTox:
         
         self._use_nbi_current = nbi_current
 
-    def set_pedestal(self, set_pedestal=True, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
+    def set_pedestal(self, set_pedestal=False, T_i_ped=None, T_e_ped=None, n_e_ped=None, ped_top=0.95):
         r'''! Set pedestals for ion and electron temperatures.
         @param T_i_ped Ion temperature pedestal (dictionary of temperature at times).
         @param T_e_ped Electron temperature pedestal (dictionary of temperature at times).
@@ -1310,18 +1311,18 @@ class TokTox:
             myconfig['sources']['ecrh']['P_total'] = self._ecrh_heating
             myconfig['sources']['ecrh']['gaussian_location'] = self._ecrh_loc
 
-        if self._nbi_heating is not None:
-            nbi_times, nbi_pow = zip(*self._nbi_heating.items())    
+        if self._generic_heat is not None:
+            nbi_times, nbi_pow = zip(*self._generic_heat.items())    
             myconfig.setdefault('sources', {})
             myconfig['sources'].setdefault('generic_heat', {})
             myconfig['sources']['generic_heat']['P_total'] = (nbi_times, nbi_pow)
-            myconfig['sources']['generic_heat']['gaussian_location'] = self._nbi_loc
+            myconfig['sources']['generic_heat']['gaussian_location'] = self._generic_heat_loc
 
             if self._use_nbi_current:
                 myconfig['sources'].setdefault('generic_current', {})
                 myconfig['sources']['generic_current']['use_absolute_current'] = True
                 myconfig['sources']['generic_current']['I_generic'] = (nbi_times, _NBI_W_TO_MA * np.array(nbi_pow))
-                myconfig['sources']['generic_current']['gaussian_location'] = self._nbi_loc
+                myconfig['sources']['generic_current']['gaussian_location'] = self._generic_heat_loc
 
         if self._T_i_ped is not None:
             myconfig.setdefault('pedestal', {})
@@ -1335,12 +1336,15 @@ class TokTox:
             myconfig['pedestal']['n_e_ped_is_fGW'] = False
             myconfig['pedestal']['n_e_ped'] = self._n_e_ped
         
-        if self._set_pedestal is not None:
+        if self._set_pedestal is True:
             myconfig.setdefault('pedestal', {})
             myconfig['pedestal']['set_pedestal'] = self._set_pedestal
-        if self._ped_top is not None:
-            myconfig.setdefault('pedestal', {})
-            myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
+            if self._ped_top is not None:
+                myconfig.setdefault('pedestal', {})
+                myconfig['pedestal']['rho_norm_ped_top'] = self._ped_top
+        elif self._set_pedestal is False or self._set_pedestal is None:
+            myconfig['pedestal']['model_name'] = 'no_pedestal'
+        
         
         if self._nbar is not None:
             myconfig['profile_conditions']['nbar'] = self._nbar
@@ -1769,10 +1773,10 @@ class TokTox:
                 self.set_coil_reg(i=0, **reg_kwargs)
             else:
                 prev_coil_targets, target_src = self._get_i0_coil_targets()
-                if prev_coil_targets is None:
-                    self._log(f'\tTM: i=0 coil targets {target_src}; using zero targets with regularization weight.')
-                else:
-                    self._log(f'\tTM: i=0 coil targets seeded from {target_src}.')
+                # if prev_coil_targets is None:
+                #     self._log(f'\tTM: i=0 coil targets {target_src}; using zero targets with regularization weight.')
+                # else:
+                #     self._log(f'\tTM: i=0 coil targets seeded from {target_src}.')
                 self.set_coil_reg(targets=prev_coil_targets, **reg_kwargs)
 
         # Warm-start psi at t=0: set psi_dt so eddy-current contribution is negligible.
@@ -1864,6 +1868,12 @@ class TokTox:
             # Pre-calculate all level profiles
             level_profiles = []
 
+
+            # Level 0: jphi
+            ffp_0 = self._state['j_tot'][i]
+            pp_0 = pp_prof
+            level_profiles.append({'ffp': ffp_0, 'pp': pp_0, 'name': 'lv0: jphi'})
+
             # Level 1: raw
             ffp_1, pp_1 = self._level1_raw(copy.deepcopy(ffp_prof_raw), copy.deepcopy(pp_prof_raw))
             level_profiles.append({'ffp': ffp_1, 'pp': pp_1, 'name': 'lv1: raw'})
@@ -1893,11 +1903,12 @@ class TokTox:
                 # Initialize psi from geometry parameters. Fallback initial guess, usually overwritten by warm-start.
                 self._tm.init_psi(self._state['R0_mag'][i], self._state['Z'][i], self._state['a'][i], self._state['kappa'][i], self._state['delta'][i])
 
-                # Warm-start: use previous loop's converged solution to initialize psi; fall back to the previous timestep's solution within current loop if previous step unavailable
+                # Warm-start: only on first attempt (level_idx==0); on fallback levels use cold init_psi to avoid contamination from a failed prior solve leaving bad internal psi state.
+                # if level_idx == 0:
                 if i in self._psi_warm_start and self._psi_warm_start[i] is not None:
-                    self._tm.set_psi(self._psi_warm_start[i])
+                    self._tm.set_psi(self._psi_warm_start[i], update_bounds=True)
                 elif i > 0 and (i-1) in self._state.get('psi_grid_prev_tm', {}) and self._state['psi_grid_prev_tm'][i-1] is not None:
-                    self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1])
+                    self._tm.set_psi(self._state['psi_grid_prev_tm'][i-1], update_bounds=True)
 
                 try:
                     with self._quiet_tm():
